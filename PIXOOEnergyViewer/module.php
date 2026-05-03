@@ -38,6 +38,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** Pro Wechselrichter (Summe seiner Strings): Leistung strikt darüber → Anteil dieses WR = 0 (Messfehler) */
     private const GENERATION_INVALID_ABOVE_W = 12000.0;
 
+    /** IPS_GetKernelRunlevel() wenn der Kernel vollständig gestartet ist (siehe Symcon-Doku) */
+    private const KERNEL_RUNLEVEL_READY = 10103;
+
     public function Create(): void
     {
         parent::Create();
@@ -83,8 +86,15 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             IPS_SetVariableProfileText('SMAPX.EurKWh', '', ' €/kWh');
         }
 
-        $wattPres = ['PROFILE' => 'SMAPX.Watt'];
-        $eurPres = ['PROFILE' => 'SMAPX.EurKWh'];
+        $kv = IPS_GetKernelVersion();
+        $usePresArray = $kv !== false && $kv !== '' && version_compare((string) $kv, '8.0', '>=');
+        if ($usePresArray) {
+            $wattPres = ['PROFILE' => 'SMAPX.Watt'];
+            $eurPres = ['PROFILE' => 'SMAPX.EurKWh'];
+        } else {
+            $wattPres = 'SMAPX.Watt';
+            $eurPres = 'SMAPX.EurKWh';
+        }
         $this->RegisterVariableFloat('Consumption', 'Verbrauch', $wattPres, 0);
         $this->RegisterVariableFloat('Generation', 'Erzeugung', $wattPres, 1);
         $this->RegisterVariableFloat('Net', 'Netz', $wattPres, 2);
@@ -158,7 +168,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
             $this->SetTimerInterval('SmardFetch', self::SMARD_FETCH_MS);
-            if (IPS_GetKernelRunlevel() === KR_READY) {
+            if (IPS_GetKernelRunlevel() === self::KERNEL_RUNLEVEL_READY) {
                 $this->UpdateSmardPrice();
             }
         } else {
