@@ -20,6 +20,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** Textfeld ab X; mit align=3 und voller Breite rechtsbündig in der Zeile */
     private const DATETIME_X = 0;
 
+    /** Zeile des Labels „NETZ“ (und optional SMARD-Uhrzeit rechts in derselben Zeile) */
+    private const NETZ_LABEL_Y = 46;
+
     /** |Netz| unter diesem Wert (W) gilt auf dem Pixoo als „0“ → gelb */
     private const NET_ZERO_EPSILON_W = 0.5;
 
@@ -669,7 +672,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->makeTextItem(2, sprintf('%.0f W', $consumption), self::LEFT_PAD, 8, $cWhite, self::FONT_VALUE, 16),
             $this->makeTextItem(3, 'ERZEUGUNG', self::LEFT_PAD, 24, $cLabel, self::FONT_LABEL, 7),
             $this->makeTextItem(4, sprintf('%.0f W', $generation), self::LEFT_PAD, 30, $cWhite, self::FONT_VALUE, 16),
-            $this->makeTextItem(5, 'NETZ', self::LEFT_PAD, 46, $cLabel, self::FONT_LABEL, 7),
+            $this->makeTextItem(5, 'NETZ', self::LEFT_PAD, self::NETZ_LABEL_Y, $cLabel, self::FONT_LABEL, 7),
             $this->makeTextItem(6, sprintf('%.0f W', abs($netW)), self::LEFT_PAD, 52, $cNet, self::FONT_VALUE, 16),
         ];
 
@@ -712,19 +715,15 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $priceY = 52;
 
             if ($this->ReadPropertyBoolean('PixooSmardShowTime')) {
-                $cClock = $this->RgbHex(200, 200, 200);
-                $tf = max(0, min(32, $this->ReadPropertyInteger('PixooDateTimeFont')));
-                $thT = max(4, min(16, $this->ReadPropertyInteger('PixooDateTimeTextHeight')));
                 $timeStr = $this->safePhpDateFormat($this->ReadPropertyString('PixooDateTimeFormatTime'));
-                $timeY = max(2, $priceY - $thT - 1);
                 $items[] = $this->makeTextItem(
                     self::SMARD_TIME_TEXT_ID,
                     $timeStr,
                     $ax,
-                    $timeY,
-                    $cClock,
-                    $tf,
-                    $thT,
+                    self::NETZ_LABEL_Y,
+                    $cLabel,
+                    self::FONT_LABEL,
+                    7,
                     $tw,
                     $al,
                     $dDir,

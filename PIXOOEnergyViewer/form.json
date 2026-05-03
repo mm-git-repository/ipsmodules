@@ -79,7 +79,7 @@
             "items": [
                 {
                     "type": "Label",
-                    "caption": "Statische Anzeige (dir 1, speed 0). Formate = PHP date(), leer → „--“. Ausrichtung 1–3. Ohne SMARD-Preis: Datum/Uhrzeit im Eck wie unten gewählt. Mit SMARD-Preis: dieselben Schrift-/Höhen-Werte steuern optional die Uhrzeit über dem SMARD-Preis (siehe SMARD-Panel)."
+                    "caption": "Statische Anzeige (dir 1, speed 0). Formate = PHP date(), leer → „--“. Ausrichtung 1–3. Ohne SMARD-Preis: Datum/Uhrzeit im Eck wie unten gewählt. Mit SMARD-Preis (optional): Uhrzeit in derselben Zeile wie das Label „NETZ“ (y=46), gleiche Schrift wie „NETZ“; nur Format und Ausrichtung kommen aus den Feldern unten (siehe SMARD-Panel)."
                 },
                 {
                     "type": "CheckBox",
@@ -148,11 +148,11 @@
                 {
                     "type": "CheckBox",
                     "name": "PixooSmardShowTime",
-                    "caption": "Uhrzeit über dem SMARD-Preis (rechts)"
+                    "caption": "Uhrzeit in einer Zeile mit „NETZ“ (rechts)"
                 },
                 {
                     "type": "Label",
-                    "caption": "Uhrzeit nutzt „Format Uhrzeit (bei zwei Zeilen)“ sowie Schrift, Zeilenhöhe und Ausrichtung aus dem Panel „Pixoo: Datum / Uhrzeit“."
+                    "caption": "Uhrzeit: „Format Uhrzeit (bei zwei Zeilen)“ und Ausrichtung aus „Pixoo: Datum / Uhrzeit“; Schrift und Zeilenhöhe wie das Label „NETZ“ (Font 26, Höhe 7)."
                 }
             ]
         },
