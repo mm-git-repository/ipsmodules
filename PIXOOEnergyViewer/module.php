@@ -83,10 +83,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             IPS_SetVariableProfileText('SMAPX.EurKWh', '', ' €/kWh');
         }
 
-        $this->RegisterVariableFloat('Consumption', 'Verbrauch', 'SMAPX.Watt', 0);
-        $this->RegisterVariableFloat('Generation', 'Erzeugung', 'SMAPX.Watt', 1);
-        $this->RegisterVariableFloat('Net', 'Netz', 'SMAPX.Watt', 2);
-        $this->RegisterVariableFloat('SmardSpotCt', 'SMARD Spot (€/kWh)', 'SMAPX.EurKWh', 3);
+        $wattPres = ['PROFILE' => 'SMAPX.Watt'];
+        $eurPres = ['PROFILE' => 'SMAPX.EurKWh'];
+        $this->RegisterVariableFloat('Consumption', 'Verbrauch', $wattPres, 0);
+        $this->RegisterVariableFloat('Generation', 'Erzeugung', $wattPres, 1);
+        $this->RegisterVariableFloat('Net', 'Netz', $wattPres, 2);
+        $this->RegisterVariableFloat('SmardSpotCt', 'SMARD Spot (€/kWh)', $eurPres, 3);
 
         $this->RegisterTimer('Update', 0, 'SMAPX_Refresh($_IPS[\'TARGET\']);');
         $this->RegisterTimer('HourlyReinit', 0, 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);');
@@ -156,7 +158,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
             $this->SetTimerInterval('SmardFetch', self::SMARD_FETCH_MS);
-            $this->UpdateSmardPrice();
+            if (IPS_GetKernelRunlevel() === KR_READY) {
+                $this->UpdateSmardPrice();
+            }
         } else {
             $this->SetTimerInterval('SmardFetch', 0);
         }
