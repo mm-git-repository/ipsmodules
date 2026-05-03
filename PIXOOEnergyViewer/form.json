@@ -1,0 +1,253 @@
+{
+    "elements": [
+        {
+            "type": "Label",
+            "caption": "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Echte Werte/Farben folgen den Messdaten."
+        },
+        {
+            "type": "Image",
+            "caption": "Vorschau",
+            "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAA0DElEQVR4nO2deVwT1/rwJwlJIJBA2BdBEEREBASUxQKKVqkLrXuv1soVa9trW1tbsa1drkuV26q1fVu02l4rrhWXuuCKsmhl0YKiiEJARPY1kIUEksz7Mc8vc6fJZAibRZnvX+HMc06GzDPPec5znnMOglBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUAxYaLpFy5Yt8/Ly+v33369du0ZYZ+zYsQsWLMjPzz9w4IC/v/9rr71G8gVpaWkpKSkIghBKqlQqmUzW1NR09+7djIwMhUIB5VFRUdOmTcNLKpVKiURSUVGRnp5eXl6OlXerWTyRkZEzZ85UqVRfffVVa2ur1lVoNi8v7+DBg7p1o6OjJ0+efPbs2StXruDLLSwsxo0bN2rUKD6fz2KxhELh/fv309PThUIhJuPj4xMbG1tQUJCUlGR4ywMWI92i3NxcLy+vgIAAfQoUFBSEIEh2djZWIhaL6+rqCIWbmprwf9bU1Ny5c+d/X29kZGlpOWrUKGdnZ3d39927d6Moil0VCoVQnUajGRkZ8fl8Hx+fUaNG7d279+7duz1uFhg7dqxcLmez2cHBwRcvXkR6zbhx42bNmsVkMsvKyvLz81UqlbOz8wsvvDB27Njdu3fjlf55gkCBCgsLxWKxi4uLtbV1Y2Oj1lVLS8thw4Y1NjaWlZVhhQKBYP/+/YZ8X01Nje7T4vP5K1eu9PT09Pb2LiwsxMrz8/PBemkZv1deeaWwsBCvE91qFkEQFxcXe3v7K1euhIaGhoSEpKamqlQqpBcEBQXNnz9fKBT++uuvlZWVWLm/v/+iRYvi4uK+++473R/zOYCuW6RUKv/8808EQQIDA3WvBgYG0mi0nJwc3Xe6x7S0tGRlZSEI4unpSS5548aNpqYmCwsLHo/Xm2aDg4MRBLl3797du3d5PN6oUaN6c/9cLnf27NlKpXLnzp147UEQ5NatW2lpaSYmJlFRUcjzCIECQS+GIEhAQIDupaCgIJVKdfPmzb69D7FYjCCIiYkJuRidTmexWJ2dnVKptMfNMplMPz8/qVRaUVGRl5eHIEhYWFhvbj4gIIDFYt28eZPQxly7dq21tZXFYtFoBB7nc9iFIQhSV1dXXl7u6uo6dOjQR48eYeVubm5WVlZ3794ViUR9ex/e3t4IglRVVekTYDAYfD4/KiqKy+VevHixs7Ozx836+fkZGxtfv35dpVIJBAKhUOjh4UHYXxvIyJEjEQQpKioivNrW1rZhwwbkOYVYgcAIubq6BgQE4BVo7NixCILk5ORoCfur0W1EoVB8/PHHJF/PZDKtrKzCw8NHjBghFAq1Wp6oRqtKWlrapUuXyP8r8mah/4JuGkXRvLy8qKio0NDQ06dPIz2Cz+cjCNLQ0GB4FV9f3y1btiDPsQLdunXr5Zdf9vf3P3nyJDiYYPlhaKolrG8UplQqtUoC1OhKCgSC5ORkmUyGL8RGYTCw4nK5lpaWERERcrk8NTW1Z81aW1u7ubk1NjZiL8aNGzeioqLGjh177tw5wgF/l5iou0i5XG54FYlEUltbq1tuZWVlYWGBPAcK1NHRcevWreDgYC8vr3v37sFLw2azMzMzdd3nbo3CYLzNYDDc3NyGDRsmFAqTkpIqKip0hXVHYY6OjsuWLYuOjm5sbLx161YPmh03bhxmfoCGhoaKigoXFxd/f3/Mt4P/UZ/XAuWo5neQSCQcDsfExAQf7yGntLSUJA6EPAcKBF1VcHBwQEAAKFBQUBCKouBf9xit8XZERERMTMySJUsSExO1IkaEVFdXnzt3bsGCBSEhIVoKZEizdDodglhT1Wg1HhoaiikQGC0Wi0V4G1Au0xi2xsZGGzU1NTXIIIN4FAZUVFTU1taOGjWKzWabm5t7eHgUFxe3tLT04ddnZmbm5uaam5svXbpU39PSAh4SuZ3X16yXlxePx5NIJKU6qFSqoUOHOjo64odv+r7F0tISQRBsJAEvGLjShKxcuTIuLg5qPWeQWSAwQi+//LK3t7e5uTmEf/r8Dn7//Xd3d3c7O7uZM2ceO3asS3kbGxsY2vSgWei/Ll++nJmZqSW/ZMmS0aNHh4aGgnBtba1cLndwcLC0tGxubsZLstlsDw8PBEEwL+r27dvTpk0LCAi4cuWKrivt7e3t7OwsFou7vOfnzQKBr6BUKn18fHx9fcVisVY8t0/o6Oj47bffUBQNCQmBB0OCnZ1ddHQ0+PjdbdbMzGzkyJFYmFSL69evgzPOZrPB/c/Ly6PT6bGxsba2tpgYj8dbtGgRm80uLCzELJBUKj179iyDwVi+fLmTkxO+WXd394ULFyIIcubMmZ556M+2BZJKpXfv3h01ahSDwcjIyNAdVQEeHh5vv/024SWRSNSlf11WVpaVlRUWFjZ//vwtW7Z0dHRA+ZgxY1xcXOAzjUYzNTW1s7MDefxMnIHNBgUFMRiM27dvSyQSXWGBQNDQ0GBjYxMYGAjKlJKS4uTk5OLiEh8f39jYKBaLTUxMbGxs6HR6dXW1lrHMysricDjR0dHvv/9+WVlZdXU1nU53dHR0c3NDUfTcuXN9Hnp9NhQIejE/Pz/C8A+GmRrCSwb6TCkpKd7e3paWltOnTz9x4gQUWqiBzyiKymSyR48e3bp1C2KA3W0W7JC+/wJF0aysrJiYmLCwMFAgmUz2448/BgcH+/n52dra8vl8qVT6+PHj/Pz83NxcTMsxLl++XFRUFBoa6ubmFhQUxGKxWltbb9y4cfXq1erq6v/JUVBQUFBQUFBQDC6YTOb9+/dRFJ0xYwa55JQpU5KSkoqLi0UikVwur66uTklJWbZsGXm0cPz48fv37y8vL5fJZPX19Tk5OWvWrIGRl+F4e3vLZDIURbdv325glTVr1qBqzp8/TyIWGxsLYiiKJicnk0iuXbsWxAyc4RksfPvtt/C7kCiQra3txYsXUT0IBAIY02lhZGS0c+dOwiotLS0QSjEEIyOj3NxcqGi4AsEsDYqiQqGQTtcbGzt48CD+rhgMhj7JCxcugNiSJUsMvIfnnw8++AD7+fQpkJmZ2e3bt0FGpVKlp6dv27Zt8+bNJ06cAKuAomhzc/OIESO0Ku7ZswdrPDU1NSEhYfv27Xfu3MGamjNnjiE3+dlnn2HtGK5AdDq9ubkZao0ePZpQhkajNTQ0wM2AZGhoKKEkg8Foa2sDGa244iCFwWAkJCTgrYI+BcLEKioqIHkIY+jQoXl5eXD1jz/+wF+aMWMGlIvF4kmTJuEvxcfHY7ZBX6gJw9fXVy6X90CBEAQ5fvw41HrzzTfJrdTJkyfhw7///W9yyf4I3D97ODk5XblyRatbIVQgNpvd0tIC7yhhPrWdnR0IoCgK01LAtWvXoPCNN97QrXXs2DG4unz5cpL7ZDKZ+fn5eAvRLQVasWIF1CLMssC7NcHBwaCm2Xqi4Zip7tYNPIeYmpquW7dOIpHAz9HY2Ii5F4QKFBkZCVfT09P1tfnDDz+AzOrVq6HE3t4ea5/JZOpWWbRoEQjs2LGD5G7XrVsH2pOYmNiD5zdy5EioJRAICAUgEaq+vp5Go12+fBlFUaVSSTjBfuLECWhq+vTpyPMO2WTq4sWLv/jiCw6HA7ldYWFhBQUFJPIcDicvL6+mpiY/P1+fTHFxMXywt7eHD2ZmZvv27bt169aFCxcIM53b29sxSX3NBgQEfPrppwiC7Ny5s2dL8oqKimDCAebwta5yuVzweFJTU1EUhZxaOp1OmPz1wgsvIAjS2dlJ8iINltl4mE/98ssvg4ODsWevj3PnzgUGBjo6On7wwQf6ZLBngy0GFQgEr7/++pgxYxYtWkRYBVKYEQR58OABoQCLxdq7d6+RkVF5eXl8fDzSUzDN012kMWnSJCOjJ/OGkLaGJa9N1clK8/b2tra2hul9wlnbQaRAUql0x44dI0aMWL9+vYGrILokJiYGPpBYKTzjxo175513ID9fn3eybt06Hx8fFEWXLVsGiWA94/Lly/oUCFMUUJ38/HxYwjFVR4HCw8PhQ5eZ/4ORn3/+mXwURs78+fOhelNTE8kSMDqdbm1t/cILL/z3v//FRlXvvfceofC4ceMUCgXeQ5o7d27PfFhnZ2fCQSKkMKMoil9PfejQIRD28fHBSx44cEB3lEDRBwrk4uJSX18P1T/88EMSyX379uFHfA0NDYsXLyaUNDY2LioqQlG0vLwc85B6rEDgokHeCKSVAR4eHtDgtm3bsMKlS5cS/i8VFRUQ6yIJSD5PPKV/0srK6syZM5CNeu3ate+++45E2NnZGf+nkZHRhAkT3NzcdCU3btzo5eWFomhcXFxvOi8tN4jNZuPDEFr9l9bnqbhezNXVFW7+ypUrvVxs/6zwNBTI2tr60qVLEOF9/PjxggULyJM7S0pKtm/fnpCQAPFrCwuLpUuX3r59e8KECXixsLAw8NZ37dqFuS+9hNANAhWRy+UZGRlYYWVlJayPCw8Px8xVREQEfOiT7T6eQ3rQhTk7O0Mvg6JoVVVVl9snaOHo6AgBGAgUwQAHQgbQ3ZSXl3O5XHyV3nRhVlZWEIc8fvw4lDCZTJFIBBMsWsLff/89fFFkZCSUwD4yKIoS2svnkv61QAEBATk5OV5eXgiCPHz4MCIiostYgBbV1dXTp09/+PAhPF0sGJ2QkDB8+HDYDqsPF+o3NTXdvn0bb4HGjx8P3pWuUbmoKcEUCCxQaWkp3PBgoB8V6OWXX87MzHRwcIBFFOPHjy8tLe1BOyKRCPOZYKYsMjISxva7du3SNQx90ovZ2dm5u7vjXZwLFy5oSaanp0N0A/pWW1tbsK/UAL4PurD3339fqVSC8Llz57R6me4yYcIE/PQkNh9iIPq2WiPkpZdeglr/+Mc/YOU8iqK1tbWEy5wzMjJQFJVKpUwmc/bs2VBx9uzZyKChXyzQl19++e2338I49qeffpo5cyZJL7N48eLMzMzKykp90+D4DX76fFsZXTIzM8GuBAUFcbncMWPGgFEh3FDrkjpaaGJi4uXlBTMYSqXyWdne8Ckt6+kuH374IZbnsHbt2k2bNpHLm5qaQvR2zpw5P/30E6EMtskLWKCzZ8+S7OXj7e09b948WMEDGYaEOzfoQyKR5Obmjh8/PigoKCwsDLLG9I2qLl68CHv/jB49GtymGzduGL7FwqCjyy4sMjIS67nATekSR0dHCCWrVCrCncKGDx8O4yAURXWnDnTpzSgMP7Hf1ta2adMmaAqb+tWXibZt2zbImFu/fn3PvnRQQK5AxsbGEIdFUXTXrl2GN4uNfqurq7USiUJCQh49egRXDXROe69AERER0EJlZSWKojAu00dycjKKojU1NVAFmwsbJPRlFxYXF4cFkX19fcmTGVJSUr755hv4vHr16uDg4NGjRzs4OOTm5qampubn5zOZzLFjx2LPo6SkxPDM6F6SnZ0tlUo5HA4kpJJHBS9dujR37lwwUWKx2JA114MXcgt08+ZNw0dGP//8M76ujY0NSSp+SkqKlZWVgTfZewuEIMj58+exb3/xxRdJJF1dXTHJHm+S9+zSl6Ow3myW29DQMGXKlGnTpv32228VFRVyuVwikZSUlOzZs2fixInTp083ZPupPgSb02hvb7969SqJZHl5OZbESEWAKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo+h+CLUsQBPH393/ttddIqqWlpaWkpOiTVKlUMpmsqanp7t27GRkZ2IZ2cXFxJIerIwjy+eeft7e3d/fb8/LyDh48qCsWHR09efLks2fPam2XYWJi4u/v7+vra21tzeVyOzo6GhoaCgsLr1+/LpPJtH4EAxsPDQ2dM2dOW1vbli1bpFKplnBUVNS0adNOnjyptcTMwDt5Vpc2i8Xiuro6wktay/xqamru3Lnzv0aNjCwtLUeNGuXs7Ozu7g5L30GM8Lwwc3Nza2trlZoefHu3cHd3X7RoEY/Ha25uLikpgbOYhw8fPm3atPDw8N27d/fmgFwej/fKK68QKtxTvpMBoUACgcDA89Jqamp0F5Dz+fyVK1d6enp6e3tj27Lo1uVyubAH9NmzZ+VyeQ++3XCcnZ2XL1+uUqkOHToERwdBOY1Ge+GFF2JiYuLi4r7++mv8bXSXgICAgoIC/I7Sf9edPPNb3LW0tGRlZSEIQrKxJpPJjIuL4/P5+fn5/X2yBJ1O/8c//sFgMA4cOPDnn3/iN4xCUfTq1au5ubnm5ubYyQo94PHjx7DRERww8jfeyXOyySbs3UyyKf38+fOHDBlSVVV15MiRfr0T0GNbW9vy8nJ95uHq1atNTU2EW9kZSFFRUV5eHpfLJd/l7incyTO8Qxkeb29vBEGqqqoIr0ZGRo4ZM0YsFu/Zs6evzuIgwdfXF0EQvK+mRW1t7ebNm3v5LSdOnPDw8PD39799+7a+73o6d/L3K5C/Gt1yhULx8ccfk1RkMplWVlbh4eEjRowQCoU5OTm6Mh4eHtOnT1cqlUlJSYR7wvX42/UB++Tr80yx151Go/Vmk/n29vajR48uXbp0zpw5ZWVlhAf2PJ07GbijMKVSqVUSoEZXUiAQJCcn645I+Xz+4sWL6XT68ePHy8rKevntBgLbPWuNsQlDBvHx8b15cvfu3bt582ZQUNDs2bP37dv3N97JszQKA4PMYDDc3NyGDRsmFAqTkpIId7dkMpmxsbGmpqY5OTnXr1/vzbeD+6nPV4ByzEWVSCQ2NjZa7q1YLMbvXu3m5oYdktKtxrU4efLk8OHD/fz8CgoKdHfI6+6dPP8+kNYwPiIiIiYmZsmSJYmJiboxm7lz5zo5OZWXl2PHCfQYsG36zqKHcsz+NTU1ubq62tjYlJSUYDICNdif69evx55rtxrXor29PTk5edmyZbNmzdLdXr27dzKQ6Rcdz8zMhIHo0qVLtR5AeHh4YGBga2vr3r17e9wZaY3yLCwsCK/CgabY1tJwXic4sH3euC7379/Pzc01MzPTHZF1904GMv1lJH///fempiY7O7uZM2dihe7u7jNnzlQoFHv37u2TLcNra2vlcrmDg4Pu4bdsNtvDwwNBkEePHkFJUVFRY2Ojh4eHn59fnzdOyKlTp4RCoa+vr9ZZ9N29k8GoQB0dHb/99huKoiEhIfBbW1hYgON85MiRbu38TYJSqczLy6PT6bGxsba2tlg5j8dbtGgRm80uLCzENFWlUu3bt0+hULz66qvjx4/X8jD4fP6CBQvwvUa3GidEJpNBfEvrBLTu3smz6gN5eHi8/fbbhJdEIlGXHm5ZWVlWVlZYWNj8+fO3bNkSGRlpZmYml8uD1RBWOX/+PHbOjYHfnpKS4uTk5OLiEh8f39jYCDNKNjY2dDq9urr62LFj+IpVVVWJiYkLFy6cNWvWiy+++ODBg9bWVhaLNWTIEBcXFzqd3tjYePr0aWzg063GCSkuLs7JydH9f7t7J8+kApmpIbzU0tJiSOspKSne3t6WlpbYCepsNhtOwSHE1NS0u98uk8l+/PHH4OBgPz8/W1tbPp8vlUofP36cn5+fm5vb0dGhVbeiomLr1q2jR4/29/d3dXU1NzdXKpWtra1//vnnnTt34GizHjdOyKlTpzw9Pfl8fm/uhIKCgoKCgoKC4tmhoaGB/MgLfed2QcrL77//XlFRIZPJhEJhbm7uF198oXvkxfvvv2/4CRv4WC2Gt7d3YmJiUVGRWCxub28vLS3du3dvaGio4f/mmjVroH04X0wfsbGx2J0kJyeTSK5duxbE+jwn7lnC0dGxyydKqEDu7u76Dl6pr6/XOr27lwr06aefYieUaZGYmGhkZNBcTVBQEFQRCoUkM1AHDx7EGm9paYGz6Ai5cOECiC1ZsgR5riH7fbFY+8OHD/WF/lpbW7VK3NzcMjIy4KAkiURy+vTp8vJyBweHmJgYPp9vY2Nz5syZkJAQLJeqsrISfx47IeHh4fBctZLSP/roo6+++go+FxYWpqamyuXysLAwOH3y7bffptPpb731Vlc/ApKXl9fS0sLn883NzUeNGkWYqUOj0eDYHhRFaTSahYXFuHHjIOVSCwaDgdm/Pj8T+FkiPj4eXiPyNRJapKamQq2MjAzsmHcIsF6+fBkuYWfhGMLHH38MtbKzs9lsNlbu7Ozc3t4Olz755BP8tPn8+fM7OzvhEnYmNznHjx8HeX1Ht2JW6uTJk/Dh35qTPfVJQib44GX//v3wQ/j4+BhYZc6cOVDl5s2bupmstra2ra2tIODm5mZIg2FhYXAgplAodHV1JXRcCCPCGzZsgKsGrpFYsWIFyCclJZG7NcHBwXK5HBQaIeKDDz7o/YFlzwN37txBUVQmkxnoSUDoGU4/HTduHKHAr7/+2tTUVFxcTH6KG8DhcAQCATyM2NhYrauHDh2CS3PnztWt6+npCVfxKRMkjBw5Up+bBWRmZoIPR6PRwJQqlUrdeVbIaoWmsPj7YITFYnV0dIAtMbCKpaUlVElLS+uTe0hISIAnQXiQ27Fjx0hO4rWysoKrhq+uqqqqgip2dnZal7hcLvSJYM+wXnX+/Pn6hq4dHR34mZnnFb0jjpEjRzKZTARByI+cxRMUFARV+uTgPk9Pz1WrVkES9LvvvqsrgOXCEmbTYiOA8vJyA78RW8Cqe3j0pEmTwAxD3hyWPTdVR3e9vb3B87t+/TphQvRgUSDsAdy6dcvX13fXrl1lZWVyubyxsfHq1asffvihbr4BlvUCoxg3N7eEhITCwkKxWAxrxD744ANjY2MD72zz5s2gjomJiffv39cVOHz4MHx47733tI7lZjKZ2PHbmFiXYK69rgJhigKqk5+fD/GLqToKhJ0SPNiPv/zmm2/ASqelpREGWqqqqrSCdbt27YJLAQEBb775pkQi0a0lEAi8vLy6/HY/Pz+Ql8lk+s5sRxDkhx9+ALHS0tI5c+aYm5sbGxuPHz8+IyMDyrOyskhWpWnh7OwMtf744w+tS6WlpSiK4pdxYR6Yz19HGAcOHIByfV7gYAF/hrJKpUpNTd22bdvWrVsvXboEwyJ4ungdOnLkCJRv2rQJU5fExMTNmzcfP34cG3I3NDS4uLiQf3tSUhII79y5k0SMRqPFx8e3tLToaqpCofjll1/Mzc279V8XFxfD/4WPF3h4eECb27ZtwwqXLl0KhR9++CG+hYqKChRFm5ubn4mU+H6ktrYWfqCioiKtjEwvL6+CggLMDmF92dmzZ/E6t2bNGnys1s3NDatFvorZ0dERnHGFQkGSPAQKNHXq1CtXrugq0MOHD9944w3Dx4/Azp07oTq+F8NG+NHR0VjhkCFDoBC/mgA7Avzo0aPIYMbY2Pj8+fMlJSXl5eX4bE4MOzs7TMPef/99KExPT8ee38aNG3VrOTk5NTc3gwDmK+iyefNmkCF3X1gs1uHDhzF9vXz58pYtW/7zn/+cOnVKJpNBeW5uru6QioR58+ZBxY8++ggrPHXqFJglrd6wSJ3z1d7ejpmr119/HaovX77c8C8d7HFqzJxgE0BCoVDfCBZTji1bthAK0Gi0mpoakNGaNdMC056SkhKtNazOzs6YG3Tjxg3D7ZCVlZVKpUJRFFtyxGQyRSIRiqK6kxLff/+9VrAbNrIxPEw6qPH19YUfC0swPXr0KJScPn1aX62oqCjy2Yzx48eDQHV1NYkbERAQAGIikUgrQg1wOJy7d++CzD//+U/D/6/8/HwURWtra+HPCRMmQCPx8fFakjNmzIBLX3zxBZQ8ePCAJBT5XNJzR6+yshI+WFhYgK+DrSEkid1hGy3o5nUAs2bNgg/JyckkKeXYaqFffvmFMNIjlUqxbnTevHmIwYBm29nZgfuFDdQvXLigJZmeng57QoCltLW1hY1sBtUAvucKhEV02tvbYYngvXv3oIRk7AOhHZIlea+88gp8IHeAsD4iNzdXnwy2bnrEiBGIwWCmEcbhkydPRhCkrq4OVgPiEYvFMBsfEhLCZDIhBYBSoCcYGRnZ29v7+flpLWjCg4VzsIgwFrPWGrURPnjMgOHx8PCA976urk7fVCWA7buIH2/rk+nW8obMzEywK0FBQVwud8yYMaAThI1cUhsbExMTLy8vUCClUqm1JeNgtEAbN26sqam5devWt99+q68m1i9gr+z169ebm5shnK9Ph6ZNmwYfMjMzda9iQ7OsrCzyp45pLclobuzYsd2dzYAcJrBqQUFBYWFh0DvrbuAHXNSUjx49Gkb+N27cINytZnARHR0N7qFUKiWMxAQGBkJKg0qlgl2kgMTERKiYmpqqu6/FiBEjpFIpTDQS+kA7duyA6mvWrDEwVC2VSvE3gMFkMnNzc7UCDQaybt06FEXb2tqwiKi+aDidTofAxLZt2yB2gE2hDGrodPq9e/fgt7t//77WE4qKisJypRMTE/GXHBwcsLjwoUOHeDwedsnLywsmBFAU/frrrwm/9/r16yAQFRXV5U1iiV3l5eVas1fW1tanT5+Gq1VVVd2dFY+IiIC6lZWVKIqSTycnJyejKIqFHkgs4uAiMDAQ4h+Q+HLx4sXt27dv3br12rVrWLQwIyNDd0p11qxZEEeGgFBSUhJMZYDFQlG0oKBA35RqY2Oj4XEUW1tbTCMhvev777/fvHlzcnKyWCyGwvb2dt2Z0S5hsVj4ibxvvvmGRHj58uWYpEgkwkYJFE+GISUlJageDh48qG/pcXR0NPZGanHp0iV9G6aYmpqCjEqlMvAxODo64sPfWpSVlfV4RvP8+fNYO+S5b66a6QvyANggxdjYODY29tSpU5WVlTKZTCQSPXjwYNeuXdiQVR9cLnfVqlVXr16tr6/v7Oysr69PSUlZsGABSWwQm13q7gbb0dHR+/btEwgEYrFYJpNVVlaeOnVKd2uibrF69Wq4GalU2mUKSonmNYMNrykoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj6E+3l60BoaOicOXPa2tq2bNkilUq1rkZFRU2bNu3kyZNw9Im/vz/5YRppaWkpKSlT1JDfzbFjx7KysuLi4kaOHEki9vnnn7e3tyMDmNGjR//000+XLl368ssv+7vW3wvZ3m88Hu+VV14x8KwJsVhcV1dHeAk2nmppaSktLcUKra2tzc3Nm5qa8HtZtLW1IQhSU1NDuCbQ3Nzc2tpapQYZwJiYmPz73//u7i6tPav1t9PF5oEBAQEFBQX4/ZH1IRAIyA9Xu6EG+/Pll18ODw+/du2a1glOsNurbnUulwvrPs+ePSuXy5EBzLvvvgunXT2FWn87ZPr++PFjOIBHdweFpwyTyYyLi+Pz+fn5+eRbBP/thISEzJ49m3D3oz6vNdAVqKioKC8vj8vlzp49G/lbmT9//pAhQ6qqqo4cOYIMYLhc7tq1awsLC7t10mXPag0QuuhxT5w40dbW5u/vT7JrXX8TGRk5ZswYsVi8Z88e2HxuwLJ69Wpzc/P169d3y0vrWa1nwwdqb28/evTo0qVL58yZU1ZWRnL8jL8a3XKFQvHxxx/3+P48PDymT5+uVCqTkpIG+NZxkyZNmjJlynfffffo0SPDj+jrWa2BQ9c7cN+7d+/mzZtBQUGzZ8/et29fd0dhsIFrz+Dz+YsXL6bT6cePH8c2RRyYWFlZxcfH37p167fffuvvWgMKg7ZwP3ny5PDhw/38/AoKCvTt99blKKy7MJnM2NhYU1PTnJwcbMPeAcunn37KYrE2bNjQrW6oZ7UGFAZFHdrb2+GY9FmzZunblazPmTt3rpOTU3l5OXbqwIAlJiZm/PjxP/zwA7aNev/VGmgYeojE/fv3c3Nzx40bN3v2bMItnvuW8PDwwMDA1tbWvXv39qYTfDq8qN4Db7UafPlUNWlpaZ988klf1RpodOM0pFOnTnl6evr6+vL5/P68JcTd3X3mzJkKhWLv3r36NrQfUJw7d06rZ7e1tY2JiSktLU1LS3v48GEf1nqGFUgmkx05cmT58uUk29f3HgsLC3CcDx8+XFFRgTwLnNUJnfv4+MTExAgEgp9//rlvaw00unceW3FxcU5OTnBwsO4lDw+Pt99+m7CWSCQy3L+OjIw0MzOTy+XBaghlzp8//6y8oHisrKxSUlLgRCLD++We1RqgCoR1ZLq9mJkawirYeVCGALOJbDab5KzCwXCc9rOdzkHRSzZv3jx06NCFCxf2SfKGqanp4sWLJ0yY4ODgIBKJsrKyfvnlF+xEM4wZM2bMmzfPxcVFLpffvHlzx44dT2F894wlDzwTzJs3b+LEiX2VvGFiYrJjx47Y2NjW1tajR48WFBRMnz59//79w4YNw4utWLHis88+Y7PZR48ezcnJmThx4q+//jp06NBe/zcUT5fFixdnZWVlZ2eT51HFx8dnq1m3bh15g2+99VZ2dvbKlSuxkqioqOzsbPxBSp6entnZ2bt378Z2+A8NDc3Kyvrxxx+RfoayQH2Gi4vL9u3bV6xYQX44S3eTN2xsbFpaWn799VesJC0tTSaT4ae3586dC4c3YpPNWVlZOTk5gYGB/TpkNsiJ9jY2fsfGZiKX68xiMRCkurPzmkSys6EhS//E6pMhg5nZG1ZWkVyuA5PZiaIPZLKU1tYdjY21pNPpQ1mslba2U3k8VxZLhSCVHR0X29p+amy8J5MZ+P+ssbNLUKdlXWhri9Z/dmmsldUejXk/KhTO0z/RttbefqOjI4IgB5qbXyM9d2zVqlUhISEpKSlbt24lOXMOn7wRERGhddXW1vbUqVOgZFCyYcMGLRkHBwdjY+NHjx5hJX5+fkql8s8//8SL3bhxIyQkJCgoCPK6/h4F+tTefoOjI95MDWOzh7HZr1ta7mhoeK+yUqFzLByLRtvp4vJP3HFgbBotkMMJ5HBW2dl9UFn5c2Mj4Xe9yuf/PHSoKc4t8DI29jI2fsvG5uOqqm/r6w35fy5rAo8hpqZ0BNE3wzQFdw7VZC6XQaMp9ZxvF6EZWl7qKqRZVVW1Zs2ajIwMOKOOPHnjnXfe4XK5SDcxMzPz9fVduXIliqK7d++GQjqd7uLiUlNTo5XrAh404YnET0mBPrKz+0r98iEIUiiTpba1yVE0zNT0BfVv+raNDZ1Ge+uvsT4aghwbNmyG5sxUgVx+vq2tXaUay+FM4HLN6PTdLi58BuMbnXn7l3i8A25uoDt329svi0QqBInicv1MTFg02rYhQ9qUyl80h/qSkCeVtiiVfAbDnMEYZWJyhyj3noYgL6ofHqr+bMFgjONwCA0qg0YL1YQMUtX52iR8Q3oqlIHJG/X19Zjt0a371VdfweetW7dix5CbmprSaDRIJ8cDQfz+nrvUq0DOLNYGBwf4/Gl1dUJtLfaGzufzD7i6GtFob1pbH2puzhCLsVrv29pi2rO2uvo/dXXYmz2Vxzvi5sZjMBKcnK5LJH/gapnR6f8dOhS057Pq6k2473rf1vbbIUOeHNLu7Hymra2uq4QyFYKki0Sz1CdKhZmaEipQIIdjrT5J/nRra4z6bqfyeIQKNMbEhKs2J/dksqpe57JZ9S55Qy6XHz582MzMLDIyctWqVba2tuAjQ8KxbqpdR0cH+Zmy/etEL+TzjdW9yXGhcDPuiSIIcqSlJUFjQt60scHK2TTaGjs7+LyhpmZTbS2+X7jQ1gY+BB1Bvv5r9vhya2t79fDhmFD41V+/a3t9/TZ158Wh07HGDezFxut5+aZq+q9NtbUd6juMxvVoeMKx/qsr8/MUkjeuXbu2ffv2jRs3Lly4sKGhYfHixaGhoaBYcE6yljysbNFdlfWUFMhfk0h/SH2Orhb7NL3JWFy+fQSXa6fWg+rOzo06YS544+FFDzM1HYk7hGuJxmHaRFTrq9pamfoXX8jnGzJovKJRoDA9AWtQoAaFIlciuaY2hGNNTS11HkC3HKCnmbzR0NAAgzI4r14ikahUKl2PCkpIkkj7BL1PhKU5MldE9Lo0aSZl8D5viOaBHRcK4c3WJaW1VcsM2DOZviYmT5aDdXbmEb0uzQrFdfWvYMdkhhrQoxfJZNVqe+7OZoNC4+EyGODWpIpEqEYz6GpXWrcp8PY6UTS91wr0oiZ5A8I/2dnZMGM6derU7OzszZs3d6s1OJMPJpQ6Ozurqqrs7Oy0jBAsEurvSUO9PlCZZu1VAIdzQceAwyN/cqK2uqMF7DT/AKHnoSUfoDFdYzRNkcQFsiSSKPUDDuZw8M6TPq6IRK9ZWoIROvHXTOpJXK6R+t24qP6nLra1bVYPFJ64aH+ds/M2NgZX6br6HUd6x7keJW+w2ew9e/aw2ex58+bhOz4vLy9s3RWCIPn5+TExMb6+vnl5eZgMHPfZZVCql+hVoMMtLR+pfY73bGz2NDXh4zdMGm29xr8+jPvR4cE8yWDU/3NjXtFQzdrT4Zq+7KH+5YKPNGrn2dXpk8Bl/QqEWT5QoHyptFGhsDYywsr7yQE626PkDblc3traOmbMmEWLFmEJ6R4eHosXL1YqldgRradPn46JifnXv/61YsUKcInGjx8fHBx848YNfLjoqSrQn1Lpjw0NK2xs7JnMPzw946uqUkUiOYoGcjibHB3BtmdLJLtxQZ0mhQI+OOg/MneIRm8wc+Wg+VCpf5iDjYCwWgb60WE6Xd4UtSUr1HRzqLove5XPd2IyfUxM7uJsZx86QIajG0hMSEj46aefVqxYERoaeu/ePXt7+8jISAaDkZCQUK4JbN65c+fo0aNz5849cOBAenq6jY3N5MmTW1tbt2zZgvQzZM/j3cePKzo6PrG3H8ZmH/3r1J0SRfc2N6+qrMQbm3yNB/MSj/e1nnXymKthonGezDVhN5JuAvsWTJicxx0dJXL5cDY7kMNh02hyjdnzUEdBMfMDXGpre1XtTEzl8fAKBBaoRam82c9+KDmPHj167bXXli5dGhYW5ufnJ5FIsrOzk5KS7ty5gxfbunVreXn5rFmzFixY0NraeuXKlV27dvVrDBro4oW+3d6eL5VO1HEwH3d2Zut4BpdFIqlKxaHTJ3C50TzeeR3LH2pqioWAsf6OrdEkko4Pu4S59l1yRSQazmZDEBx8cN3+S+vzVC53q0bvXVksZ7WxvKIOaXYLpVKpLxiI5+7du7pihIHExsbGr7/+mrw1FEWPqkGeLmSjsENubuc9PCZyuaj6d9xaV/d1Xd3p1lY5irqyWLtcXK6PGIEf5rQolTs1Pdpvbm5YRBEIMTU9PmwY9vyxYRrmFREP23qatUTYi4ECyVEUH/ys7Oy8r55rCzczY2sUFOu/8KpG0Q0LlOTqukBt2AVy+byysls42+7MYu13dY0wMxvL4Zxxdw998ACbEfusunqSev6Bx2CcdnfPkUj+kEiUKDqGw5nE5dIQ5Ju6uo/s7GgIItUYFcyMYZ2aLhDSfJKXrSc6oMsV9SidhosGMWk0MKXXxGIta3dJJPIyNjam00NMTUG3+taDfo4hfmYBHA5oj1ilerGkBK894GG8JBAUqt/aIA5nsXq8A7SrVJNKSq5q3u9gU9NVtrar7ewmq83Y5trar2pr4R2v1/jFYkyB9HdPmG61GpwU3KRQ3FbfNqZA483MzNTt6BoVrCRS01lHqD+UyuUPcXEKCkMVaKam9/mlsREf6cGQqlQba2rg87y/5kc3KRSRxcWvlZdfbGtrUijkKFoql//S1BR0//6n1dWOmi7vsUaBYDSEIAh2SRcnzSXybBAtLqvVwo7JdFc7zlM1yqEb1koXiTrVtm2C2vDYGhl5qqs8zfHXc9WFuWkG27n6Z1Iwz3SEznQdqs6eOUA0BxKoiR9iwcZ7mg+u+qf9XDX3U9ydraUui0QfqkNZ4zicUrl8stoBquvsLNCJc4pVqiyJJMLMLMTUlEmjQZCC6r96rkAK3PyovpqY32OoV6Jmmsa2Yfp3VyYDZyVY/1oLLKeCcK5DH5licSeKMmm0IFPTM21tEPK+pPaNdLnU1hZhZmZCp3sZG4MCKVEUm1brD4b9MMzY3fjeS/e0yo2sjOzi7HgTeOwhT94oaZG0IamhJaUbK1sIsZhqwR7KrttFHF7p4y4Mm8fAfEldsGlUrI+zNTLKHzmyevToM3pW5FgZGUHnWNfZmaXxk5oUihy1MrmxWN5EgWZLIyNQoDalMrs7IRmJSpWrlg/icMJMTRm4GQxdLmp0ZbSJCbhNN6RSYb+tw7J53cYi+knOiRbsoWzvc952y+2UbcrGw40tKS0mw03cvnNz/Oj/ErN6BjeUO+zHYUxbvU5CHysQNuX5Kp9P+FCZNNpazWzGGY1wvULhxGQ6MJlTeLwhRA5NgqMjuLGJjY34UdBvmvmQ9Zr8NTyf2tnBKOxgSwt4Kt0dzI8xMYnsKqx8UyJpUatLEIcDmQj9N/6ye9PO+XPiVGWneCcjS6OqzVXFrxZXbqp89Mmje9H3Ous67d+0Nxn5f5OGPYDG7K/1W8QKdLu9/ZRaLUzo9LMeHlp5EdZGRseHDQMLVN3ZiZ/NSFKneTBptH2urjATCbBotK1DhiyztoZB3La/xql/bmyEeYw5FhbfODmBqQDetbFZpfZjZCpVAlGyhyEKxGUwXldnjBS0t+tzw1Ua4X/w+dBx94cHzXZje/zXw2m1k/gm8ZQw242tECrqf/1f/m5nfWf93nqEhphH/iWuNkDQq5i2RkZZI0ZA4B9BkByJJFcqlSiVHsbGL/F4kMUhUw/aMW8Gups7I0fCeKpNqTzT2vq4s9PGyGg6jwchR6lKNbGkBHoWPDHm5ifc3UGdS+Xys21tnSg60cxsjKajXPH4cWJDQ3f/PRaN1uLnx9FEAbbU1a3Wn46z3Nr6JxcX+CxWqSxv3+6uwesSjz0evHBe07GmyvWVfrf9ZCUyXR9IF5vXbZy/cK75fzU13/3fyFcXOptuu9SWP4PPdmEr25TiPHHNtzWysiehlqFfD7Wa/b8U9cfrHjfs6/Yv2e1AYr1CEV5cfNDNDYx/sKmplpP7sKPj1YcPtVShWaGYUlJyyt19GJvNYzAW4kJE4Fq9+vDhDSJH+FRr65Ly8p0uLqZ0ujub/S4u0VGBop9UV/dAeyDefVUs/t8MBqlRwbtH2MC+b5FXyMveLhNeEtIY3ehTLKY+8Zakd/UOIOgmdM9DnhwfjqxE1pTcxDBn8GfweRG8B7MfyEplrZdaaQya5cuWktuStow2aYH0Kc2FVXd2TigujubxFllahpqa2jOZRjRao0KRJ5X+LhTub24mzBorlMl8i4resLaeY2HhY2JiRqcLlcrb7e1HW1p+bW6G3EJC9jc3Z4rF79rYvGRuPpTFYtJoVR0daWLx9/X1ugNvw7ksEoECtatUWISTkPKODoFc7tGfEaDHX3Z7dtNqthU3mCsrlbWl6/XJ7P9lz/HhNCU3VXxWgSqfPBThBeGwxGFDPhsi+KdAeEmokqueKFC+pOZ7vTaM4lmCxqAFCAK8z3mTi5lHmY8pGuN/x5/cg/a56uNf6M8w/UuqgtdxL6+TXuA+8yJ4AYKAIZ89WZ7wN+/OQfHUsJpj5bLJBe1AS98obS/Sa4ON+EYsB5a0QKqU/CXocH/2/adwk5QCDUhoiOOHjvZv2SuaFII3BOReixH/yUNUiv6erYMoBRpw0Ixorltd+dP5shKZ4A1BR2UXs7lgeBhcg1Lt+hxqc4UBBh1x+86NP50vyhI9mP+gS+15Eiiq61S0KIw9jemcvzxN122uPuk+bFd1IAbtv/ulGEjYv2lvMdVC/KdYECcwvFdqPtFMN6Y7rXHCnqeJl4nFlCeDf/mjJ7NSqOKJBtFZff+4/z8Qs7O9j0Ap5gAAAABJRU5ErkJggg==",
+            "width": "192px",
+            "center": true
+        },
+        {
+            "type": "CheckBox",
+            "name": "Active",
+            "caption": "Aktiv"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "PixooIp",
+            "caption": "Pixoo IP-Adresse"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "UpdateIntervalSeconds",
+            "caption": "Aktualisierung (Sekunden)",
+            "digits": 0
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "DefaultBrightness",
+            "caption": "Helligkeit Tag (0–100)",
+            "digits": 0
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Pixoo: Nachthelligkeit",
+            "expanded": false,
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Zeitbezug: Uhrzeit des IP-Symcon-Servers. „Nacht“ von Stunde (inkl.) bis Stunde (exkl.); über Mitternacht z. B. 22 → 6."
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "PixooNightBrightnessUse",
+                    "caption": "Nachthelligkeit verwenden"
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PixooNightBrightness",
+                    "caption": "Helligkeit Nacht (0–100)",
+                    "digits": 0
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PixooNightHourFrom",
+                    "caption": "Nacht ab Stunde (0–23)",
+                    "digits": 0
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PixooNightHourTo",
+                    "caption": "Nacht bis Stunde (0–23, exkl.)",
+                    "digits": 0
+                }
+            ]
+        },
+        {
+            "type": "CheckBox",
+            "name": "PixooHourlyReinit",
+            "caption": "Display stündlich neu initialisieren (gegen Zurückschalten auf Ziffernblatt)"
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Pixoo: Datum / Uhrzeit (rechts unten)",
+            "expanded": false,
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Statische Anzeige (dir 1, speed 0). Formate = PHP date(), leer → „--“. Ausrichtung 1–3. Ohne SMARD-Preis: Datum/Uhrzeit im Eck wie unten gewählt. Mit SMARD-Preis: dieselben Schrift-/Höhen-Werte steuern optional die Uhrzeit über dem SMARD-Preis (siehe SMARD-Panel)."
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "PixooShowDateTime",
+                    "caption": "Datum/Uhrzeit anzeigen"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "PixooDateTimeTwoLines",
+                    "caption": "Zwei Zeilen (Datum oben, Uhrzeit unten)"
+                },
+                {
+                    "type": "ValidationTextBox",
+                    "name": "PixooDateTimeFormatDate",
+                    "caption": "Format Datum (bei zwei Zeilen)"
+                },
+                {
+                    "type": "ValidationTextBox",
+                    "name": "PixooDateTimeFormatTime",
+                    "caption": "Format Uhrzeit (bei zwei Zeilen)"
+                },
+                {
+                    "type": "ValidationTextBox",
+                    "name": "PixooDateTimeFormatCombined",
+                    "caption": "Format eine Zeile (wenn „Zwei Zeilen“ aus)"
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PixooDateTimeAlign",
+                    "caption": "Ausrichtung (1=links, 2=mittig, 3=rechts)",
+                    "digits": 0
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PixooDateTimeFont",
+                    "caption": "Schrift-Font (26 = kleines Label, 2 = groß)",
+                    "digits": 0
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PixooDateTimeTextHeight",
+                    "caption": "Zeilenhöhe (4–16)",
+                    "digits": 0
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Pixoo: SMARD Strompreis",
+            "expanded": false,
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Day-Ahead Börsenpreis DE/LU (Filter 4169, Viertelstunden), www.smard.de, Abholung alle 15 Min. Wert EUR/MWh → Anzeige als EUR/kWh (÷1000). Rechts unten: gleiche Schriftgröße wie die Netz-Watt-Zahl (Font 2, Zeilenhöhe 16). Positiver Wert = grün, sonst rot."
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "PixooShowSmardPrice",
+                    "caption": "SMARD-Preis auf Pixoo anzeigen"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "PixooSmardShowUnit",
+                    "caption": "Preis mit „€/kWh“ anhängen"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "PixooSmardShowTime",
+                    "caption": "Uhrzeit über dem SMARD-Preis (rechts)"
+                },
+                {
+                    "type": "Label",
+                    "caption": "Uhrzeit nutzt „Format Uhrzeit (bei zwei Zeilen)“ sowie Schrift, Zeilenhöhe und Ausrichtung aus dem Panel „Pixoo: Datum / Uhrzeit“."
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Home Manager 2 (Real Power ±)",
+            "expanded": true,
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Real Power + = Netzbezug, Real Power − = Netzeinspeisung (W). String- oder Float-/Integer-Variablen. Netz = Bezug − Einspeisung."
+                },
+                {
+                    "type": "SelectVariable",
+                    "name": "HmRealPowerPlusVar",
+                    "caption": "Variable: Real Power + (Netzbezug, W)"
+                },
+                {
+                    "type": "SelectVariable",
+                    "name": "HmRealPowerMinusVar",
+                    "caption": "Variable: Real Power − (Netzeinspeisung, W)"
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Wechselrichter 1 (2 Variablen)",
+            "expanded": true,
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Zwei Variablen pro WR (Integer, Float oder String mit Zahl). Erzeugung = Summe aller vier Werte (je Wert ≥ 0). Bei Fehler 201: Meldungsarchiv der Instanz prüfen (SendDebug „Konfiguration“)."
+                },
+                {
+                    "type": "SelectVariable",
+                    "name": "Wr1String1Var",
+                    "caption": "Variable 1 (Leistung W)"
+                },
+                {
+                    "type": "SelectVariable",
+                    "name": "Wr1String2Var",
+                    "caption": "Variable 2 (Leistung W)"
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Wechselrichter 2 (2 Variablen)",
+            "expanded": true,
+            "items": [
+                {
+                    "type": "SelectVariable",
+                    "name": "Wr2String1Var",
+                    "caption": "Variable 1 (Leistung W)"
+                },
+                {
+                    "type": "SelectVariable",
+                    "name": "Wr2String2Var",
+                    "caption": "Variable 2 (Leistung W)"
+                }
+            ]
+        }
+    ],
+    "actions": [
+        {
+            "type": "Button",
+            "caption": "SMARD-Preis laden",
+            "onClick": "echo SMAPX_SmardLoadActionFeedback($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Jetzt aktualisieren",
+            "onClick": "SMAPX_Refresh($id); echo 'OK';"
+        },
+        {
+            "type": "Button",
+            "caption": "Display neu initialisieren",
+            "onClick": "SMAPX_ReinitDisplay($id); echo 'OK';"
+        }
+    ],
+    "status": [
+        {
+            "code": 102,
+            "icon": "active",
+            "caption": "Aktiv"
+        },
+        {
+            "code": 104,
+            "icon": "inactive",
+            "caption": "Inaktiv"
+        },
+        {
+            "code": 201,
+            "icon": "error",
+            "caption": "Konfiguration ungültig (alle sechs Variablen prüfen)"
+        }
+    ]
+}
