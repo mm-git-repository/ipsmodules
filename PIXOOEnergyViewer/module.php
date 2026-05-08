@@ -107,9 +107,44 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /**
-     * Alte Instanzen: Create() lief nur beim Anlegen — ohne Migrate fehlt PixooShowSmardPrice
-     * in der persistierten Konfiguration → ReadProperty meldet „Property not found“.
+     * Alte Instanzen: fehlende Keys in der persistierten Konfiguration → IPSModuleStrict:
+     * ReadProperty* wirft „Property not found“, Instanz / Konfigurationsformular lädt nicht.
+     * Alle RegisterProperty-*-Defaults aus Create() hier spiegeln (nur ergänzen, nie überschreiben).
+     *
+     * @return array<string, bool|int|string>
      */
+    private function migrateDefaultConfiguration(): array
+    {
+        return [
+            'Active' => true,
+            'PixooIp' => '172.18.1.167',
+            'UpdateIntervalSeconds' => 5,
+            'DefaultBrightness' => 80,
+            'PixooNightBrightnessUse' => false,
+            'PixooNightBrightness' => 25,
+            'PixooNightHourFrom' => 22,
+            'PixooNightHourTo' => 6,
+            'PixooHourlyReinit' => true,
+            'HmRealPowerPlusVar' => 0,
+            'HmRealPowerMinusVar' => 0,
+            'Wr1String1Var' => 0,
+            'Wr1String2Var' => 0,
+            'Wr2String1Var' => 0,
+            'Wr2String2Var' => 0,
+            'PixooShowDateTime' => false,
+            'PixooDateTimeTwoLines' => true,
+            'PixooDateTimeFormatDate' => 'j.n.',
+            'PixooDateTimeFormatTime' => 'H:i',
+            'PixooDateTimeFormatCombined' => 'j.n. H:i',
+            'PixooDateTimeFont' => self::FONT_DATETIME,
+            'PixooDateTimeTextHeight' => self::DATETIME_TEXT_HEIGHT,
+            'PixooDateTimeAlign' => 3,
+            'PixooShowSmardPrice' => true,
+            'PixooSmardShowUnit' => true,
+            'PixooSmardShowTime' => false,
+        ];
+    }
+
     public function Migrate(string $JSONData): string
     {
         parent::Migrate($JSONData);
@@ -121,14 +156,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!isset($data['configuration']) || !is_array($data['configuration'])) {
             $data['configuration'] = [];
         }
-        if (!array_key_exists('PixooShowSmardPrice', $data['configuration'])) {
-            $data['configuration']['PixooShowSmardPrice'] = true;
-        }
-        if (!array_key_exists('PixooSmardShowUnit', $data['configuration'])) {
-            $data['configuration']['PixooSmardShowUnit'] = true;
-        }
-        if (!array_key_exists('PixooSmardShowTime', $data['configuration'])) {
-            $data['configuration']['PixooSmardShowTime'] = false;
+        foreach ($this->migrateDefaultConfiguration() as $key => $default) {
+            if (!array_key_exists($key, $data['configuration'])) {
+                $data['configuration'][$key] = $default;
+            }
         }
 
         return json_encode($data, JSON_UNESCAPED_UNICODE);
