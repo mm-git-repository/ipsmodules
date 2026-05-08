@@ -86,8 +86,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             IPS_SetVariableProfileText('SMAPX.EurKWh', '', ' €/kWh');
         }
 
-        $kv = IPS_GetKernelVersion();
-        $usePresArray = $kv !== false && $kv !== '' && version_compare((string) $kv, '8.0', '>=');
+        $usePresArray = false;
+        if (function_exists('IPS_GetKernelVersion')) {
+            $kv = IPS_GetKernelVersion();
+            $usePresArray = is_string($kv) && $kv !== '' && version_compare($kv, '8.0', '>=');
+        }
         if ($usePresArray) {
             $wattPres = ['PROFILE' => 'SMAPX.Watt'];
             $eurPres = ['PROFILE' => 'SMAPX.EurKWh'];
@@ -151,7 +154,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
         $data = json_decode($JSONData, true);
         if (!is_array($data)) {
-            $data = [];
+            return $JSONData;
         }
         if (!isset($data['configuration']) || !is_array($data['configuration'])) {
             $data['configuration'] = [];
@@ -159,10 +162,68 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         foreach ($this->migrateDefaultConfiguration() as $key => $default) {
             if (!array_key_exists($key, $data['configuration'])) {
                 $data['configuration'][$key] = $default;
+                continue;
+            }
+            $v = $data['configuration'][$key];
+            if ($v === null) {
+                $data['configuration'][$key] = $default;
+                continue;
+            }
+            if (is_bool($default)) {
+                $data['configuration'][$key] = self::migrateCoerceBool($v);
+            } elseif (is_int($default)) {
+                $data['configuration'][$key] = self::migrateCoerceInt($v);
+            } else {
+                $data['configuration'][$key] = is_string($v) ? $v : (string) $v;
             }
         }
 
-        return json_encode($data, JSON_UNESCAPED_UNICODE);
+        $out = json_encode($data, JSON_UNESCAPED_UNICODE);
+        if ($out === false || $out === '') {
+            return $JSONData;
+        }
+
+        return $out;
+    }
+
+    /** @param mixed $v */
+    private static function migrateCoerceBool($v): bool
+    {
+        if (is_bool($v)) {
+            return $v;
+        }
+        if (is_int($v)) {
+            return $v !== 0;
+        }
+        if (is_float($v)) {
+            return ((int) $v) !== 0;
+        }
+        if (is_string($v)) {
+            $s = strtolower(trim($v));
+
+            return in_array($s, ['1', 'true', 'yes', 'on'], true);
+        }
+
+        return false;
+    }
+
+    /** @param mixed $v */
+    private static function migrateCoerceInt($v): int
+    {
+        if (is_int($v)) {
+            return $v;
+        }
+        if (is_float($v)) {
+            return (int) round($v);
+        }
+        if (is_string($v) && is_numeric(trim($v))) {
+            return (int) round((float) $v);
+        }
+        if (is_bool($v)) {
+            return $v ? 1 : 0;
+        }
+
+        return 0;
     }
 
     public function ApplyChanges(): void
