@@ -100,6 +100,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterVariableFloat('Net', 'Netz', $wattPres, 2);
         $this->RegisterVariableFloat('SmardSpotCt', 'SMARD Spot (€/kWh)', $eurPres, 3);
 
+        // SMAPX_*: Symcon erzeugt globale Funktionen aus public-Methoden (scripts/__generated.inc.php).
         $this->RegisterTimer('Update', 0, 'SMAPX_Refresh($_IPS[\'TARGET\']);');
         $this->RegisterTimer('HourlyReinit', 0, 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);');
         $this->RegisterTimer('SmardFetch', 0, 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);');
@@ -820,33 +821,5 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return null;
         }
         return $result;
-    }
-}
-
-/*
- * SMAPX_Refresh / SMAPX_ReinitDisplay liefert Symcon bereits über scripts/__generated.inc.php
- * (öffentliche Methoden der Modulklasse). Nur fehlende Stubs hier ergänzen:
- */
-if (!function_exists('SMAPX_UpdateSmardPrice')) {
-    /** @param int $InstanceID Instanz-ID (Timer „SmardFetch“ / Aktion „SMARD-Preis laden“) */
-    function SMAPX_UpdateSmardPrice($InstanceID): void
-    {
-        $id = (int) $InstanceID;
-        if (!IPS_InstanceExists($id)) {
-            return;
-        }
-        (new PIXOOEnergyViewer($id))->UpdateSmardPrice();
-    }
-}
-
-if (!function_exists('SMAPX_SmardLoadActionFeedback')) {
-    /** @param int $InstanceID Instanz-ID (Button „SMARD-Preis laden“) */
-    function SMAPX_SmardLoadActionFeedback($InstanceID): string
-    {
-        $id = (int) $InstanceID;
-        if (!IPS_InstanceExists($id)) {
-            return '';
-        }
-        return (new PIXOOEnergyViewer($id))->SmardLoadActionFeedback();
     }
 }
