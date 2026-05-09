@@ -12,13 +12,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      * Divoom ItemList: Font 0 / sehr kleine Höhen werden oft gar nicht gezeichnet.
      * Font 26 = gleiche kleine Label-Schrift wie „VERBRAUCH“ (standalone/sma_pixoo_display.py).
      */
-    private const FONT_DATETIME = 26;
-    private const DATETIME_TEXT_HEIGHT = 7;
-    private const DATETIME_Y_LINE1 = 52;
-    private const DATETIME_Y_LINE2 = 59;
-    private const DATETIME_Y_SINGLE = 55;
-    /** Textfeld ab X; mit align=3 und voller Breite rechtsbündig in der Zeile */
+    /** Textfeld ab X; SMARD-Eck mit align=3 und voller Breite rechtsbündig */
     private const DATETIME_X = 0;
+
+    /** SMARD-Zeitstempel auf dem Pixoo: PHP date()-Format (fest, kein Formularfeld mehr) */
+    private const SMARD_TIME_PHP_FORMAT = 'H:i';
+
+    /** 1 = links, 2 = mitte, 3 = rechts — fest für SMARD-Eck */
+    private const SMARD_CORNER_TEXT_ALIGN = 3;
 
     /** Zeile des Labels „NETZ“ (und optional SMARD-Uhrzeit rechts in derselben Zeile) */
     private const NETZ_LABEL_Y = 46;
@@ -29,7 +30,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private const ONE_HOUR_MS = 3600000;
     private const SMARD_FETCH_MS = 900000;
 
-    /** SMARD Marktpreis Day-Ahead DE/LU, EUR/MWh → Anzeige €/kWh = Wert / 1000 */
+    /** SMARD Marktpreis Day-Ahead DE/LU, EUR/MWh → Anzeige als Zahl in € (= Wert / 1000) */
     private const SMARD_FILTER_ID = 4169;
     private const SMARD_REGION = 'DE';
     private const SMARD_TIME_TEXT_ID = 18;
@@ -41,13 +42,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** IPS_GetKernelRunlevel() wenn der Kernel vollständig gestartet ist (siehe Symcon-Doku) */
     private const KERNEL_RUNLEVEL_READY = 10103;
 
+    /** Mindest-Timerintervall „Update“ (Sekunden); kürzer würde oft mit HTTP-Laufzeit von Refresh kollidieren */
+    private const UPDATE_INTERVAL_MIN_SEC = 5;
+
     public function Create(): void
     {
         parent::Create();
 
         $this->RegisterPropertyBoolean('Active', true);
         $this->RegisterPropertyString('PixooIp', '172.18.1.167');
-        $this->RegisterPropertyInteger('UpdateIntervalSeconds', 5);
+        $this->RegisterPropertyInteger('UpdateIntervalSeconds', self::UPDATE_INTERVAL_MIN_SEC);
         $this->RegisterPropertyInteger('DefaultBrightness', 80);
         $this->RegisterPropertyBoolean('PixooNightBrightnessUse', false);
         $this->RegisterPropertyInteger('PixooNightBrightness', 25);
@@ -63,16 +67,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterPropertyInteger('Wr2String1Var', 0);
         $this->RegisterPropertyInteger('Wr2String2Var', 0);
 
-        $this->RegisterPropertyBoolean('PixooShowDateTime', false);
-        $this->RegisterPropertyBoolean('PixooDateTimeTwoLines', true);
-        $this->RegisterPropertyString('PixooDateTimeFormatDate', 'j.n.');
-        $this->RegisterPropertyString('PixooDateTimeFormatTime', 'H:i');
-        $this->RegisterPropertyString('PixooDateTimeFormatCombined', 'j.n. H:i');
-        $this->RegisterPropertyInteger('PixooDateTimeFont', self::FONT_DATETIME);
-        $this->RegisterPropertyInteger('PixooDateTimeTextHeight', self::DATETIME_TEXT_HEIGHT);
-        /** 1 = links, 2 = mitte, 3 = rechts (Uhr: Standard 3) */
-        $this->RegisterPropertyInteger('PixooDateTimeAlign', 3);
-
         $this->RegisterPropertyBoolean('PixooShowSmardPrice', true);
         $this->RegisterPropertyBoolean('PixooSmardShowUnit', true);
         $this->RegisterPropertyBoolean('PixooSmardShowTime', false);
@@ -83,7 +77,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         if (!IPS_VariableProfileExists('SMAPX.EurKWh')) {
             IPS_CreateVariableProfile('SMAPX.EurKWh', 2);
-            IPS_SetVariableProfileText('SMAPX.EurKWh', '', ' €/kWh');
+            IPS_SetVariableProfileText('SMAPX.EurKWh', '', ' €');
         }
 
         $usePresArray = false;
@@ -101,12 +95,27 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterVariableFloat('Consumption', 'Verbrauch', $wattPres, 0);
         $this->RegisterVariableFloat('Generation', 'Erzeugung', $wattPres, 1);
         $this->RegisterVariableFloat('Net', 'Netz', $wattPres, 2);
-        $this->RegisterVariableFloat('SmardSpotCt', 'SMARD Spot (€/kWh)', $eurPres, 3);
+        $this->RegisterVariableFloat('SmardSpotCt', 'SMARD Spot (€)', $eurPres, 3);
 
         // SMAPX_*: Symcon erzeugt globale Funktionen aus public-Methoden (scripts/__generated.inc.php).
         $this->RegisterTimer('Update', 0, 'SMAPX_Refresh($_IPS[\'TARGET\']);');
         $this->RegisterTimer('HourlyReinit', 0, 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);');
         $this->RegisterTimer('SmardFetch', 0, 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);');
+    }
+
+    /** @return list<string> */
+    private static function obsoleteConfigurationKeys(): array
+    {
+        return [
+            'PixooShowDateTime',
+            'PixooDateTimeTwoLines',
+            'PixooDateTimeFormatDate',
+            'PixooDateTimeFormatTime',
+            'PixooDateTimeFormatCombined',
+            'PixooDateTimeFont',
+            'PixooDateTimeTextHeight',
+            'PixooDateTimeAlign',
+        ];
     }
 
     /**
@@ -121,7 +130,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return [
             'Active' => true,
             'PixooIp' => '172.18.1.167',
-            'UpdateIntervalSeconds' => 5,
+            'UpdateIntervalSeconds' => self::UPDATE_INTERVAL_MIN_SEC,
             'DefaultBrightness' => 80,
             'PixooNightBrightnessUse' => false,
             'PixooNightBrightness' => 25,
@@ -134,14 +143,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'Wr1String2Var' => 0,
             'Wr2String1Var' => 0,
             'Wr2String2Var' => 0,
-            'PixooShowDateTime' => false,
-            'PixooDateTimeTwoLines' => true,
-            'PixooDateTimeFormatDate' => 'j.n.',
-            'PixooDateTimeFormatTime' => 'H:i',
-            'PixooDateTimeFormatCombined' => 'j.n. H:i',
-            'PixooDateTimeFont' => self::FONT_DATETIME,
-            'PixooDateTimeTextHeight' => self::DATETIME_TEXT_HEIGHT,
-            'PixooDateTimeAlign' => 3,
             'PixooShowSmardPrice' => true,
             'PixooSmardShowUnit' => true,
             'PixooSmardShowTime' => false,
@@ -176,6 +177,13 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             } else {
                 $data['configuration'][$key] = is_string($v) ? $v : (string) $v;
             }
+        }
+        if (array_key_exists('UpdateIntervalSeconds', $data['configuration'])) {
+            $u = self::migrateCoerceInt($data['configuration']['UpdateIntervalSeconds']);
+            $data['configuration']['UpdateIntervalSeconds'] = max(self::UPDATE_INTERVAL_MIN_SEC, $u);
+        }
+        foreach (self::obsoleteConfigurationKeys() as $k) {
+            unset($data['configuration'][$k]);
         }
 
         $out = json_encode($data, JSON_UNESCAPED_UNICODE);
@@ -252,7 +260,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
         $this->SetStatus(102);
         $this->SetBuffer('PixooInited', '0');
-        $sec = max(1, $this->ReadPropertyInteger('UpdateIntervalSeconds'));
+        $sec = max(self::UPDATE_INTERVAL_MIN_SEC, $this->ReadPropertyInteger('UpdateIntervalSeconds'));
         $this->SetTimerInterval('Update', $sec * 1000);
         if ($this->ReadPropertyBoolean('PixooHourlyReinit')) {
             $this->SetTimerInterval('HourlyReinit', self::ONE_HOUR_MS);
@@ -309,7 +317,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $dateStr = date('d.m.Y', $sec);
         $timeStr = date('H:i', $sec);
         $eurKwh = $row['eurMwh'] / 1000.0;
-        $priceStr = number_format($eurKwh, 3, ',', '') . ' €/kWh';
+        $priceStr = number_format($eurKwh, 3, ',', '') . ' €';
         return "SMARD Day-Ahead (Viertelstunde)\nPreis: {$priceStr}\nDatum: {$dateStr}\nUhrzeit: {$timeStr}\n(Ortszeit PHP-Server)";
     }
 
@@ -339,11 +347,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $buyW = $this->readWattFromVariable($this->ReadPropertyInteger('HmRealPowerPlusVar'));
         $sellW = $this->readWattFromVariable($this->ReadPropertyInteger('HmRealPowerMinusVar'));
         if ($buyW === null || $sellW === null) {
-            $this->SendDebug('Netz', 'Real Power +/− konnten nicht gelesen werden.', 0);
-            return;
+            $this->SendDebug('Netz', 'Real Power +/− kurz unlesbar — Netz-Leistung aus letztem Modulwert „Netz“.', 0);
+            $netW = (float) $this->GetValue('Net');
+        } else {
+            $netW = $buyW - $sellW;
         }
-
-        $netW = $buyW - $sellW;
 
         $wr1Pairs = [
             $this->ReadPropertyInteger('Wr1String1Var'),
@@ -358,8 +366,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         foreach ($wr1Pairs as $vid) {
             $p = $this->readWattFromVariable($vid);
             if ($p === null) {
-                $this->SendDebug('WR', 'Wechselrichter-Variable ungültig: ID ' . $vid, 0);
-                return;
+                $this->SendDebug('WR', 'WR1 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
+                $p = 0.0;
             }
             $wr1W += max(0.0, $p);
         }
@@ -371,8 +379,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         foreach ($wr2Pairs as $vid) {
             $p = $this->readWattFromVariable($vid);
             if ($p === null) {
-                $this->SendDebug('WR', 'Wechselrichter-Variable ungültig: ID ' . $vid, 0);
-                return;
+                $this->SendDebug('WR', 'WR2 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
+                $p = 0.0;
             }
             $wr2W += max(0.0, $p);
         }
@@ -391,10 +399,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $pixooIp = $this->ReadPropertyString('PixooIp');
         if ($pixooIp === '') {
             return;
-        }
-
-        if ($this->ReadPropertyBoolean('PixooShowSmardPrice') && trim($this->GetBuffer('SmardEurPerMwh')) === '') {
-            $this->UpdateSmardPrice();
         }
 
         if ($this->GetBuffer('PixooInited') !== '1') {
@@ -520,18 +524,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return $this->RgbHex(50, 220, 50);
         }
         return $this->RgbHex(255, 50, 50);
-    }
-
-    /**
-     * @return array{y1:int,y2:int,ys:int,smard:int}
-     */
-    private function cornerLayoutYs(): array
-    {
-        $smard = $this->ReadPropertyBoolean('PixooShowSmardPrice');
-        if ($smard) {
-            return ['y1' => 52, 'y2' => 59, 'ys' => 55, 'smard' => 52];
-        }
-        return ['y1' => 52, 'y2' => 59, 'ys' => 55, 'smard' => 58];
     }
 
     /**
@@ -783,37 +775,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->makeTextItem(6, sprintf('%.0f W', abs($netW)), self::LEFT_PAD, 52, $cNet, self::FONT_VALUE, 16),
         ];
 
-        $ly = $this->cornerLayoutYs();
-
-        // Datum/Uhrzeit im Eck nur ohne SMARD-Preis (sonst SMARD-Eck inkl. optionaler Uhrzeit)
-        if ($this->ReadPropertyBoolean('PixooShowDateTime') && !$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
-            $cClock = $this->RgbHex(200, 200, 200);
-            $font = max(0, min(32, $this->ReadPropertyInteger('PixooDateTimeFont')));
-            $th = max(4, min(16, $this->ReadPropertyInteger('PixooDateTimeTextHeight')));
-            $tw = self::PIXEL_SIZE - self::DATETIME_X;
-            $ax = self::DATETIME_X;
-            $rawAl = $this->ReadPropertyInteger('PixooDateTimeAlign');
-            $al = ($rawAl >= 1 && $rawAl <= 3) ? $rawAl : 3;
-            // Wie standalone/pixoo_text.py bei statischem Text: sonst scrollt/kippt die Uhr aus dem sichtbaren Bereich
-            $dDir = 1;
-            $dSpeed = 0;
-
-            if ($this->ReadPropertyBoolean('PixooDateTimeTwoLines')) {
-                $d = $this->safePhpDateFormat($this->ReadPropertyString('PixooDateTimeFormatDate'));
-                $t = $this->safePhpDateFormat($this->ReadPropertyString('PixooDateTimeFormatTime'));
-                $items[] = $this->makeTextItem(7, $d, $ax, $ly['y1'], $cClock, $font, $th, $tw, $al, $dDir, $dSpeed);
-                $items[] = $this->makeTextItem(8, $t, $ax, $ly['y2'], $cClock, $font, $th, $tw, $al, $dDir, $dSpeed);
-            } else {
-                $line = $this->safePhpDateFormat($this->ReadPropertyString('PixooDateTimeFormatCombined'));
-                $items[] = $this->makeTextItem(7, $line, $ax, $ly['ys'], $cClock, $font, $th, $tw, $al, $dDir, $dSpeed);
-            }
-        }
-
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
             $tw = self::PIXEL_SIZE - self::DATETIME_X;
             $ax = self::DATETIME_X;
-            $rawAl = $this->ReadPropertyInteger('PixooDateTimeAlign');
-            $al = ($rawAl >= 1 && $rawAl <= 3) ? $rawAl : 3;
+            $al = self::SMARD_CORNER_TEXT_ALIGN;
             $dDir = 1;
             $dSpeed = 0;
 
@@ -822,15 +787,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $priceY = 52;
 
             if ($this->ReadPropertyBoolean('PixooSmardShowTime')) {
-                $timeStr = $this->safePhpDateFormat($this->ReadPropertyString('PixooDateTimeFormatTime'));
+                $timeStr = $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
+                // Gleiche Font-ID wie Verbrauch/Erzeugung/Netz (FONT_VALUE), damit Ziffern (z. B. „0“) nicht wie bei FONT_LABEL 26 dicker wirken
                 $items[] = $this->makeTextItem(
                     self::SMARD_TIME_TEXT_ID,
                     $timeStr,
                     $ax,
                     self::NETZ_LABEL_Y,
                     $cLabel,
-                    self::FONT_LABEL,
-                    7,
+                    self::FONT_VALUE,
+                    10,
                     $tw,
                     $al,
                     $dDir,
@@ -842,7 +808,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             if ($buf !== '' && is_numeric($buf)) {
                 $eur = (float) $buf;
                 $num = number_format($eur / 1000.0, 2, ',', '');
-                $txt = $this->ReadPropertyBoolean('PixooSmardShowUnit') ? ($num . '€/kWh') : $num;
+                $txt = $this->ReadPropertyBoolean('PixooSmardShowUnit') ? ($num . '€') : $num;
                 $col = $this->smardPriceColorHex($eur);
             } else {
                 $txt = '--';
