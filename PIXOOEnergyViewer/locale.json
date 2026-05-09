@@ -1,7 +1,7 @@
 {
     "translations": {
         "en": {
-            "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Echte Werte/Farben folgen den Messdaten.": "Schematic preview of the Pixoo layout (192×192 px ≈ 3× the 64-pixel grid). Live values and colours follow your measurements.",
+            "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.": "Schematic preview of the Pixoo layout (192×192 px ≈ 3× the 64-pixel grid). Example values in the image: 500 W consumption, 1000 W generation, 500 W grid import (red), 0.12 € SMARD (green). On the Pixoo, your measurements apply.",
             "Vorschau": "Preview",
             "Aktiv": "Active",
             "Pixoo IP-Adresse": "Pixoo IP address",
@@ -38,7 +38,7 @@
             "Konfiguration ungültig (alle sechs Variablen prüfen)": "Invalid configuration (check all six variables)"
         },
         "de": {
-            "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Echte Werte/Farben folgen den Messdaten.": "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Echte Werte/Farben folgen den Messdaten.",
+            "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.": "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.",
             "Vorschau": "Vorschau",
             "Aktiv": "Aktiv",
             "Pixoo IP-Adresse": "Pixoo IP-Adresse",
@@ -75,7 +75,7 @@
             "Konfiguration ungültig (alle sechs Variablen prüfen)": "Konfiguration ungültig (alle sechs Variablen prüfen)"
         },
         "en_GB": {
-            "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Echte Werte/Farben folgen den Messdaten.": "Schematic preview of the Pixoo layout (192×192 px ≈ 3× the 64-pixel grid). Live values and colours follow your measurements.",
+            "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.": "Schematic preview of the Pixoo layout (192×192 px ≈ 3× the 64-pixel grid). Example values in the image: 500 W consumption, 1000 W generation, 500 W grid import (red), 0.12 € SMARD (green). On the Pixoo, your measurements apply.",
             "Vorschau": "Preview",
             "Aktiv": "Active",
             "Pixoo IP-Adresse": "Pixoo IP address",
@@ -112,7 +112,7 @@
             "Konfiguration ungültig (alle sechs Variablen prüfen)": "Invalid configuration (check all six variables)"
         },
         "de_DE": {
-            "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Echte Werte/Farben folgen den Messdaten.": "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Echte Werte/Farben folgen den Messdaten.",
+            "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.": "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.",
             "Vorschau": "Vorschau",
             "Aktiv": "Aktiv",
             "Pixoo IP-Adresse": "Pixoo IP-Adresse",
