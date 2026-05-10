@@ -30,6 +30,15 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private const ONE_HOUR_MS = 3600000;
     private const SMARD_FETCH_MS = 900000;
 
+    /** Leichter HTTP an Pixoo (GetHttpGifId), damit Verbindung/Gerät nicht „einschläft“; parallel zum Update-Timer */
+    private const PIXOO_KEEPALIVE_MS = 240000;
+
+    /** HTTP-Timeout Pixoo (Sekunden); zu hoch → Timer-Zyklen stapeln sich bei Ausfall */
+    private const PIXOO_HTTP_TIMEOUT_SEC = 4.0;
+
+    /** HTTP-Timeout SMARD (Sekunden); mehrere Requests hintereinander → Gesamtblockade begrenzen */
+    private const SMARD_HTTP_TIMEOUT_SEC = 10.0;
+
     /** SMARD Marktpreis Day-Ahead DE/LU, EUR/MWh → Anzeige als Zahl in € (= Wert / 1000) */
     private const SMARD_FILTER_ID = 4169;
     private const SMARD_REGION = 'DE';
@@ -101,6 +110,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterTimer('Update', 0, 'SMAPX_Refresh($_IPS[\'TARGET\']);');
         $this->RegisterTimer('HourlyReinit', 0, 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);');
         $this->RegisterTimer('SmardFetch', 0, 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('PixooKeepAlive', 0, 'SMAPX_PixooKeepAliveTick($_IPS[\'TARGET\']);');
     }
 
     /** @return list<string> */
@@ -243,6 +253,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->SetTimerInterval('Update', 0);
             $this->SetTimerInterval('HourlyReinit', 0);
             $this->SetTimerInterval('SmardFetch', 0);
+            $this->SetTimerInterval('PixooKeepAlive', 0);
             return;
         }
 
@@ -252,6 +263,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->SetTimerInterval('Update', 0);
             $this->SetTimerInterval('HourlyReinit', 0);
             $this->SetTimerInterval('SmardFetch', 0);
+            $this->SetTimerInterval('PixooKeepAlive', 0);
             foreach ($configIssues as $line) {
                 $this->SendDebug('Konfiguration', $line, 0);
             }
@@ -275,6 +287,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         } else {
             $this->SetTimerInterval('SmardFetch', 0);
         }
+        $pixooIp = trim($this->ReadPropertyString('PixooIp'));
+        if ($pixooIp !== '') {
+            $this->SetTimerInterval('PixooKeepAlive', self::PIXOO_KEEPALIVE_MS);
+        } else {
+            $this->SetTimerInterval('PixooKeepAlive', 0);
+        }
     }
 
     /** Viertelstunden-Day-Ahead-Preis (www.smard.de), für Pixoo-Anzeige */
@@ -283,13 +301,34 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active') || !$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
             return;
         }
-        $row = $this->fetchSmardSpotRow();
-        if ($row === null) {
-            $this->applySmardSpotRow(null);
-            $this->SendDebug('SMARD', 'Kein gültiger Preis (API/Zeitreihe).', 0);
+        try {
+            $row = $this->fetchSmardSpotRow();
+            if ($row === null) {
+                $this->applySmardSpotRow(null);
+                $this->SendDebug('SMARD', 'Kein gültiger Preis (API/Zeitreihe).', 0);
+                return;
+            }
+            $this->applySmardSpotRow($row);
+        } catch (\Throwable $e) {
+            $this->SendDebug('SMARD', 'UpdateSmardPrice: ' . $e->getMessage(), 0);
+        }
+    }
+
+    /** Leichter Pixoo-Request (eigener Timer), um WLAN/Deep-Sleep-Probleme zu mildern */
+    public function PixooKeepAliveTick(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        $this->applySmardSpotRow($row);
+        $ip = trim($this->ReadPropertyString('PixooIp'));
+        if ($ip === '') {
+            return;
+        }
+        try {
+            $this->PixooPostRaw($ip, ['Command' => 'Draw/GetHttpGifId']);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Pixoo', 'KeepAlive: ' . $e->getMessage(), 0);
+        }
     }
 
     /**
@@ -339,94 +378,108 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-
-        if (!$this->ParseConfig()) {
+        if ($this->GetBuffer('RefreshBusy') === '1') {
+            $this->SendDebug('Refresh', 'Zyklus übersprungen (vorheriger Refresh läuft noch — oft Pixoo-HTTP oder Init).', 0);
             return;
         }
-
-        $buyW = $this->readWattFromVariable($this->ReadPropertyInteger('HmRealPowerPlusVar'));
-        $sellW = $this->readWattFromVariable($this->ReadPropertyInteger('HmRealPowerMinusVar'));
-        if ($buyW === null || $sellW === null) {
-            $this->SendDebug('Netz', 'Real Power +/− kurz unlesbar — Netz-Leistung aus letztem Modulwert „Netz“.', 0);
-            $netW = (float) $this->GetValue('Net');
-        } else {
-            $netW = $buyW - $sellW;
-        }
-
-        $wr1Pairs = [
-            $this->ReadPropertyInteger('Wr1String1Var'),
-            $this->ReadPropertyInteger('Wr1String2Var'),
-        ];
-        $wr2Pairs = [
-            $this->ReadPropertyInteger('Wr2String1Var'),
-            $this->ReadPropertyInteger('Wr2String2Var'),
-        ];
-
-        $wr1W = 0.0;
-        foreach ($wr1Pairs as $vid) {
-            $p = $this->readWattFromVariable($vid);
-            if ($p === null) {
-                $this->SendDebug('WR', 'WR1 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
-                $p = 0.0;
+        $this->SetBuffer('RefreshBusy', '1');
+        try {
+            if (!$this->ParseConfig()) {
+                return;
             }
-            $wr1W += max(0.0, $p);
-        }
-        if ($wr1W > self::GENERATION_INVALID_ABOVE_W) {
+
+            $buyW = $this->readWattFromVariable($this->ReadPropertyInteger('HmRealPowerPlusVar'));
+            $sellW = $this->readWattFromVariable($this->ReadPropertyInteger('HmRealPowerMinusVar'));
+            if ($buyW === null || $sellW === null) {
+                $this->SendDebug('Netz', 'Real Power +/− kurz unlesbar — Netz-Leistung aus letztem Modulwert „Netz“.', 0);
+                $netW = (float) $this->GetValue('Net');
+            } else {
+                $netW = $buyW - $sellW;
+            }
+
+            $wr1Pairs = [
+                $this->ReadPropertyInteger('Wr1String1Var'),
+                $this->ReadPropertyInteger('Wr1String2Var'),
+            ];
+            $wr2Pairs = [
+                $this->ReadPropertyInteger('Wr2String1Var'),
+                $this->ReadPropertyInteger('Wr2String2Var'),
+            ];
+
             $wr1W = 0.0;
-        }
-
-        $wr2W = 0.0;
-        foreach ($wr2Pairs as $vid) {
-            $p = $this->readWattFromVariable($vid);
-            if ($p === null) {
-                $this->SendDebug('WR', 'WR2 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
-                $p = 0.0;
+            foreach ($wr1Pairs as $vid) {
+                $p = $this->readWattFromVariable($vid);
+                if ($p === null) {
+                    $this->SendDebug('WR', 'WR1 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
+                    $p = 0.0;
+                }
+                $wr1W += max(0.0, $p);
             }
-            $wr2W += max(0.0, $p);
-        }
-        if ($wr2W > self::GENERATION_INVALID_ABOVE_W) {
+            if ($wr1W > self::GENERATION_INVALID_ABOVE_W) {
+                $wr1W = 0.0;
+            }
+
             $wr2W = 0.0;
-        }
-
-        $generation = $wr1W + $wr2W;
-
-        $consumption = $generation + $netW;
-
-        $this->SetValue('Consumption', $consumption);
-        $this->SetValue('Generation', $generation);
-        $this->SetValue('Net', $netW);
-
-        $pixooIp = $this->ReadPropertyString('PixooIp');
-        if ($pixooIp === '') {
-            return;
-        }
-
-        if ($this->GetBuffer('PixooInited') !== '1') {
-            $this->InitPixooDisplay($pixooIp);
-        } else {
-            $eff = $this->getEffectivePixooBrightness();
-            if ($this->GetBuffer('PixooLastBrightness') !== (string) $eff) {
-                $this->PixooSetBrightness($pixooIp, $eff);
-                $this->SetBuffer('PixooLastBrightness', (string) $eff);
+            foreach ($wr2Pairs as $vid) {
+                $p = $this->readWattFromVariable($vid);
+                if ($p === null) {
+                    $this->SendDebug('WR', 'WR2 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
+                    $p = 0.0;
+                }
+                $wr2W += max(0.0, $p);
             }
-        }
+            if ($wr2W > self::GENERATION_INVALID_ABOVE_W) {
+                $wr2W = 0.0;
+            }
 
-        $this->PixooSendItemList($pixooIp, $consumption, $generation, $netW);
+            $generation = $wr1W + $wr2W;
+
+            $consumption = $generation + $netW;
+
+            $this->SetValue('Consumption', $consumption);
+            $this->SetValue('Generation', $generation);
+            $this->SetValue('Net', $netW);
+
+            $pixooIp = trim($this->ReadPropertyString('PixooIp'));
+            if ($pixooIp === '') {
+                return;
+            }
+
+            if ($this->GetBuffer('PixooInited') !== '1') {
+                $this->InitPixooDisplay($pixooIp);
+            } else {
+                $eff = $this->getEffectivePixooBrightness();
+                if ($this->GetBuffer('PixooLastBrightness') !== (string) $eff) {
+                    $this->PixooSetBrightness($pixooIp, $eff);
+                    $this->SetBuffer('PixooLastBrightness', (string) $eff);
+                }
+            }
+
+            $this->PixooSendItemList($pixooIp, $consumption, $generation, $netW);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Refresh', 'Ausnahme: ' . $e->getMessage(), 0);
+        } finally {
+            $this->SetBuffer('RefreshBusy', '0');
+        }
     }
 
     public function ReinitDisplay(): void
     {
-        $this->SetBuffer('PixooInited', '0');
-        $pixooIp = $this->ReadPropertyString('PixooIp');
-        if ($pixooIp !== '') {
-            $this->InitPixooDisplay($pixooIp);
-            $this->SetValue('Consumption', $this->GetValue('Consumption'));
-            $this->PixooSendItemList(
-                $pixooIp,
-                (float) $this->GetValue('Consumption'),
-                (float) $this->GetValue('Generation'),
-                (float) $this->GetValue('Net')
-            );
+        try {
+            $this->SetBuffer('PixooInited', '0');
+            $pixooIp = trim($this->ReadPropertyString('PixooIp'));
+            if ($pixooIp !== '') {
+                $this->InitPixooDisplay($pixooIp);
+                $this->SetValue('Consumption', $this->GetValue('Consumption'));
+                $this->PixooSendItemList(
+                    $pixooIp,
+                    (float) $this->GetValue('Consumption'),
+                    (float) $this->GetValue('Generation'),
+                    (float) $this->GetValue('Net')
+                );
+            }
+        } catch (\Throwable $e) {
+            $this->SendDebug('Pixoo', 'ReinitDisplay: ' . $e->getMessage(), 0);
         }
     }
 
@@ -440,7 +493,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return stream_context_create([
             'http' => [
                 'method' => 'GET',
-                'timeout' => 25.0,
+                'timeout' => self::SMARD_HTTP_TIMEOUT_SEC,
                 'header' => "User-Agent: PIXOOEnergyViewer/IP-Symcon\r\nAccept: application/json\r\n",
             ],
             'ssl' => [
@@ -869,7 +922,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 'method' => 'POST',
                 'header' => "Content-Type: application/json\r\n",
                 'content' => $json,
-                'timeout' => 5.0,
+                'timeout' => self::PIXOO_HTTP_TIMEOUT_SEC,
             ],
         ]);
 
