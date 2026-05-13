@@ -36,8 +36,20 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** HTTP-Timeout Pixoo (Sekunden); zu hoch → Timer-Zyklen stapeln sich bei Ausfall */
     private const PIXOO_HTTP_TIMEOUT_SEC = 4.0;
 
+    /** TCP-Verbindungsaufbau Pixoo (Sekunden); verhindert endloses Hängen bei „schwarzem Loch“-Sockets */
+    private const PIXOO_HTTP_CONNECT_TIMEOUT_SEC = 2.0;
+
     /** HTTP-Timeout SMARD (Sekunden); mehrere Requests hintereinander → Gesamtblockade begrenzen */
     private const SMARD_HTTP_TIMEOUT_SEC = 10.0;
+
+    /** TCP-Verbindungsaufbau SMARD (Sekunden) */
+    private const SMARD_HTTP_CONNECT_TIMEOUT_SEC = 5.0;
+
+    /**
+     * Wenn RefreshBusy länger gesetzt bleibt (z. B. hängender HTTP trotz Timeout in älteren Pfaden),
+     * Sperre verwerfen — sonst keine IPS-Werte/Pixoo-Updates mehr bis Instanz-Neustart.
+     */
+    private const REFRESH_BUSY_MAX_AGE_SEC = 45;
 
     /** SMARD Marktpreis Day-Ahead DE/LU, EUR/MWh → Anzeige als Zahl in € (= Wert / 1000) */
     private const SMARD_FILTER_ID = 4169;
@@ -379,10 +391,19 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return;
         }
         if ($this->GetBuffer('RefreshBusy') === '1') {
-            $this->SendDebug('Refresh', 'Zyklus übersprungen (vorheriger Refresh läuft noch — oft Pixoo-HTTP oder Init).', 0);
-            return;
+            $sinceRaw = $this->GetBuffer('RefreshBusySince');
+            $since = is_numeric($sinceRaw) ? (int) $sinceRaw : 0;
+            $ageSec = ($since > 0) ? (time() - $since) : self::REFRESH_BUSY_MAX_AGE_SEC;
+            if ($ageSec < self::REFRESH_BUSY_MAX_AGE_SEC) {
+                $this->SendDebug('Refresh', 'Zyklus übersprungen (vorheriger Refresh läuft noch — oft Pixoo-HTTP oder Init).', 0);
+                return;
+            }
+            $this->SendDebug('Refresh', 'RefreshBusy nach ' . $ageSec . ' s verworfen (hängender HTTP oder abgebrochener Lauf).', 0);
+            $this->SetBuffer('RefreshBusy', '0');
+            $this->SetBuffer('RefreshBusySince', '');
         }
         $this->SetBuffer('RefreshBusy', '1');
+        $this->SetBuffer('RefreshBusySince', (string) time());
         try {
             if (!$this->ParseConfig()) {
                 return;
@@ -460,6 +481,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->SendDebug('Refresh', 'Ausnahme: ' . $e->getMessage(), 0);
         } finally {
             $this->SetBuffer('RefreshBusy', '0');
+            $this->SetBuffer('RefreshBusySince', '');
         }
     }
 
@@ -505,11 +527,20 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     private function smardHttpGet(string $url): ?string
     {
-        $raw = @file_get_contents($url, false, $this->smardStreamContext());
-        if ($raw === false || $raw === '') {
+        $raw = $this->httpGetWithTimeouts(
+            $url,
+            self::SMARD_HTTP_CONNECT_TIMEOUT_SEC,
+            self::SMARD_HTTP_TIMEOUT_SEC,
+            true
+        );
+        if ($raw !== null) {
+            return $raw;
+        }
+        $fallback = @file_get_contents($url, false, $this->smardStreamContext());
+        if ($fallback === false || $fallback === '') {
             return null;
         }
-        return $raw;
+        return $fallback;
     }
 
     /**
@@ -917,6 +948,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return null;
         }
 
+        $result = $this->httpPostJsonWithTimeouts(
+            $url,
+            $json,
+            self::PIXOO_HTTP_CONNECT_TIMEOUT_SEC,
+            self::PIXOO_HTTP_TIMEOUT_SEC
+        );
+        if (function_exists('curl_init')) {
+            return $result;
+        }
+
         $ctx = stream_context_create([
             'http' => [
                 'method' => 'POST',
@@ -932,5 +973,92 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return null;
         }
         return $result;
+    }
+
+    /**
+     * GET mit getrenntem Verbindungs- und Gesamt-Timeout (cURL), damit TCP nicht endlos blockiert.
+     */
+    private function httpGetWithTimeouts(string $url, float $connectTimeoutSec, float $totalTimeoutSec, bool $verifySsl): ?string
+    {
+        if (!function_exists('curl_init')) {
+            return null;
+        }
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return null;
+        }
+        $connectInt = max(1, (int) ceil($connectTimeoutSec));
+        $totalInt = max($connectInt, (int) ceil($totalTimeoutSec));
+        curl_setopt_array($ch, [
+            CURLOPT_HTTPGET => true,
+            CURLOPT_HTTPHEADER => [
+                'User-Agent: PIXOOEnergyViewer/IP-Symcon',
+                'Accept: application/json',
+            ],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => $connectInt,
+            CURLOPT_TIMEOUT => $totalInt,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_SSL_VERIFYPEER => $verifySsl,
+            CURLOPT_SSL_VERIFYHOST => $verifySsl ? 2 : 0,
+        ]);
+        $raw = curl_exec($ch);
+        $err = curl_error($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($raw === false || $raw === '') {
+            if ($err !== '') {
+                $this->SendDebug('HTTP', 'GET ' . $url . ' — cURL: ' . $err, 0);
+            }
+            return null;
+        }
+        if ($code >= 400) {
+            $this->SendDebug('HTTP', 'GET ' . $url . ' — HTTP ' . $code, 0);
+            return null;
+        }
+        return $raw;
+    }
+
+    /**
+     * POST JSON mit getrenntem Verbindungs- und Gesamt-Timeout (cURL).
+     */
+    private function httpPostJsonWithTimeouts(string $url, string $json, float $connectTimeoutSec, float $totalTimeoutSec): ?string
+    {
+        if (!function_exists('curl_init')) {
+            return null;
+        }
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return null;
+        }
+        $connectInt = max(1, (int) ceil($connectTimeoutSec));
+        $totalInt = max($connectInt, (int) ceil($totalTimeoutSec));
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $json,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => $connectInt,
+            CURLOPT_TIMEOUT => $totalInt,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP,
+        ]);
+        $raw = curl_exec($ch);
+        $err = curl_error($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($raw === false) {
+            if ($err !== '') {
+                $this->SendDebug('Pixoo', 'POST ' . $url . ' — cURL: ' . $err, 0);
+            }
+            return null;
+        }
+        if ($code >= 400) {
+            $this->SendDebug('Pixoo', 'POST ' . $url . ' — HTTP ' . $code, 0);
+            return null;
+        }
+        return $raw;
     }
 }
