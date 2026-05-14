@@ -51,6 +51,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private const REFRESH_BUSY_MAX_AGE_SEC = 45;
 
+    /** cURL: Transfer abbrechen, wenn zu lange keine Bytes ankommen (hängende Leseposition trotz CONNECT) */
+    private const HTTP_LOW_SPEED_BYTES_PER_SEC = 1;
+    private const HTTP_LOW_SPEED_TIME_SEC = 5;
+
     /** SMARD Marktpreis Day-Ahead DE/LU, EUR/MWh → Anzeige als Zahl in € (= Wert / 1000) */
     private const SMARD_FILTER_ID = 4169;
     private const SMARD_REGION = 'DE';
@@ -485,21 +489,34 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
     }
 
+    /**
+     * Stündlicher Timer: nur leichte Auffrischung (Helligkeit + ItemList).
+     * Kein vollständiges InitPixooDisplay mehr — das SendHttpGif + mehrere POSTs blockierten den Modul-Worker
+     * oft Minuten und ließ alle anderen Timer (Update, KeepAlive, SMARD) ausstehen (wirkt wie „Totstellung“).
+     */
     public function ReinitDisplay(): void
     {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
         try {
-            $this->SetBuffer('PixooInited', '0');
             $pixooIp = trim($this->ReadPropertyString('PixooIp'));
-            if ($pixooIp !== '') {
-                $this->InitPixooDisplay($pixooIp);
-                $this->SetValue('Consumption', $this->GetValue('Consumption'));
-                $this->PixooSendItemList(
-                    $pixooIp,
-                    (float) $this->GetValue('Consumption'),
-                    (float) $this->GetValue('Generation'),
-                    (float) $this->GetValue('Net')
-                );
+            if ($pixooIp === '') {
+                return;
             }
+            if ($this->GetBuffer('PixooInited') !== '1') {
+                $this->InitPixooDisplay($pixooIp);
+                return;
+            }
+            $eff = $this->getEffectivePixooBrightness();
+            $this->PixooSetBrightness($pixooIp, $eff);
+            $this->SetBuffer('PixooLastBrightness', (string) $eff);
+            $this->PixooSendItemList(
+                $pixooIp,
+                (float) $this->GetValue('Consumption'),
+                (float) $this->GetValue('Generation'),
+                (float) $this->GetValue('Net')
+            );
         } catch (\Throwable $e) {
             $this->SendDebug('Pixoo', 'ReinitDisplay: ' . $e->getMessage(), 0);
         }
@@ -563,7 +580,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return null;
         }
         $nowMs = (int) round(microtime(true) * 1000);
-        $try = array_slice($timestamps, -6);
+        /* Weniger sequentielle HTTP-Requests pro Lauf — jeder blockiert den Modul-Worker */
+        $try = array_slice($timestamps, -4);
         for ($ti = count($try) - 1; $ti >= 0; $ti--) {
             $chunkTs = (int) $try[$ti];
             $url = $base . '/' . self::SMARD_FILTER_ID . '_' . self::SMARD_REGION . '_quarterhour_' . $chunkTs . '.json';
@@ -989,7 +1007,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $connectInt = max(1, (int) ceil($connectTimeoutSec));
         $totalInt = max($connectInt, (int) ceil($totalTimeoutSec));
-        curl_setopt_array($ch, [
+        $opts = [
             CURLOPT_HTTPGET => true,
             CURLOPT_HTTPHEADER => [
                 'User-Agent: PIXOOEnergyViewer/IP-Symcon',
@@ -1002,7 +1020,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_SSL_VERIFYPEER => $verifySsl,
             CURLOPT_SSL_VERIFYHOST => $verifySsl ? 2 : 0,
-        ]);
+        ];
+        $opts += $this->curlCommonTimeoutOpts();
+        curl_setopt_array($ch, $opts);
         $raw = curl_exec($ch);
         $err = curl_error($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -1034,7 +1054,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $connectInt = max(1, (int) ceil($connectTimeoutSec));
         $totalInt = max($connectInt, (int) ceil($totalTimeoutSec));
-        curl_setopt_array($ch, [
+        $opts = [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $json,
             CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
@@ -1044,7 +1064,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_PROTOCOLS => CURLPROTO_HTTP,
             CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP,
-        ]);
+        ];
+        $opts += $this->curlCommonTimeoutOpts();
+        curl_setopt_array($ch, $opts);
         $raw = curl_exec($ch);
         $err = curl_error($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -1060,5 +1082,22 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return null;
         }
         return $raw;
+    }
+
+    /**
+     * Zusätzliche cURL-Optionen gegen „steckengebliebene“ Transfers (Linux/Alarm-Timeouts, langsame Reads).
+     *
+     * @return array<int, mixed>
+     */
+    private function curlCommonTimeoutOpts(): array
+    {
+        $opts = [
+            CURLOPT_LOW_SPEED_LIMIT => self::HTTP_LOW_SPEED_BYTES_PER_SEC,
+            CURLOPT_LOW_SPEED_TIME => self::HTTP_LOW_SPEED_TIME_SEC,
+        ];
+        if (\defined('CURLOPT_NOSIGNAL')) {
+            $opts[CURLOPT_NOSIGNAL] = true;
+        }
+        return $opts;
     }
 }

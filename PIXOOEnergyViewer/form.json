@@ -31,7 +31,7 @@
         {
             "type": "CheckBox",
             "name": "PixooHourlyReinit",
-            "caption": "Display stündlich neu initialisieren (gegen Zurückschalten auf Ziffernblatt)"
+            "caption": "Display stündlich auffrischen (Helligkeit + Texte; leicht — gegen Zurückschalten auf Ziffernblatt, ohne schweres GIF-Init)"
         },
         {
             "type": "ExpansionPanel",
