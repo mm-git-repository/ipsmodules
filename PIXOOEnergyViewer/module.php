@@ -30,8 +30,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private const ONE_HOUR_MS = 3600000;
     private const SMARD_FETCH_MS = 900000;
 
-    /** Leichter HTTP an Pixoo (GetHttpGifId), damit Verbindung/Gerät nicht „einschläft“; parallel zum Update-Timer */
-    private const PIXOO_KEEPALIVE_MS = 240000;
+    /**
+     * Prüft, ob die Instanz noch lebt (Werte-Timer, Puffer). Symcon-Modul-Timer laufen im selben Worker —
+     * blockiert ein HTTP-Aufruf den Worker, feuern keine anderen Timer mehr (wirkt nach ~24 h wie „Totstellung“).
+     */
+    private const HEALTH_WATCHDOG_MS = 600000;
 
     /** HTTP-Timeout Pixoo (Sekunden); zu hoch → Timer-Zyklen stapeln sich bei Ausfall */
     private const PIXOO_HTTP_TIMEOUT_SEC = 4.0;
@@ -40,16 +43,17 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private const PIXOO_HTTP_CONNECT_TIMEOUT_SEC = 2.0;
 
     /** HTTP-Timeout SMARD (Sekunden); mehrere Requests hintereinander → Gesamtblockade begrenzen */
-    private const SMARD_HTTP_TIMEOUT_SEC = 10.0;
+    private const SMARD_HTTP_TIMEOUT_SEC = 8.0;
 
     /** TCP-Verbindungsaufbau SMARD (Sekunden) */
-    private const SMARD_HTTP_CONNECT_TIMEOUT_SEC = 5.0;
+    private const SMARD_HTTP_CONNECT_TIMEOUT_SEC = 4.0;
 
-    /**
-     * Wenn RefreshBusy länger gesetzt bleibt (z. B. hängender HTTP trotz Timeout in älteren Pfaden),
-     * Sperre verwerfen — sonst keine IPS-Werte/Pixoo-Updates mehr bis Instanz-Neustart.
-     */
-    private const REFRESH_BUSY_MAX_AGE_SEC = 45;
+    /** Max. SMARD-Chunk-GETs pro Lauf (jeder blockiert den Modul-Worker) */
+    private const SMARD_MAX_CHUNK_REQUESTS = 2;
+
+    /** Nach so vielen Pixoo-Fehlern HTTP für eine Weile auslassen (Werte laufen weiter) */
+    private const PIXOO_MAX_CONSECUTIVE_FAILS = 3;
+    private const PIXOO_HTTP_COOLDOWN_SEC = 300;
 
     /** cURL: Transfer abbrechen, wenn zu lange keine Bytes ankommen (hängende Leseposition trotz CONNECT) */
     private const HTTP_LOW_SPEED_BYTES_PER_SEC = 1;
@@ -126,7 +130,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterTimer('Update', 0, 'SMAPX_Refresh($_IPS[\'TARGET\']);');
         $this->RegisterTimer('HourlyReinit', 0, 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);');
         $this->RegisterTimer('SmardFetch', 0, 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);');
-        $this->RegisterTimer('PixooKeepAlive', 0, 'SMAPX_PixooKeepAliveTick($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('HealthWatchdog', 0, 'SMAPX_HealthWatchdog($_IPS[\'TARGET\']);');
     }
 
     /** @return list<string> */
@@ -266,20 +270,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
         if (!$this->ReadPropertyBoolean('Active')) {
             $this->SetStatus(104);
-            $this->SetTimerInterval('Update', 0);
-            $this->SetTimerInterval('HourlyReinit', 0);
-            $this->SetTimerInterval('SmardFetch', 0);
-            $this->SetTimerInterval('PixooKeepAlive', 0);
+            $this->stopAllTimers();
             return;
         }
 
         $configIssues = $this->collectConfigIssues();
         if ($configIssues !== []) {
             $this->SetStatus(201);
-            $this->SetTimerInterval('Update', 0);
-            $this->SetTimerInterval('HourlyReinit', 0);
-            $this->SetTimerInterval('SmardFetch', 0);
-            $this->SetTimerInterval('PixooKeepAlive', 0);
+            $this->stopAllTimers();
             foreach ($configIssues as $line) {
                 $this->SendDebug('Konfiguration', $line, 0);
             }
@@ -288,6 +286,20 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
         $this->SetStatus(102);
         $this->SetBuffer('PixooInited', '0');
+        $this->startActiveTimers();
+    }
+
+    private function stopAllTimers(): void
+    {
+        $this->SetTimerInterval('Update', 0);
+        $this->SetTimerInterval('HourlyReinit', 0);
+        $this->SetTimerInterval('SmardFetch', 0);
+        $this->SetTimerInterval('HealthWatchdog', 0);
+    }
+
+    /** Timer-Intervalle gemäß Konfiguration setzen (auch vom Watchdog bei Ausfall). */
+    private function startActiveTimers(): void
+    {
         $sec = max(self::UPDATE_INTERVAL_MIN_SEC, $this->ReadPropertyInteger('UpdateIntervalSeconds'));
         $this->SetTimerInterval('Update', $sec * 1000);
         if ($this->ReadPropertyBoolean('PixooHourlyReinit')) {
@@ -297,24 +309,55 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
             $this->SetTimerInterval('SmardFetch', self::SMARD_FETCH_MS);
-            if (IPS_GetKernelRunlevel() === self::KERNEL_RUNLEVEL_READY) {
-                $this->UpdateSmardPrice();
-            }
         } else {
             $this->SetTimerInterval('SmardFetch', 0);
         }
-        $pixooIp = trim($this->ReadPropertyString('PixooIp'));
-        if ($pixooIp !== '') {
-            $this->SetTimerInterval('PixooKeepAlive', self::PIXOO_KEEPALIVE_MS);
-        } else {
-            $this->SetTimerInterval('PixooKeepAlive', 0);
+        $this->SetTimerInterval('HealthWatchdog', self::HEALTH_WATCHDOG_MS);
+    }
+
+    /**
+     * Erkennt „eingefrorene“ Instanzen: keine Werteaktualisierung oder Update-Timer aus.
+     * Setzt Timer neu und erzwingt einen Refresh-Zyklus (ohne Instanz-Neustart).
+     */
+    public function HealthWatchdog(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
         }
+        if ($this->collectConfigIssues() !== []) {
+            return;
+        }
+
+        $intervalSec = max(self::UPDATE_INTERVAL_MIN_SEC, $this->ReadPropertyInteger('UpdateIntervalSeconds'));
+        $staleSec = max(120, $intervalSec * 4);
+        $lastRaw = $this->GetBuffer('LastValuesAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        $updateMs = $this->GetTimerInterval('Update');
+        $valuesStale = $last <= 0 || (time() - $last) > $staleSec;
+        $timerOff = $updateMs <= 0;
+
+        if (!$valuesStale && !$timerOff) {
+            return;
+        }
+
+        $reason = $timerOff
+            ? 'Update-Timer aus (Intervall 0)'
+            : ('keine Werte seit ' . (time() - $last) . ' s (Schwelle ' . $staleSec . ' s)');
+        $this->SendDebug('Watchdog', 'Wiederherstellung: ' . $reason, 0);
+
+        $this->SetBuffer('PixooFailCount', '0');
+        $this->SetBuffer('PixooHttpPausedUntil', '');
+        $this->startActiveTimers();
+        $this->Refresh();
     }
 
     /** Viertelstunden-Day-Ahead-Preis (www.smard.de), für Pixoo-Anzeige */
     public function UpdateSmardPrice(): void
     {
         if (!$this->ReadPropertyBoolean('Active') || !$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            return;
+        }
+        if (!$this->requireCurlExtension('SMARD')) {
             return;
         }
         try {
@@ -327,23 +370,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->applySmardSpotRow($row);
         } catch (\Throwable $e) {
             $this->SendDebug('SMARD', 'UpdateSmardPrice: ' . $e->getMessage(), 0);
-        }
-    }
-
-    /** Leichter Pixoo-Request (eigener Timer), um WLAN/Deep-Sleep-Probleme zu mildern */
-    public function PixooKeepAliveTick(): void
-    {
-        if (!$this->ReadPropertyBoolean('Active')) {
-            return;
-        }
-        $ip = trim($this->ReadPropertyString('PixooIp'));
-        if ($ip === '') {
-            return;
-        }
-        try {
-            $this->PixooPostRaw($ip, ['Command' => 'Draw/GetHttpGifId']);
-        } catch (\Throwable $e) {
-            $this->SendDebug('Pixoo', 'KeepAlive: ' . $e->getMessage(), 0);
         }
     }
 
@@ -389,104 +415,184 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SetValue('SmardSpotCt', $row['eurMwh'] / 1000.0);
     }
 
+    /**
+     * Hauptzyklus: zuerst IPS-Variablen (schnell, ohne HTTP), danach optional Pixoo.
+     * Kein globales „Busy“-Flag mehr — das blockierte bei hängendem HTTP auch die Werte.
+     */
     public function Refresh(): void
     {
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        if ($this->GetBuffer('RefreshBusy') === '1') {
-            $sinceRaw = $this->GetBuffer('RefreshBusySince');
-            $since = is_numeric($sinceRaw) ? (int) $sinceRaw : 0;
-            $ageSec = ($since > 0) ? (time() - $since) : self::REFRESH_BUSY_MAX_AGE_SEC;
-            if ($ageSec < self::REFRESH_BUSY_MAX_AGE_SEC) {
-                $this->SendDebug('Refresh', 'Zyklus übersprungen (vorheriger Refresh läuft noch — oft Pixoo-HTTP oder Init).', 0);
-                return;
-            }
-            $this->SendDebug('Refresh', 'RefreshBusy nach ' . $ageSec . ' s verworfen (hängender HTTP oder abgebrochener Lauf).', 0);
-            $this->SetBuffer('RefreshBusy', '0');
-            $this->SetBuffer('RefreshBusySince', '');
-        }
-        $this->SetBuffer('RefreshBusy', '1');
-        $this->SetBuffer('RefreshBusySince', (string) time());
         try {
-            if (!$this->ParseConfig()) {
+            $values = $this->updateEnergyValues();
+            if ($values === null) {
                 return;
             }
-
-            $buyW = $this->readWattFromVariable($this->ReadPropertyInteger('HmRealPowerPlusVar'));
-            $sellW = $this->readWattFromVariable($this->ReadPropertyInteger('HmRealPowerMinusVar'));
-            if ($buyW === null || $sellW === null) {
-                $this->SendDebug('Netz', 'Real Power +/− kurz unlesbar — Netz-Leistung aus letztem Modulwert „Netz“.', 0);
-                $netW = (float) $this->GetValue('Net');
-            } else {
-                $netW = $buyW - $sellW;
-            }
-
-            $wr1Pairs = [
-                $this->ReadPropertyInteger('Wr1String1Var'),
-                $this->ReadPropertyInteger('Wr1String2Var'),
-            ];
-            $wr2Pairs = [
-                $this->ReadPropertyInteger('Wr2String1Var'),
-                $this->ReadPropertyInteger('Wr2String2Var'),
-            ];
-
-            $wr1W = 0.0;
-            foreach ($wr1Pairs as $vid) {
-                $p = $this->readWattFromVariable($vid);
-                if ($p === null) {
-                    $this->SendDebug('WR', 'WR1 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
-                    $p = 0.0;
-                }
-                $wr1W += max(0.0, $p);
-            }
-            if ($wr1W > self::GENERATION_INVALID_ABOVE_W) {
-                $wr1W = 0.0;
-            }
-
-            $wr2W = 0.0;
-            foreach ($wr2Pairs as $vid) {
-                $p = $this->readWattFromVariable($vid);
-                if ($p === null) {
-                    $this->SendDebug('WR', 'WR2 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
-                    $p = 0.0;
-                }
-                $wr2W += max(0.0, $p);
-            }
-            if ($wr2W > self::GENERATION_INVALID_ABOVE_W) {
-                $wr2W = 0.0;
-            }
-
-            $generation = $wr1W + $wr2W;
-
-            $consumption = $generation + $netW;
-
-            $this->SetValue('Consumption', $consumption);
-            $this->SetValue('Generation', $generation);
-            $this->SetValue('Net', $netW);
-
-            $pixooIp = trim($this->ReadPropertyString('PixooIp'));
-            if ($pixooIp === '') {
-                return;
-            }
-
-            if ($this->GetBuffer('PixooInited') !== '1') {
-                $this->InitPixooDisplay($pixooIp);
-            } else {
-                $eff = $this->getEffectivePixooBrightness();
-                if ($this->GetBuffer('PixooLastBrightness') !== (string) $eff) {
-                    $this->PixooSetBrightness($pixooIp, $eff);
-                    $this->SetBuffer('PixooLastBrightness', (string) $eff);
-                }
-            }
-
-            $this->PixooSendItemList($pixooIp, $consumption, $generation, $netW);
+            $this->syncPixooDisplay($values);
         } catch (\Throwable $e) {
             $this->SendDebug('Refresh', 'Ausnahme: ' . $e->getMessage(), 0);
-        } finally {
-            $this->SetBuffer('RefreshBusy', '0');
-            $this->SetBuffer('RefreshBusySince', '');
         }
+    }
+
+    /**
+     * Liest Quellvariablen und schreibt Modul-Variablen. Läuft ohne Netzwerk.
+     *
+     * @return array{consumption: float, generation: float, net: float}|null
+     */
+    private function updateEnergyValues(): ?array
+    {
+        if (!$this->ParseConfig()) {
+            return null;
+        }
+
+        $buyW = $this->readWattFromVariable($this->ReadPropertyInteger('HmRealPowerPlusVar'));
+        $sellW = $this->readWattFromVariable($this->ReadPropertyInteger('HmRealPowerMinusVar'));
+        if ($buyW === null || $sellW === null) {
+            $this->SendDebug('Netz', 'Real Power +/− kurz unlesbar — Netz-Leistung aus letztem Modulwert „Netz“.', 0);
+            $netW = (float) $this->GetValue('Net');
+        } else {
+            $netW = $buyW - $sellW;
+        }
+
+        $wr1Pairs = [
+            $this->ReadPropertyInteger('Wr1String1Var'),
+            $this->ReadPropertyInteger('Wr1String2Var'),
+        ];
+        $wr2Pairs = [
+            $this->ReadPropertyInteger('Wr2String1Var'),
+            $this->ReadPropertyInteger('Wr2String2Var'),
+        ];
+
+        $wr1W = 0.0;
+        foreach ($wr1Pairs as $vid) {
+            $p = $this->readWattFromVariable($vid);
+            if ($p === null) {
+                $this->SendDebug('WR', 'WR1 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
+                $p = 0.0;
+            }
+            $wr1W += max(0.0, $p);
+        }
+        if ($wr1W > self::GENERATION_INVALID_ABOVE_W) {
+            $wr1W = 0.0;
+        }
+
+        $wr2W = 0.0;
+        foreach ($wr2Pairs as $vid) {
+            $p = $this->readWattFromVariable($vid);
+            if ($p === null) {
+                $this->SendDebug('WR', 'WR2 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
+                $p = 0.0;
+            }
+            $wr2W += max(0.0, $p);
+        }
+        if ($wr2W > self::GENERATION_INVALID_ABOVE_W) {
+            $wr2W = 0.0;
+        }
+
+        $generation = $wr1W + $wr2W;
+        $consumption = $generation + $netW;
+
+        $this->SetValue('Consumption', $consumption);
+        $this->SetValue('Generation', $generation);
+        $this->SetValue('Net', $netW);
+        $this->SetBuffer('LastValuesAt', (string) time());
+
+        return [
+            'consumption' => $consumption,
+            'generation' => $generation,
+            'net' => $netW,
+        ];
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function syncPixooDisplay(array $values): void
+    {
+        $pixooIp = trim($this->ReadPropertyString('PixooIp'));
+        if ($pixooIp === '') {
+            return;
+        }
+        if ($this->shouldSkipPixooHttp()) {
+            return;
+        }
+        if (!$this->requireCurlExtension('Pixoo')) {
+            return;
+        }
+
+        try {
+            if ($this->GetBuffer('PixooInited') !== '1') {
+                $this->InitPixooDisplay($pixooIp);
+                $this->recordPixooHttpSuccess();
+                return;
+            }
+
+            $eff = $this->getEffectivePixooBrightness();
+            if ($this->GetBuffer('PixooLastBrightness') !== (string) $eff) {
+                $this->PixooSetBrightness($pixooIp, $eff);
+                $this->SetBuffer('PixooLastBrightness', (string) $eff);
+            }
+
+            $this->PixooSendItemList($pixooIp, $values['consumption'], $values['generation'], $values['net']);
+            $this->recordPixooHttpSuccess();
+        } catch (\Throwable $e) {
+            $this->recordPixooHttpFailure();
+            $this->SendDebug('Pixoo', 'syncPixooDisplay: ' . $e->getMessage(), 0);
+        }
+    }
+
+    private function shouldSkipPixooHttp(): bool
+    {
+        $untilRaw = $this->GetBuffer('PixooHttpPausedUntil');
+        $until = is_numeric($untilRaw) ? (int) $untilRaw : 0;
+        if ($until > time()) {
+            return true;
+        }
+        if ($until > 0 && $until <= time()) {
+            $this->SetBuffer('PixooHttpPausedUntil', '');
+        }
+        return false;
+    }
+
+    private function recordPixooHttpSuccess(): void
+    {
+        $this->SetBuffer('PixooFailCount', '0');
+        $this->SetBuffer('PixooHttpPausedUntil', '');
+    }
+
+    private function recordPixooHttpFailure(): void
+    {
+        $n = (int) $this->GetBuffer('PixooFailCount') + 1;
+        $this->SetBuffer('PixooFailCount', (string) $n);
+        if ($n >= self::PIXOO_MAX_CONSECUTIVE_FAILS) {
+            $this->SetBuffer('PixooFailCount', '0');
+            $pauseUntil = time() + self::PIXOO_HTTP_COOLDOWN_SEC;
+            $this->SetBuffer('PixooHttpPausedUntil', (string) $pauseUntil);
+            $this->SendDebug(
+                'Pixoo',
+                'HTTP nach ' . self::PIXOO_MAX_CONSECUTIVE_FAILS
+                . ' Fehlern für ' . self::PIXOO_HTTP_COOLDOWN_SEC . ' s pausiert (Werte laufen weiter).',
+                0
+            );
+        }
+    }
+
+    private function requireCurlExtension(string $context): bool
+    {
+        if (function_exists('curl_init')) {
+            return true;
+        }
+        static $warned = false;
+        if (!$warned) {
+            $warned = true;
+            $this->SendDebug(
+                $context,
+                'PHP-Erweiterung cURL fehlt — HTTP deaktiviert (kein file_get_contents-Fallback wegen Hänger-Risiko).',
+                0
+            );
+        }
+        return false;
     }
 
     /**
@@ -500,24 +606,26 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return;
         }
         try {
+            $values = $this->updateEnergyValues();
+            if ($values === null) {
+                return;
+            }
             $pixooIp = trim($this->ReadPropertyString('PixooIp'));
             if ($pixooIp === '') {
                 return;
             }
-            if ($this->GetBuffer('PixooInited') !== '1') {
-                $this->InitPixooDisplay($pixooIp);
+            if (!$this->requireCurlExtension('Pixoo')) {
                 return;
             }
-            $eff = $this->getEffectivePixooBrightness();
-            $this->PixooSetBrightness($pixooIp, $eff);
-            $this->SetBuffer('PixooLastBrightness', (string) $eff);
-            $this->PixooSendItemList(
-                $pixooIp,
-                (float) $this->GetValue('Consumption'),
-                (float) $this->GetValue('Generation'),
-                (float) $this->GetValue('Net')
-            );
+            if ($this->GetBuffer('PixooInited') !== '1') {
+                $this->InitPixooDisplay($pixooIp);
+                $this->recordPixooHttpSuccess();
+                return;
+            }
+            $this->SetBuffer('PixooHttpPausedUntil', '');
+            $this->syncPixooDisplay($values);
         } catch (\Throwable $e) {
+            $this->recordPixooHttpFailure();
             $this->SendDebug('Pixoo', 'ReinitDisplay: ' . $e->getMessage(), 0);
         }
     }
@@ -527,37 +635,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return $this->collectConfigIssues() === [];
     }
 
-    private function smardStreamContext()
-    {
-        return stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'timeout' => self::SMARD_HTTP_TIMEOUT_SEC,
-                'header' => "User-Agent: PIXOOEnergyViewer/IP-Symcon\r\nAccept: application/json\r\n",
-            ],
-            'ssl' => [
-                'verify_peer' => true,
-                'verify_peer_name' => true,
-            ],
-        ]);
-    }
-
     private function smardHttpGet(string $url): ?string
     {
-        $raw = $this->httpGetWithTimeouts(
+        return $this->httpGetWithTimeouts(
             $url,
             self::SMARD_HTTP_CONNECT_TIMEOUT_SEC,
             self::SMARD_HTTP_TIMEOUT_SEC,
             true
         );
-        if ($raw !== null) {
-            return $raw;
-        }
-        $fallback = @file_get_contents($url, false, $this->smardStreamContext());
-        if ($fallback === false || $fallback === '') {
-            return null;
-        }
-        return $fallback;
     }
 
     /**
@@ -580,8 +665,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return null;
         }
         $nowMs = (int) round(microtime(true) * 1000);
-        /* Weniger sequentielle HTTP-Requests pro Lauf — jeder blockiert den Modul-Worker */
-        $try = array_slice($timestamps, -4);
+        /* Wenige sequentielle HTTP-Requests — jeder blockiert den Modul-Worker (Symcon: ein Worker pro Instanz) */
+        $try = array_slice($timestamps, -self::SMARD_MAX_CHUNK_REQUESTS);
         for ($ti = count($try) - 1; $ti >= 0; $ti--) {
             $chunkTs = (int) $try[$ti];
             $url = $base . '/' . self::SMARD_FILTER_ID . '_' . self::SMARD_REGION . '_quarterhour_' . $chunkTs . '.json';
@@ -729,23 +814,32 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private function InitPixooDisplay(string $ip): void
     {
         $eff = $this->getEffectivePixooBrightness();
-        $this->PixooSetBrightness($ip, $eff);
+        if ($this->PixooPostRaw($ip, [
+            'Command' => 'Channel/SetBrightness',
+            'Brightness' => max(0, min(100, $eff)),
+        ]) === null) {
+            throw new \RuntimeException('SetBrightness fehlgeschlagen');
+        }
         $this->SetBuffer('PixooLastBrightness', (string) $eff);
         $this->PixooSendBackground($ip);
-        $this->PixooPost($ip, [
+        if ($this->PixooPostRaw($ip, [
             'Command' => 'Draw/SendHttpItemList',
             'ItemList' => $this->BuildItems(0.0, 0.0, 0.0),
-        ]);
+        ]) === null) {
+            throw new \RuntimeException('SendHttpItemList (Init) fehlgeschlagen');
+        }
         $this->SetBuffer('PixooInited', '1');
     }
 
     private function PixooSetBrightness(string $ip, int $brightness): void
     {
         $b = max(0, min(100, $brightness));
-        $this->PixooPost($ip, [
+        if ($this->PixooPostRaw($ip, [
             'Command' => 'Channel/SetBrightness',
             'Brightness' => $b,
-        ]);
+        ]) === null) {
+            throw new \RuntimeException('SetBrightness fehlgeschlagen');
+        }
     }
 
     /** Tageshelligkeit oder Nachthelligkeit je nach Uhrzeit (Symcon-Serverzeit). */
@@ -780,10 +874,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     private function PixooSendItemList(string $ip, float $consumption, float $generation, float $netW): void
     {
-        $this->PixooPost($ip, [
+        if ($this->PixooPostRaw($ip, [
             'Command' => 'Draw/SendHttpItemList',
             'ItemList' => $this->BuildItems($consumption, $generation, $netW),
-        ]);
+        ]) === null) {
+            throw new \RuntimeException('SendHttpItemList fehlgeschlagen');
+        }
     }
 
     private function PixooSendBackground(string $ip): void
@@ -791,7 +887,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $picId = $this->PixooGetPicId($ip);
         $frameLen = self::PIXEL_SIZE * self::PIXEL_SIZE * 3;
         $frame = str_repeat("\x00", $frameLen);
-        $this->PixooPost($ip, [
+        if ($this->PixooPostRaw($ip, [
             'Command' => 'Draw/SendHttpGif',
             'PicNum' => 1,
             'PicWidth' => self::PIXEL_SIZE,
@@ -799,7 +895,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'PicID' => $picId,
             'PicSpeed' => 1000,
             'PicData' => base64_encode($frame),
-        ]);
+        ]) === null) {
+            throw new \RuntimeException('SendHttpGif fehlgeschlagen');
+        }
     }
 
     private function PixooGetPicId(string $ip): int
@@ -952,45 +1050,23 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /** @param array<string,mixed> $payload */
-    private function PixooPost(string $ip, array $payload): void
-    {
-        $this->PixooPostRaw($ip, $payload);
-    }
-
-    /** @param array<string,mixed> $payload */
     private function PixooPostRaw(string $ip, array $payload): ?string
     {
+        if (!function_exists('curl_init')) {
+            return null;
+        }
         $url = 'http://' . $ip . ':80/post';
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($json === false) {
             return null;
         }
 
-        $result = $this->httpPostJsonWithTimeouts(
+        return $this->httpPostJsonWithTimeouts(
             $url,
             $json,
             self::PIXOO_HTTP_CONNECT_TIMEOUT_SEC,
             self::PIXOO_HTTP_TIMEOUT_SEC
         );
-        if (function_exists('curl_init')) {
-            return $result;
-        }
-
-        $ctx = stream_context_create([
-            'http' => [
-                'method' => 'POST',
-                'header' => "Content-Type: application/json\r\n",
-                'content' => $json,
-                'timeout' => self::PIXOO_HTTP_TIMEOUT_SEC,
-            ],
-        ]);
-
-        $result = @file_get_contents($url, false, $ctx);
-        if ($result === false) {
-            $this->SendDebug('Pixoo', 'HTTP Fehler: ' . $url, 0);
-            return null;
-        }
-        return $result;
     }
 
     /**
