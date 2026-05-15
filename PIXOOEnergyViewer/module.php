@@ -48,8 +48,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** TCP-Verbindungsaufbau SMARD (Sekunden) */
     private const SMARD_HTTP_CONNECT_TIMEOUT_SEC = 4.0;
 
-    /** Max. SMARD-Chunk-GETs pro Lauf (jeder blockiert den Modul-Worker) */
-    private const SMARD_MAX_CHUNK_REQUESTS = 2;
+    /** Max. SMARD-Chunk-GETs pro Lauf (jeder blockiert den Modul-Worker); zu wenig → kein Preis in der Ecke */
+    private const SMARD_MAX_CHUNK_REQUESTS = 5;
 
     /** Nach so vielen Pixoo-Fehlern HTTP für eine Weile auslassen (Werte laufen weiter) */
     private const PIXOO_MAX_CONSECUTIVE_FAILS = 3;
@@ -309,6 +309,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
             $this->SetTimerInterval('SmardFetch', self::SMARD_FETCH_MS);
+            if (IPS_GetKernelRunlevel() === self::KERNEL_RUNLEVEL_READY) {
+                $this->UpdateSmardPrice();
+            }
         } else {
             $this->SetTimerInterval('SmardFetch', 0);
         }
@@ -363,11 +366,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         try {
             $row = $this->fetchSmardSpotRow();
             if ($row === null) {
-                $this->applySmardSpotRow(null);
-                $this->SendDebug('SMARD', 'Kein gültiger Preis (API/Zeitreihe).', 0);
+                $this->SendDebug('SMARD', 'Kein gültiger Preis (API/Zeitreihe) — letzter Wert bleibt.', 0);
                 return;
             }
             $this->applySmardSpotRow($row);
+            $this->syncPixooAfterSmardUpdate();
         } catch (\Throwable $e) {
             $this->SendDebug('SMARD', 'UpdateSmardPrice: ' . $e->getMessage(), 0);
         }
@@ -385,9 +388,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
             return 'SMARD-Preis auf Pixoo ist deaktiviert (Eigenschaft „SMARD-Preis auf Pixoo anzeigen“).';
         }
+        if (!$this->requireCurlExtension('SMARD')) {
+            return 'SMARD-Abfrage nicht möglich: PHP-Erweiterung cURL fehlt auf dem Symcon-Server.';
+        }
         $row = $this->fetchSmardSpotRow();
         if ($row === null) {
-            $this->applySmardSpotRow(null);
             $this->SendDebug('SMARD', 'Kein gültiger Preis (API/Zeitreihe).', 0);
             $this->Refresh();
             return "Kein gültiger SMARD-Preis (API/Zeitreihe).\nBitte später erneut versuchen.";
@@ -402,17 +407,42 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return "SMARD Day-Ahead (Viertelstunde)\nPreis: {$priceStr}\nDatum: {$dateStr}\nUhrzeit: {$timeStr}\n(Ortszeit PHP-Server)";
     }
 
-    /** @param array{eurMwh: float, tsMs: int}|null $row */
-    private function applySmardSpotRow(?array $row): void
+    /** @param array{eurMwh: float, tsMs: int} $row */
+    private function applySmardSpotRow(array $row): void
     {
-        if ($row === null) {
-            $this->SetBuffer('SmardEurPerMwh', '');
-            $this->SetBuffer('SmardSpotTsMs', '');
-            return;
-        }
         $this->SetBuffer('SmardEurPerMwh', (string) $row['eurMwh']);
         $this->SetBuffer('SmardSpotTsMs', (string) $row['tsMs']);
         $this->SetValue('SmardSpotCt', $row['eurMwh'] / 1000.0);
+    }
+
+    /** Pixoo-Ecke nach neuem SMARD-Preis (ohne erneutes Einlesen der Leistungsvariablen). */
+    private function syncPixooAfterSmardUpdate(): void
+    {
+        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            return;
+        }
+        $this->syncPixooDisplay([
+            'consumption' => (float) $this->GetValue('Consumption'),
+            'generation' => (float) $this->GetValue('Generation'),
+            'net' => (float) $this->GetValue('Net'),
+        ]);
+    }
+
+    /** EUR/MWh für Pixoo: Puffer, sonst Modulvariable SmardSpotCt (€/kWh). */
+    private function getSmardEurPerMwhForDisplay(): ?float
+    {
+        $buf = trim($this->GetBuffer('SmardEurPerMwh'));
+        if ($buf !== '' && is_numeric($buf)) {
+            return (float) $buf;
+        }
+        $ct = $this->GetValue('SmardSpotCt');
+        if (is_int($ct) || is_float($ct)) {
+            return (float) $ct * 1000.0;
+        }
+        if (is_string($ct) && is_numeric(trim(str_replace(',', '.', $ct)))) {
+            return (float) str_replace(',', '.', trim($ct)) * 1000.0;
+        }
+        return null;
     }
 
     /**
@@ -1004,12 +1034,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 );
             }
 
-            $buf = trim($this->GetBuffer('SmardEurPerMwh'));
-            if ($buf !== '' && is_numeric($buf)) {
-                $eur = (float) $buf;
-                $num = number_format($eur / 1000.0, 2, ',', '');
+            $eurMwh = $this->getSmardEurPerMwhForDisplay();
+            if ($eurMwh !== null) {
+                $num = number_format($eurMwh / 1000.0, 2, ',', '');
                 $txt = $this->ReadPropertyBoolean('PixooSmardShowUnit') ? ($num . '€') : $num;
-                $col = $this->smardPriceColorHex($eur);
+                $col = $this->smardPriceColorHex($eurMwh);
             } else {
                 $txt = '--';
                 $col = $this->RgbHex(160, 160, 160);
