@@ -71,6 +71,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** IPS_GetKernelRunlevel() wenn der Kernel vollständig gestartet ist (siehe Symcon-Doku) */
     private const KERNEL_RUNLEVEL_READY = 10103;
 
+    /** IPS_VARIABLEMESSAGE + VM_UPDATE — Variable geändert (Symcon Messages-Doku) */
+    private const VM_UPDATE_MESSAGE = 10603;
+
+    /** Mindestabstand für Refresh bei VM_UPDATE (Sturm bei schnellen Messwert-Updates) */
+    private const SOURCE_REFRESH_MIN_INTERVAL_SEC = 2;
+
     /** Mindest-Timerintervall „Update“ (Sekunden); kürzer würde oft mit HTTP-Laufzeit von Refresh kollidieren */
     private const UPDATE_INTERVAL_MIN_SEC = 5;
 
@@ -271,6 +277,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active')) {
             $this->SetStatus(104);
             $this->stopAllTimers();
+            $this->clearMessageSubscriptions();
             return;
         }
 
@@ -278,6 +285,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if ($configIssues !== []) {
             $this->SetStatus(201);
             $this->stopAllTimers();
+            $this->clearMessageSubscriptions();
             foreach ($configIssues as $line) {
                 $this->SendDebug('Konfiguration', $line, 0);
             }
@@ -287,6 +295,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SetStatus(102);
         $this->SetBuffer('PixooInited', '0');
         $this->startActiveTimers();
+        $this->syncMessageSubscriptions();
     }
 
     private function stopAllTimers(): void
@@ -335,8 +344,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $staleSec = max(120, $intervalSec * 4);
         $lastRaw = $this->GetBuffer('LastValuesAt');
         $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        $now = time();
+        if ($last <= 0) {
+            $valuesStale = true;
+        } elseif ($last > $now) {
+            /* z. B. Uhrenkorrektur / Winterzeit: „LastValuesAt“ liegt in der Zukunft — nicht als frisch werten */
+            $valuesStale = true;
+        } else {
+            $valuesStale = ($now - $last) > $staleSec;
+        }
         $updateMs = $this->GetTimerInterval('Update');
-        $valuesStale = $last <= 0 || (time() - $last) > $staleSec;
         $timerOff = $updateMs <= 0;
 
         if (!$valuesStale && !$timerOff) {
@@ -345,13 +362,89 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
         $reason = $timerOff
             ? 'Update-Timer aus (Intervall 0)'
-            : ('keine Werte seit ' . (time() - $last) . ' s (Schwelle ' . $staleSec . ' s)');
+            : ('keine Werte seit ' . ($last > 0 ? (string) ($now - $last) : '?') . ' s (Schwelle ' . $staleSec . ' s)');
         $this->SendDebug('Watchdog', 'Wiederherstellung: ' . $reason, 0);
 
         $this->SetBuffer('PixooFailCount', '0');
         $this->SetBuffer('PixooHttpPausedUntil', '');
         $this->startActiveTimers();
+        $this->syncMessageSubscriptions();
         $this->Refresh();
+    }
+
+    /**
+     * Symcon sendet VM_UPDATE bei Änderung der Quellvariablen — zweiter Pfad neben dem Update-Timer,
+     * falls der Timer-Worker durch HTTP blockiert war oder Uhren-/Timer-Effekte auftreten.
+     */
+    public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
+    {
+        unset($TimeStamp, $Data);
+        if ($Message !== self::VM_UPDATE_MESSAGE) {
+            return;
+        }
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        if ($this->collectConfigIssues() !== []) {
+            return;
+        }
+        $watched = $this->getWatchedVariableIds();
+        if (!in_array($SenderID, $watched, true)) {
+            return;
+        }
+        $now = microtime(true);
+        $lastRaw = $this->GetBuffer('LastSourceMessageRefresh');
+        $last = is_numeric($lastRaw) ? (float) $lastRaw : 0.0;
+        if ($last > 0.0 && ($now - $last) < self::SOURCE_REFRESH_MIN_INTERVAL_SEC) {
+            return;
+        }
+        $this->SetBuffer('LastSourceMessageRefresh', (string) $now);
+        try {
+            $this->Refresh();
+        } catch (\Throwable $e) {
+            $this->SendDebug('MessageSink', $e->getMessage(), 0);
+        }
+    }
+
+    /** @return list<int> */
+    private function getWatchedVariableIds(): array
+    {
+        $ids = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $id = $this->ReadPropertyInteger($def['property']);
+            if ($id > 0 && IPS_VariableExists($id)) {
+                $ids[] = $id;
+            }
+        }
+        return $ids;
+    }
+
+    private function clearMessageSubscriptions(): void
+    {
+        $list = $this->GetMessageList();
+        if (!is_array($list)) {
+            return;
+        }
+        foreach ($list as $senderID => $messages) {
+            if (!is_array($messages)) {
+                continue;
+            }
+            $sid = (int) $senderID;
+            foreach ($messages as $message) {
+                $this->UnregisterMessage($sid, (int) $message);
+            }
+        }
+    }
+
+    private function syncMessageSubscriptions(): void
+    {
+        $this->clearMessageSubscriptions();
+        if (!$this->ReadPropertyBoolean('Active') || $this->collectConfigIssues() !== []) {
+            return;
+        }
+        foreach ($this->getWatchedVariableIds() as $vid) {
+            $this->RegisterMessage($vid, self::VM_UPDATE_MESSAGE);
+        }
     }
 
     /** Viertelstunden-Day-Ahead-Preis (www.smard.de), für Pixoo-Anzeige */
@@ -671,7 +764,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $url,
             self::SMARD_HTTP_CONNECT_TIMEOUT_SEC,
             self::SMARD_HTTP_TIMEOUT_SEC,
-            true
+            true,
+            false
         );
     }
 
@@ -1100,8 +1194,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     /**
      * GET mit getrenntem Verbindungs- und Gesamt-Timeout (cURL), damit TCP nicht endlos blockiert.
+     *
+     * @param bool $abortSlowTransfer CURLOPT_LOW_SPEED_* (für große SMARD-JSON oft zu aggressiv → optional aus)
      */
-    private function httpGetWithTimeouts(string $url, float $connectTimeoutSec, float $totalTimeoutSec, bool $verifySsl): ?string
+    private function httpGetWithTimeouts(
+        string $url,
+        float $connectTimeoutSec,
+        float $totalTimeoutSec,
+        bool $verifySsl,
+        bool $abortSlowTransfer = true
+    ): ?string
     {
         if (!function_exists('curl_init')) {
             return null;
@@ -1126,7 +1228,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             CURLOPT_SSL_VERIFYPEER => $verifySsl,
             CURLOPT_SSL_VERIFYHOST => $verifySsl ? 2 : 0,
         ];
-        $opts += $this->curlCommonTimeoutOpts();
+        $opts += $this->curlNoSignalOpts();
+        if ($abortSlowTransfer) {
+            $opts += $this->curlLowSpeedOpts();
+        }
         curl_setopt_array($ch, $opts);
         $raw = curl_exec($ch);
         $err = curl_error($ch);
@@ -1170,7 +1275,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             CURLOPT_PROTOCOLS => CURLPROTO_HTTP,
             CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP,
         ];
-        $opts += $this->curlCommonTimeoutOpts();
+        $opts += $this->curlNoSignalOpts();
+        $opts += $this->curlLowSpeedOpts();
         curl_setopt_array($ch, $opts);
         $raw = curl_exec($ch);
         $err = curl_error($ch);
@@ -1190,19 +1296,25 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /**
-     * Zusätzliche cURL-Optionen gegen „steckengebliebene“ Transfers (Linux/Alarm-Timeouts, langsame Reads).
-     *
      * @return array<int, mixed>
      */
-    private function curlCommonTimeoutOpts(): array
+    private function curlNoSignalOpts(): array
     {
-        $opts = [
-            CURLOPT_LOW_SPEED_LIMIT => self::HTTP_LOW_SPEED_BYTES_PER_SEC,
-            CURLOPT_LOW_SPEED_TIME => self::HTTP_LOW_SPEED_TIME_SEC,
-        ];
+        $opts = [];
         if (\defined('CURLOPT_NOSIGNAL')) {
             $opts[CURLOPT_NOSIGNAL] = true;
         }
         return $opts;
+    }
+
+    /**
+     * @return array<int, mixed>
+     */
+    private function curlLowSpeedOpts(): array
+    {
+        return [
+            CURLOPT_LOW_SPEED_LIMIT => self::HTTP_LOW_SPEED_BYTES_PER_SEC,
+            CURLOPT_LOW_SPEED_TIME => self::HTTP_LOW_SPEED_TIME_SEC,
+        ];
     }
 }
