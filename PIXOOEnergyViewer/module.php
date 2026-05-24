@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 15;
+    private const MODULE_BUILD = 16;
 
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
@@ -287,8 +287,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     public function ApplyChanges(): void
     {
+        $creating = (IPS_GetInstance($this->InstanceID)['InstanceStatus'] ?? 0) === 100;
         parent::ApplyChanges();
-        $this->ensureTimerDefinitions();
+        if (!$creating) {
+            $this->ensureTimerDefinitions();
+        }
         $this->ensureModuleVersionVariable();
         $this->applyModuleVersionInfo();
 
@@ -419,14 +422,51 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
     }
 
-    /** Bestehende Instanzen: Timer nach Modul-Update registrieren. */
+    /** Bestehende Instanzen: fehlende Timer nach Modul-Update registrieren (Create() legt sie bei Neuanlage an). */
     private function ensureTimerDefinitions(): void
     {
-        $this->RegisterTimer('Update', 0, 'SMAPX_UpdateValues($_IPS[\'TARGET\']);');
-        $this->RegisterTimer('PixooSync', 0, 'SMAPX_SyncPixoo($_IPS[\'TARGET\']);');
-        $this->RegisterTimer('HourlyReinit', 0, 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);');
-        $this->RegisterTimer('SmardFetch', 0, 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);');
-        $this->RegisterTimer('HealthWatchdog', 0, 'SMAPX_HealthWatchdog($_IPS[\'TARGET\']);');
+        $timers = [
+            'Update' => 'SMAPX_UpdateValues($_IPS[\'TARGET\']);',
+            'PixooSync' => 'SMAPX_SyncPixoo($_IPS[\'TARGET\']);',
+            'HourlyReinit' => 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);',
+            'SmardFetch' => 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);',
+            'HealthWatchdog' => 'SMAPX_HealthWatchdog($_IPS[\'TARGET\']);',
+        ];
+        foreach ($timers as $name => $script) {
+            $this->registerTimerIfMissing($name, $script);
+        }
+    }
+
+    /** RegisterTimer nur wenn der Ident noch nicht existiert (kein „Timer already exists“). */
+    private function registerTimerIfMissing(string $ident, string $script): void
+    {
+        if ($this->timerIdentExists($ident)) {
+            return;
+        }
+        $this->RegisterTimer($ident, 0, $script);
+    }
+
+    private function timerIdentExists(string $ident): bool
+    {
+        $missing = false;
+        set_error_handler(static function (int $errno, string $errstr) use (&$missing): bool {
+            unset($errno);
+            if (stripos($errstr, 'not registered') !== false) {
+                $missing = true;
+
+                return true;
+            }
+
+            return false;
+        });
+        try {
+            $this->GetTimerInterval($ident);
+        } catch (\Throwable $e) {
+            $missing = true;
+        }
+        restore_error_handler();
+
+        return !$missing;
     }
 
     private function stopAllTimers(): void
