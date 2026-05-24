@@ -318,7 +318,22 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if ($raw === false || $raw === '') {
             return parent::GetConfigurationForm();
         }
-        return $raw;
+        $form = json_decode($raw, true);
+        if (!is_array($form)) {
+            return parent::GetConfigurationForm();
+        }
+        if (!isset($form['elements']) || !is_array($form['elements'])) {
+            $form['elements'] = [];
+        }
+        array_unshift($form['elements'], [
+            'type' => 'Label',
+            'caption' => 'Modulversion: ' . $this->formatModuleVersionLabel(),
+        ]);
+        $out = json_encode($form, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($out === false || $out === '') {
+            return parent::GetConfigurationForm();
+        }
+        return $out;
     }
 
     private function applyModuleVersionInfo(): void

@@ -2,15 +2,6 @@
     "elements": [
         {
             "type": "Label",
-            "caption": "Installierte Modulversion (aus library.json / module.php): siehe Variable unten und Meldungsarchiv Kanal „Modul“ nach Deploy."
-        },
-        {
-            "type": "VariableLabel",
-            "name": "ModuleVersion",
-            "caption": "Modulversion"
-        },
-        {
-            "type": "Label",
             "caption": "IPS-Variablen (Verbrauch/Erzeugung/Netz) und Pixoo-Display laufen auf getrennten Timern — Werte aktualisieren auch bei Pixoo-Ausfall. Display-Keepalive alle ca. 45 s gegen Uhrenskin."
         },
         {
