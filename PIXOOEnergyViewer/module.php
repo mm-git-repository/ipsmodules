@@ -4,6 +4,12 @@ declare(strict_types=1);
 
 class PIXOOEnergyViewer extends IPSModuleStrict
 {
+    private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
+    /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
+    private const MODULE_VERSION = '1.1';
+    /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
+    private const MODULE_BUILD = 15;
+
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
     private const FONT_LABEL = 26;
@@ -30,11 +36,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private const ONE_HOUR_MS = 3600000;
     private const SMARD_FETCH_MS = 900000;
 
+    /** Leichter Pixoo-Keepalive (nur ItemList) — gegen Uhrenskin, getrennt vom Werte-Timer */
+    private const PIXOO_SYNC_MS = 45000;
+
     /**
      * Prüft, ob die Instanz noch lebt (Werte-Timer, Puffer). Symcon-Modul-Timer laufen im selben Worker —
      * blockiert ein HTTP-Aufruf den Worker, feuern keine anderen Timer mehr (wirkt nach ~24 h wie „Totstellung“).
      */
-    private const HEALTH_WATCHDOG_MS = 600000;
+    private const HEALTH_WATCHDOG_MS = 180000;
 
     /** HTTP-Timeout Pixoo (Sekunden); zu hoch → Timer-Zyklen stapeln sich bei Ausfall */
     private const PIXOO_HTTP_TIMEOUT_SEC = 4.0;
@@ -51,9 +60,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** Max. SMARD-Chunk-GETs pro Lauf (jeder blockiert den Modul-Worker); zu wenig → kein Preis in der Ecke */
     private const SMARD_MAX_CHUNK_REQUESTS = 5;
 
-    /** Nach so vielen Pixoo-Fehlern HTTP für eine Weile auslassen (Werte laufen weiter) */
+    /** Nach so vielen Pixoo-Fehlern schweres Init (GIF) pausieren; leichter PixooSync läuft weiter */
     private const PIXOO_MAX_CONSECUTIVE_FAILS = 3;
-    private const PIXOO_HTTP_COOLDOWN_SEC = 300;
+    private const PIXOO_HEAVY_HTTP_COOLDOWN_SEC = 300;
+    /** Kurze Pause nur für schwere Init-Pfade nach Fehlserie */
+    private const PIXOO_LIGHT_HTTP_COOLDOWN_SEC = 60;
 
     /** cURL: Transfer abbrechen, wenn zu lange keine Bytes ankommen (hängende Leseposition trotz CONNECT) */
     private const HTTP_LOW_SPEED_BYTES_PER_SEC = 1;
@@ -67,9 +78,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     /** Pro Wechselrichter (Summe seiner Strings): Leistung strikt darüber → Anteil dieses WR = 0 (Messfehler) */
     private const GENERATION_INVALID_ABOVE_W = 12000.0;
-
-    /** IPS_GetKernelRunlevel() wenn der Kernel vollständig gestartet ist (siehe Symcon-Doku) */
-    private const KERNEL_RUNLEVEL_READY = 10103;
 
     /** IPS_VARIABLEMESSAGE + VM_UPDATE — Variable geändert (Symcon Messages-Doku) */
     private const VM_UPDATE_MESSAGE = 10603;
@@ -131,9 +139,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterVariableFloat('Generation', 'Erzeugung', $wattPres, 1);
         $this->RegisterVariableFloat('Net', 'Netz', $wattPres, 2);
         $this->RegisterVariableFloat('SmardSpotCt', 'SMARD Spot (€)', $eurPres, 3);
+        $this->RegisterVariableString('ModuleVersion', 'Modulversion', '~Text', 4);
 
         // SMAPX_*: Symcon erzeugt globale Funktionen aus public-Methoden (scripts/__generated.inc.php).
-        $this->RegisterTimer('Update', 0, 'SMAPX_Refresh($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('Update', 0, 'SMAPX_UpdateValues($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('PixooSync', 0, 'SMAPX_SyncPixoo($_IPS[\'TARGET\']);');
         $this->RegisterTimer('HourlyReinit', 0, 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);');
         $this->RegisterTimer('SmardFetch', 0, 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);');
         $this->RegisterTimer('HealthWatchdog', 0, 'SMAPX_HealthWatchdog($_IPS[\'TARGET\']);');
@@ -273,6 +283,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     public function ApplyChanges(): void
     {
         parent::ApplyChanges();
+        $this->ensureTimerDefinitions();
+        $this->ensureModuleVersionVariable();
+        $this->applyModuleVersionInfo();
 
         if (!$this->ReadPropertyBoolean('Active')) {
             $this->SetStatus(104);
@@ -298,9 +311,99 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->syncMessageSubscriptions();
     }
 
+    public function GetConfigurationForm(): string
+    {
+        $path = __DIR__ . DIRECTORY_SEPARATOR . 'form.json';
+        $raw = @file_get_contents($path);
+        if ($raw === false || $raw === '') {
+            return parent::GetConfigurationForm();
+        }
+        return $raw;
+    }
+
+    private function applyModuleVersionInfo(): void
+    {
+        $label = $this->formatModuleVersionLabel();
+        $this->SetValue('ModuleVersion', $label);
+        $this->lockModuleVersionVariable();
+        $lastBuildRaw = $this->GetBuffer('LastAppliedModuleBuild');
+        $lastBuild = is_numeric($lastBuildRaw) ? (int) $lastBuildRaw : 0;
+        $build = $this->resolveModuleBuild();
+        if ($build !== $lastBuild) {
+            $this->SetBuffer('LastAppliedModuleBuild', (string) $build);
+            $this->SendDebug('Modul', 'Version ' . $label . ' angewendet', 0);
+        }
+    }
+
+    private function formatModuleVersionLabel(): string
+    {
+        $version = self::MODULE_VERSION;
+        $build = self::MODULE_BUILD;
+        if (IPS_LibraryExists(self::LIBRARY_ID)) {
+            $lib = IPS_GetLibrary(self::LIBRARY_ID);
+            if (isset($lib['Build']) && is_numeric($lib['Build'])) {
+                $build = (int) $lib['Build'];
+            }
+            if (isset($lib['Version'])) {
+                if (is_string($lib['Version']) && $lib['Version'] !== '') {
+                    $version = $lib['Version'];
+                } elseif (is_int($lib['Version'])) {
+                    $major = ($lib['Version'] >> 8) & 0xFF;
+                    $minor = $lib['Version'] & 0xFF;
+                    $version = $major . '.' . $minor;
+                }
+            }
+        }
+        return $version . ' (Build ' . $build . ')';
+    }
+
+    private function resolveModuleBuild(): int
+    {
+        if (IPS_LibraryExists(self::LIBRARY_ID)) {
+            $lib = IPS_GetLibrary(self::LIBRARY_ID);
+            if (isset($lib['Build']) && is_numeric($lib['Build'])) {
+                return (int) $lib['Build'];
+            }
+        }
+        return self::MODULE_BUILD;
+    }
+
+    /** Bestehende Instanzen: Variable nachziehen, wenn Modul aktualisiert wurde. */
+    private function ensureModuleVersionVariable(): void
+    {
+        $vid = @IPS_GetVariableIDByName('ModuleVersion', $this->InstanceID);
+        if (is_int($vid) && $vid > 0) {
+            return;
+        }
+        $this->RegisterVariableString('ModuleVersion', 'Modulversion', '~Text', 4);
+    }
+
+    /** Modulversion nur anzeigen, nicht manuell editierbar. */
+    private function lockModuleVersionVariable(): void
+    {
+        $vid = @IPS_GetVariableIDByName('ModuleVersion', $this->InstanceID);
+        if (!is_int($vid) || $vid <= 0) {
+            return;
+        }
+        if (function_exists('IPS_SetVariableAction')) {
+            IPS_SetVariableAction($vid, false);
+        }
+    }
+
+    /** Bestehende Instanzen: Timer nach Modul-Update registrieren. */
+    private function ensureTimerDefinitions(): void
+    {
+        $this->RegisterTimer('Update', 0, 'SMAPX_UpdateValues($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('PixooSync', 0, 'SMAPX_SyncPixoo($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('HourlyReinit', 0, 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('SmardFetch', 0, 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('HealthWatchdog', 0, 'SMAPX_HealthWatchdog($_IPS[\'TARGET\']);');
+    }
+
     private function stopAllTimers(): void
     {
         $this->SetTimerInterval('Update', 0);
+        $this->SetTimerInterval('PixooSync', 0);
         $this->SetTimerInterval('HourlyReinit', 0);
         $this->SetTimerInterval('SmardFetch', 0);
         $this->SetTimerInterval('HealthWatchdog', 0);
@@ -311,6 +414,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     {
         $sec = max(self::UPDATE_INTERVAL_MIN_SEC, $this->ReadPropertyInteger('UpdateIntervalSeconds'));
         $this->SetTimerInterval('Update', $sec * 1000);
+        $pixooIp = trim($this->ReadPropertyString('PixooIp'));
+        if ($pixooIp !== '') {
+            $this->SetTimerInterval('PixooSync', self::PIXOO_SYNC_MS);
+        } else {
+            $this->SetTimerInterval('PixooSync', 0);
+        }
         if ($this->ReadPropertyBoolean('PixooHourlyReinit')) {
             $this->SetTimerInterval('HourlyReinit', self::ONE_HOUR_MS);
         } else {
@@ -318,9 +427,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
             $this->SetTimerInterval('SmardFetch', self::SMARD_FETCH_MS);
-            if (IPS_GetKernelRunlevel() === self::KERNEL_RUNLEVEL_READY) {
-                $this->UpdateSmardPrice();
-            }
         } else {
             $this->SetTimerInterval('SmardFetch', 0);
         }
@@ -366,10 +472,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SendDebug('Watchdog', 'Wiederherstellung: ' . $reason, 0);
 
         $this->SetBuffer('PixooFailCount', '0');
-        $this->SetBuffer('PixooHttpPausedUntil', '');
+        $this->SetBuffer('PixooHeavyPausedUntil', '');
+        $this->SetBuffer('PixooLightPausedUntil', '');
         $this->startActiveTimers();
         $this->syncMessageSubscriptions();
-        $this->Refresh();
+        try {
+            $this->updateEnergyValues();
+            $this->SyncPixoo();
+        } catch (\Throwable $e) {
+            $this->SendDebug('Watchdog', 'Recovery: ' . $e->getMessage(), 0);
+        }
     }
 
     /**
@@ -400,7 +512,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $this->SetBuffer('LastSourceMessageRefresh', (string) $now);
         try {
-            $this->Refresh();
+            $this->updateEnergyValues();
         } catch (\Throwable $e) {
             $this->SendDebug('MessageSink', $e->getMessage(), 0);
         }
@@ -463,7 +575,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 return;
             }
             $this->applySmardSpotRow($row);
-            $this->syncPixooAfterSmardUpdate();
         } catch (\Throwable $e) {
             $this->SendDebug('SMARD', 'UpdateSmardPrice: ' . $e->getMessage(), 0);
         }
@@ -487,7 +598,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $row = $this->fetchSmardSpotRow();
         if ($row === null) {
             $this->SendDebug('SMARD', 'Kein gültiger Preis (API/Zeitreihe).', 0);
-            $this->Refresh();
+            $this->UpdateValues();
             return "Kein gültiger SMARD-Preis (API/Zeitreihe).\nBitte später erneut versuchen.";
         }
         $this->applySmardSpotRow($row);
@@ -508,17 +619,62 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SetValue('SmardSpotCt', $row['eurMwh'] / 1000.0);
     }
 
-    /** Pixoo-Ecke nach neuem SMARD-Preis (ohne erneutes Einlesen der Leistungsvariablen). */
-    private function syncPixooAfterSmardUpdate(): void
+    /** Nur IPS-Variablen (Update-Timer, ohne HTTP). */
+    public function UpdateValues(): void
     {
-        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        $this->syncPixooDisplay([
+        try {
+            $this->updateEnergyValues();
+        } catch (\Throwable $e) {
+            $this->SendDebug('UpdateValues', 'Ausnahme: ' . $e->getMessage(), 0);
+        }
+    }
+
+    /** Nur Pixoo-Display (PixooSync-Timer, leichter HTTP-Pfad). */
+    public function SyncPixoo(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        try {
+            $this->syncPixooDisplay($this->getCachedEnergyValuesForPixoo(), true);
+        } catch (\Throwable $e) {
+            $this->SendDebug('SyncPixoo', 'Ausnahme: ' . $e->getMessage(), 0);
+        }
+    }
+
+    /**
+     * Manuell / Formular: Werte + Pixoo.
+     * Update-Timer nutzt nur UpdateValues(); Pixoo läuft über PixooSync.
+     */
+    public function Refresh(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        try {
+            $values = $this->updateEnergyValues();
+            if ($values === null) {
+                return;
+            }
+            $this->syncPixooDisplay($values, true);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Refresh', 'Ausnahme: ' . $e->getMessage(), 0);
+        }
+    }
+
+    /**
+     * @return array{consumption: float, generation: float, net: float}
+     */
+    private function getCachedEnergyValuesForPixoo(): array
+    {
+        return [
             'consumption' => (float) $this->GetValue('Consumption'),
             'generation' => (float) $this->GetValue('Generation'),
             'net' => (float) $this->GetValue('Net'),
-        ]);
+        ];
     }
 
     /** EUR/MWh für Pixoo: Puffer, sonst Modulvariable SmardSpotCt (€/kWh). */
@@ -536,26 +692,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return (float) str_replace(',', '.', trim($ct)) * 1000.0;
         }
         return null;
-    }
-
-    /**
-     * Hauptzyklus: zuerst IPS-Variablen (schnell, ohne HTTP), danach optional Pixoo.
-     * Kein globales „Busy“-Flag mehr — das blockierte bei hängendem HTTP auch die Werte.
-     */
-    public function Refresh(): void
-    {
-        if (!$this->ReadPropertyBoolean('Active')) {
-            return;
-        }
-        try {
-            $values = $this->updateEnergyValues();
-            if ($values === null) {
-                return;
-            }
-            $this->syncPixooDisplay($values);
-        } catch (\Throwable $e) {
-            $this->SendDebug('Refresh', 'Ausnahme: ' . $e->getMessage(), 0);
-        }
     }
 
     /**
@@ -630,14 +766,15 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     /**
      * @param array{consumption: float, generation: float, net: float} $values
+     * @param bool $lightSync leichter Pfad (PixooSync): eigene Cooldown-Logik, Init sendet Live-Werte
      */
-    private function syncPixooDisplay(array $values): void
+    private function syncPixooDisplay(array $values, bool $lightSync = false): void
     {
         $pixooIp = trim($this->ReadPropertyString('PixooIp'));
         if ($pixooIp === '') {
             return;
         }
-        if ($this->shouldSkipPixooHttp()) {
+        if ($this->shouldSkipPixooHttp($lightSync)) {
             return;
         }
         if (!$this->requireCurlExtension('Pixoo')) {
@@ -646,8 +783,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
         try {
             if ($this->GetBuffer('PixooInited') !== '1') {
-                $this->InitPixooDisplay($pixooIp);
-                $this->recordPixooHttpSuccess();
+                if ($lightSync && $this->shouldSkipPixooHeavyHttp()) {
+                    return;
+                }
+                $this->InitPixooDisplay($pixooIp, $values);
+                $this->recordPixooHttpSuccess($lightSync);
                 return;
             }
 
@@ -658,47 +798,71 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             }
 
             $this->PixooSendItemList($pixooIp, $values['consumption'], $values['generation'], $values['net']);
-            $this->recordPixooHttpSuccess();
+            $this->recordPixooHttpSuccess($lightSync);
         } catch (\Throwable $e) {
-            $this->recordPixooHttpFailure();
+            $this->recordPixooHttpFailure($lightSync);
             $this->SendDebug('Pixoo', 'syncPixooDisplay: ' . $e->getMessage(), 0);
         }
     }
 
-    private function shouldSkipPixooHttp(): bool
+    private function shouldSkipPixooHeavyHttp(): bool
     {
-        $untilRaw = $this->GetBuffer('PixooHttpPausedUntil');
+        return $this->shouldSkipPixooHttpByBuffer('PixooHeavyPausedUntil');
+    }
+
+    private function shouldSkipPixooHttp(bool $lightSync): bool
+    {
+        if ($lightSync) {
+            return $this->shouldSkipPixooHttpByBuffer('PixooLightPausedUntil');
+        }
+        return $this->shouldSkipPixooHeavyHttp()
+            || $this->shouldSkipPixooHttpByBuffer('PixooLightPausedUntil');
+    }
+
+    private function shouldSkipPixooHttpByBuffer(string $bufferKey): bool
+    {
+        $untilRaw = $this->GetBuffer($bufferKey);
         $until = is_numeric($untilRaw) ? (int) $untilRaw : 0;
         if ($until > time()) {
             return true;
         }
         if ($until > 0 && $until <= time()) {
-            $this->SetBuffer('PixooHttpPausedUntil', '');
+            $this->SetBuffer($bufferKey, '');
         }
         return false;
     }
 
-    private function recordPixooHttpSuccess(): void
+    private function recordPixooHttpSuccess(bool $lightSync): void
     {
         $this->SetBuffer('PixooFailCount', '0');
-        $this->SetBuffer('PixooHttpPausedUntil', '');
+        if ($lightSync) {
+            $this->SetBuffer('PixooLightPausedUntil', '');
+        } else {
+            $this->SetBuffer('PixooHeavyPausedUntil', '');
+            $this->SetBuffer('PixooLightPausedUntil', '');
+        }
     }
 
-    private function recordPixooHttpFailure(): void
+    private function recordPixooHttpFailure(bool $lightSync): void
     {
         $n = (int) $this->GetBuffer('PixooFailCount') + 1;
         $this->SetBuffer('PixooFailCount', (string) $n);
-        if ($n >= self::PIXOO_MAX_CONSECUTIVE_FAILS) {
-            $this->SetBuffer('PixooFailCount', '0');
-            $pauseUntil = time() + self::PIXOO_HTTP_COOLDOWN_SEC;
-            $this->SetBuffer('PixooHttpPausedUntil', (string) $pauseUntil);
-            $this->SendDebug(
-                'Pixoo',
-                'HTTP nach ' . self::PIXOO_MAX_CONSECUTIVE_FAILS
-                . ' Fehlern für ' . self::PIXOO_HTTP_COOLDOWN_SEC . ' s pausiert (Werte laufen weiter).',
-                0
-            );
+        if ($n < self::PIXOO_MAX_CONSECUTIVE_FAILS) {
+            return;
         }
+        $this->SetBuffer('PixooFailCount', '0');
+        $cooldown = $lightSync
+            ? self::PIXOO_LIGHT_HTTP_COOLDOWN_SEC
+            : self::PIXOO_HEAVY_HTTP_COOLDOWN_SEC;
+        $bufferKey = $lightSync ? 'PixooLightPausedUntil' : 'PixooHeavyPausedUntil';
+        $pauseUntil = time() + $cooldown;
+        $this->SetBuffer($bufferKey, (string) $pauseUntil);
+        $this->SendDebug(
+            'Pixoo',
+            ($lightSync ? 'Leichter' : 'Schwerer') . ' HTTP nach ' . self::PIXOO_MAX_CONSECUTIVE_FAILS
+            . ' Fehlern für ' . $cooldown . ' s pausiert (Werte laufen weiter).',
+            0
+        );
     }
 
     private function requireCurlExtension(string $context): bool
@@ -729,26 +893,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return;
         }
         try {
-            $values = $this->updateEnergyValues();
-            if ($values === null) {
-                return;
-            }
-            $pixooIp = trim($this->ReadPropertyString('PixooIp'));
-            if ($pixooIp === '') {
-                return;
-            }
-            if (!$this->requireCurlExtension('Pixoo')) {
-                return;
-            }
-            if ($this->GetBuffer('PixooInited') !== '1') {
-                $this->InitPixooDisplay($pixooIp);
-                $this->recordPixooHttpSuccess();
-                return;
-            }
-            $this->SetBuffer('PixooHttpPausedUntil', '');
-            $this->syncPixooDisplay($values);
+            $this->updateEnergyValues();
+            $this->SetBuffer('PixooHeavyPausedUntil', '');
+            $this->SetBuffer('PixooLightPausedUntil', '');
+            $this->syncPixooDisplay($this->getCachedEnergyValuesForPixoo(), true);
         } catch (\Throwable $e) {
-            $this->recordPixooHttpFailure();
+            $this->recordPixooHttpFailure(true);
             $this->SendDebug('Pixoo', 'ReinitDisplay: ' . $e->getMessage(), 0);
         }
     }
@@ -935,7 +1085,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return (float) $s;
     }
 
-    private function InitPixooDisplay(string $ip): void
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function InitPixooDisplay(string $ip, array $values): void
     {
         $eff = $this->getEffectivePixooBrightness();
         if ($this->PixooPostRaw($ip, [
@@ -946,12 +1099,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $this->SetBuffer('PixooLastBrightness', (string) $eff);
         $this->PixooSendBackground($ip);
-        if ($this->PixooPostRaw($ip, [
-            'Command' => 'Draw/SendHttpItemList',
-            'ItemList' => $this->BuildItems(0.0, 0.0, 0.0),
-        ]) === null) {
-            throw new \RuntimeException('SendHttpItemList (Init) fehlgeschlagen');
-        }
+        $this->PixooSendItemList($ip, $values['consumption'], $values['generation'], $values['net']);
         $this->SetBuffer('PixooInited', '1');
     }
 
@@ -1188,7 +1336,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $url,
             $json,
             self::PIXOO_HTTP_CONNECT_TIMEOUT_SEC,
-            self::PIXOO_HTTP_TIMEOUT_SEC
+            self::PIXOO_HTTP_TIMEOUT_SEC,
+            true
         );
     }
 
@@ -1229,8 +1378,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             CURLOPT_SSL_VERIFYHOST => $verifySsl ? 2 : 0,
         ];
         $opts += $this->curlNoSignalOpts();
+        $opts += $this->curlTimeoutMsOpts($connectTimeoutSec, $totalTimeoutSec);
         if ($abortSlowTransfer) {
             $opts += $this->curlLowSpeedOpts();
+        }
+        if (\defined('CURLOPT_IPRESOLVE') && \defined('CURL_IPRESOLVE_V4')) {
+            $opts[CURLOPT_IPRESOLVE] = CURL_IPRESOLVE_V4;
         }
         curl_setopt_array($ch, $opts);
         $raw = curl_exec($ch);
@@ -1252,8 +1405,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     /**
      * POST JSON mit getrenntem Verbindungs- und Gesamt-Timeout (cURL).
+     *
+     * @param bool $pixooPost frische TCP-Verbindung, kein Keep-Alive (Pixoo)
      */
-    private function httpPostJsonWithTimeouts(string $url, string $json, float $connectTimeoutSec, float $totalTimeoutSec): ?string
+    private function httpPostJsonWithTimeouts(
+        string $url,
+        string $json,
+        float $connectTimeoutSec,
+        float $totalTimeoutSec,
+        bool $pixooPost = false
+    ): ?string
     {
         if (!function_exists('curl_init')) {
             return null;
@@ -1276,7 +1437,19 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP,
         ];
         $opts += $this->curlNoSignalOpts();
+        $opts += $this->curlTimeoutMsOpts($connectTimeoutSec, $totalTimeoutSec);
         $opts += $this->curlLowSpeedOpts();
+        if ($pixooPost) {
+            if (\defined('CURLOPT_FRESH_CONNECT')) {
+                $opts[CURLOPT_FRESH_CONNECT] = true;
+            }
+            if (\defined('CURLOPT_FORBID_REUSE')) {
+                $opts[CURLOPT_FORBID_REUSE] = true;
+            }
+            if (\defined('CURLOPT_IPRESOLVE') && \defined('CURL_IPRESOLVE_V4')) {
+                $opts[CURLOPT_IPRESOLVE] = CURL_IPRESOLVE_V4;
+            }
+        }
         curl_setopt_array($ch, $opts);
         $raw = curl_exec($ch);
         $err = curl_error($ch);
@@ -1293,6 +1466,21 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return null;
         }
         return $raw;
+    }
+
+    /**
+     * @return array<int, mixed>
+     */
+    private function curlTimeoutMsOpts(float $connectTimeoutSec, float $totalTimeoutSec): array
+    {
+        $opts = [];
+        if (\defined('CURLOPT_CONNECTTIMEOUT_MS')) {
+            $opts[CURLOPT_CONNECTTIMEOUT_MS] = max(1, (int) round($connectTimeoutSec * 1000));
+        }
+        if (\defined('CURLOPT_TIMEOUT_MS')) {
+            $opts[CURLOPT_TIMEOUT_MS] = max(1, (int) round($totalTimeoutSec * 1000));
+        }
+        return $opts;
     }
 
     /**

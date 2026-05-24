@@ -2,6 +2,19 @@
     "elements": [
         {
             "type": "Label",
+            "caption": "Installierte Modulversion (aus library.json / module.php): siehe Variable unten und Meldungsarchiv Kanal „Modul“ nach Deploy."
+        },
+        {
+            "type": "VariableLabel",
+            "name": "ModuleVersion",
+            "caption": "Modulversion"
+        },
+        {
+            "type": "Label",
+            "caption": "IPS-Variablen (Verbrauch/Erzeugung/Netz) und Pixoo-Display laufen auf getrennten Timern — Werte aktualisieren auch bei Pixoo-Ausfall. Display-Keepalive alle ca. 45 s gegen Uhrenskin."
+        },
+        {
+            "type": "Label",
             "caption": "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten."
         },
         {
@@ -24,7 +37,7 @@
         {
             "type": "NumberSpinner",
             "name": "UpdateIntervalSeconds",
-            "caption": "Aktualisierung (Sekunden, mindestens 5; sichtbare Rate kann durch Pixoo-/Netz-Laufzeit länger wirken)",
+            "caption": "Aktualisierung Werte (Sekunden, mindestens 5; Pixoo-Display separat alle ca. 45 s)",
             "digits": 0,
             "minimum": 5
         },
@@ -179,7 +192,7 @@
         },
         {
             "type": "Button",
-            "caption": "Jetzt aktualisieren",
+            "caption": "Jetzt aktualisieren (Werte + Pixoo)",
             "onClick": "SMAPX_Refresh($id); echo 'OK';"
         },
         {

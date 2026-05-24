@@ -1,6 +1,12 @@
 {
     "translations": {
         "en": {
+            "Installierte Modulversion (aus library.json / module.php): siehe Variable unten und Meldungsarchiv Kanal „Modul“ nach Deploy.": "Installed module version (from library.json / module.php): see variable below and message log channel \"Modul\" after deploy.",
+            "Modulversion": "Module version",
+            "IPS-Variablen (Verbrauch/Erzeugung/Netz) und Pixoo-Display laufen auf getrennten Timern — Werte aktualisieren auch bei Pixoo-Ausfall. Display-Keepalive alle ca. 45 s gegen Uhrenskin.": "IP-Symcon variables (consumption/generation/grid) and the Pixoo display use separate timers — values keep updating even if Pixoo is offline. Display keepalive every ~45 s to prevent clock face.",
+            "Aktualisierung Werte (Sekunden, mindestens 5; Pixoo-Display separat alle ca. 45 s)": "Value update interval (seconds, min. 5; Pixoo display separately every ~45 s)",
+            "Jetzt aktualisieren (Werte + Pixoo)": "Update now (values + Pixoo)",
+            "Display stündlich auffrischen (Helligkeit + Texte; leicht — gegen Zurückschalten auf Ziffernblatt, ohne schweres GIF-Init)": "Refresh display hourly (brightness + text; lightweight — prevents clock face, no heavy GIF init)",
             "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.": "Schematic preview of the Pixoo layout (192×192 px ≈ 3× the 64-pixel grid). Example values in the image: 500 W consumption, 1000 W generation, 500 W grid import (red), 0.12 € SMARD (green). On the Pixoo, your measurements apply.",
             "Vorschau": "Preview",
             "Aktiv": "Active",
@@ -38,6 +44,12 @@
             "Konfiguration ungültig (alle sechs Variablen prüfen)": "Invalid configuration (check all six variables)"
         },
         "de": {
+            "Installierte Modulversion (aus library.json / module.php): siehe Variable unten und Meldungsarchiv Kanal „Modul“ nach Deploy.": "Installierte Modulversion (aus library.json / module.php): siehe Variable unten und Meldungsarchiv Kanal „Modul“ nach Deploy.",
+            "Modulversion": "Modulversion",
+            "IPS-Variablen (Verbrauch/Erzeugung/Netz) und Pixoo-Display laufen auf getrennten Timern — Werte aktualisieren auch bei Pixoo-Ausfall. Display-Keepalive alle ca. 45 s gegen Uhrenskin.": "IPS-Variablen (Verbrauch/Erzeugung/Netz) und Pixoo-Display laufen auf getrennten Timern — Werte aktualisieren auch bei Pixoo-Ausfall. Display-Keepalive alle ca. 45 s gegen Uhrenskin.",
+            "Aktualisierung Werte (Sekunden, mindestens 5; Pixoo-Display separat alle ca. 45 s)": "Aktualisierung Werte (Sekunden, mindestens 5; Pixoo-Display separat alle ca. 45 s)",
+            "Jetzt aktualisieren (Werte + Pixoo)": "Jetzt aktualisieren (Werte + Pixoo)",
+            "Display stündlich auffrischen (Helligkeit + Texte; leicht — gegen Zurückschalten auf Ziffernblatt, ohne schweres GIF-Init)": "Display stündlich auffrischen (Helligkeit + Texte; leicht — gegen Zurückschalten auf Ziffernblatt, ohne schweres GIF-Init)",
             "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.": "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.",
             "Vorschau": "Vorschau",
             "Aktiv": "Aktiv",
@@ -75,6 +87,12 @@
             "Konfiguration ungültig (alle sechs Variablen prüfen)": "Konfiguration ungültig (alle sechs Variablen prüfen)"
         },
         "en_GB": {
+            "Installierte Modulversion (aus library.json / module.php): siehe Variable unten und Meldungsarchiv Kanal „Modul“ nach Deploy.": "Installed module version (from library.json / module.php): see variable below and message log channel \"Modul\" after deploy.",
+            "Modulversion": "Module version",
+            "IPS-Variablen (Verbrauch/Erzeugung/Netz) und Pixoo-Display laufen auf getrennten Timern — Werte aktualisieren auch bei Pixoo-Ausfall. Display-Keepalive alle ca. 45 s gegen Uhrenskin.": "IP-Symcon variables (consumption/generation/grid) and the Pixoo display use separate timers — values keep updating even if Pixoo is offline. Display keepalive every ~45 s to prevent clock face.",
+            "Aktualisierung Werte (Sekunden, mindestens 5; Pixoo-Display separat alle ca. 45 s)": "Value update interval (seconds, min. 5; Pixoo display separately every ~45 s)",
+            "Jetzt aktualisieren (Werte + Pixoo)": "Update now (values + Pixoo)",
+            "Display stündlich auffrischen (Helligkeit + Texte; leicht — gegen Zurückschalten auf Ziffernblatt, ohne schweres GIF-Init)": "Refresh display hourly (brightness + text; lightweight — prevents clock face, no heavy GIF init)",
             "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.": "Schematic preview of the Pixoo layout (192×192 px ≈ 3× the 64-pixel grid). Example values in the image: 500 W consumption, 1000 W generation, 500 W grid import (red), 0.12 € SMARD (green). On the Pixoo, your measurements apply.",
             "Vorschau": "Preview",
             "Aktiv": "Active",
@@ -112,6 +130,12 @@
             "Konfiguration ungültig (alle sechs Variablen prüfen)": "Invalid configuration (check all six variables)"
         },
         "de_DE": {
+            "Installierte Modulversion (aus library.json / module.php): siehe Variable unten und Meldungsarchiv Kanal „Modul“ nach Deploy.": "Installierte Modulversion (aus library.json / module.php): siehe Variable unten und Meldungsarchiv Kanal „Modul“ nach Deploy.",
+            "Modulversion": "Modulversion",
+            "IPS-Variablen (Verbrauch/Erzeugung/Netz) und Pixoo-Display laufen auf getrennten Timern — Werte aktualisieren auch bei Pixoo-Ausfall. Display-Keepalive alle ca. 45 s gegen Uhrenskin.": "IPS-Variablen (Verbrauch/Erzeugung/Netz) und Pixoo-Display laufen auf getrennten Timern — Werte aktualisieren auch bei Pixoo-Ausfall. Display-Keepalive alle ca. 45 s gegen Uhrenskin.",
+            "Aktualisierung Werte (Sekunden, mindestens 5; Pixoo-Display separat alle ca. 45 s)": "Aktualisierung Werte (Sekunden, mindestens 5; Pixoo-Display separat alle ca. 45 s)",
+            "Jetzt aktualisieren (Werte + Pixoo)": "Jetzt aktualisieren (Werte + Pixoo)",
+            "Display stündlich auffrischen (Helligkeit + Texte; leicht — gegen Zurückschalten auf Ziffernblatt, ohne schweres GIF-Init)": "Display stündlich auffrischen (Helligkeit + Texte; leicht — gegen Zurückschalten auf Ziffernblatt, ohne schweres GIF-Init)",
             "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.": "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild: 500 W Verbrauch, 1000 W Erzeugung, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten.",
             "Vorschau": "Vorschau",
             "Aktiv": "Aktiv",
