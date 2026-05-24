@@ -122,6 +122,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             IPS_CreateVariableProfile('SMAPX.EurKWh', 2);
             IPS_SetVariableProfileText('SMAPX.EurKWh', '', ' €');
         }
+        if (!IPS_VariableProfileExists('SMAPX.Text')) {
+            IPS_CreateVariableProfile('SMAPX.Text', 3);
+        }
 
         $usePresArray = false;
         if (function_exists('IPS_GetKernelVersion')) {
@@ -131,15 +134,17 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if ($usePresArray) {
             $wattPres = ['PROFILE' => 'SMAPX.Watt'];
             $eurPres = ['PROFILE' => 'SMAPX.EurKWh'];
+            $textPres = ['PROFILE' => 'SMAPX.Text'];
         } else {
             $wattPres = 'SMAPX.Watt';
             $eurPres = 'SMAPX.EurKWh';
+            $textPres = 'SMAPX.Text';
         }
         $this->RegisterVariableFloat('Consumption', 'Verbrauch', $wattPres, 0);
         $this->RegisterVariableFloat('Generation', 'Erzeugung', $wattPres, 1);
         $this->RegisterVariableFloat('Net', 'Netz', $wattPres, 2);
         $this->RegisterVariableFloat('SmardSpotCt', 'SMARD Spot (€)', $eurPres, 3);
-        $this->RegisterVariableString('ModuleVersion', 'Modulversion', '~Text', 4);
+        $this->RegisterVariableString('ModuleVersion', 'Modulversion', $textPres, 4);
 
         // SMAPX_*: Symcon erzeugt globale Funktionen aus public-Methoden (scripts/__generated.inc.php).
         $this->RegisterTimer('Update', 0, 'SMAPX_UpdateValues($_IPS[\'TARGET\']);');
@@ -390,7 +395,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (is_int($vid) && $vid > 0) {
             return;
         }
-        $this->RegisterVariableString('ModuleVersion', 'Modulversion', '~Text', 4);
+        if (!IPS_VariableProfileExists('SMAPX.Text')) {
+            IPS_CreateVariableProfile('SMAPX.Text', 3);
+        }
+        $usePresArray = false;
+        if (function_exists('IPS_GetKernelVersion')) {
+            $kv = IPS_GetKernelVersion();
+            $usePresArray = is_string($kv) && $kv !== '' && version_compare($kv, '8.0', '>=');
+        }
+        $textPres = $usePresArray ? ['PROFILE' => 'SMAPX.Text'] : 'SMAPX.Text';
+        $this->RegisterVariableString('ModuleVersion', 'Modulversion', $textPres, 4);
     }
 
     /** Modulversion nur anzeigen, nicht manuell editierbar. */
