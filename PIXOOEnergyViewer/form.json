@@ -2,7 +2,7 @@
     "elements": [
         {
             "type": "Label",
-            "caption": "IPS-Variablen und Pixoo-Display nutzen dasselbe Aktualisierungsintervall (Feld unten). Werte laufen ohne Pixoo-HTTP weiter; SMARD-Preis separat alle 15 Min."
+            "caption": "IPS-Variablen und Pixoo-Display nutzen dasselbe Intervall (Feld unten, ein Update-Timer). Quellvariablen-Änderungen werden ebenfalls auf dieses Intervall begrenzt. SMARD-Preis separat alle 15 Min."
         },
         {
             "type": "Label",
@@ -28,7 +28,7 @@
         {
             "type": "NumberSpinner",
             "name": "UpdateIntervalSeconds",
-            "caption": "Aktualisierung Werte + Pixoo-Display (Sekunden, mindestens 5)",
+            "caption": "Aktualisierung Werte + Pixoo-Display (Sekunden, mindestens 5; ein gemeinsamer Zyklus pro Intervall)",
             "digits": 0,
             "minimum": 5
         },
@@ -40,7 +40,7 @@
         {
             "type": "ExpansionPanel",
             "caption": "Pixoo: Helligkeit (Tag & Nacht)",
-            "expanded": true,
+            "expanded": false,
             "items": [
                 {
                     "type": "Label",
@@ -118,7 +118,7 @@
         {
             "type": "ExpansionPanel",
             "caption": "Home Manager 2 (Real Power ±)",
-            "expanded": true,
+            "expanded": false,
             "items": [
                 {
                     "type": "Label",
@@ -139,7 +139,7 @@
         {
             "type": "ExpansionPanel",
             "caption": "Wechselrichter 1 (2 Variablen)",
-            "expanded": true,
+            "expanded": false,
             "items": [
                 {
                     "type": "Label",
@@ -160,7 +160,7 @@
         {
             "type": "ExpansionPanel",
             "caption": "Wechselrichter 2 (2 Variablen)",
-            "expanded": true,
+            "expanded": false,
             "items": [
                 {
                     "type": "SelectVariable",

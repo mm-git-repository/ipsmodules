@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 17;
+    private const MODULE_BUILD = 19;
 
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
@@ -36,7 +36,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private const ONE_HOUR_MS = 3600000;
     private const SMARD_FETCH_MS = 900000;
 
-    /** Doppel-Sync vermeiden, wenn Timer und MessageSink fast gleichzeitig feuern (Sekunden) */
+    /** Kurz-Debounce: identischer Pixoo-Inhalt nicht zweimal innerhalb 1 s (z. B. SMARD direkt nach Update-Timer) */
     private const PIXOO_SYNC_DEBOUNCE_SEC = 1.0;
 
     /**
@@ -81,9 +81,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     /** IPS_VARIABLEMESSAGE + VM_UPDATE — Variable geändert (Symcon Messages-Doku) */
     private const VM_UPDATE_MESSAGE = 10603;
-
-    /** Mindestabstand für Refresh bei VM_UPDATE (Sturm bei schnellen Messwert-Updates) */
-    private const SOURCE_REFRESH_MIN_INTERVAL_SEC = 2;
 
     /** Mindest-Timerintervall Werte + Pixoo (Sekunden) */
     private const UPDATE_INTERVAL_MIN_SEC = 5;
@@ -347,14 +344,15 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private function applyModuleVersionInfo(): void
     {
         $label = $this->formatModuleVersionLabel();
+        $prevLabel = $this->GetBuffer('LastAppliedModuleVersionLabel');
         $this->SetValue('ModuleVersion', $label);
         $this->lockModuleVersionVariable();
-        $lastBuildRaw = $this->GetBuffer('LastAppliedModuleBuild');
-        $lastBuild = is_numeric($lastBuildRaw) ? (int) $lastBuildRaw : 0;
         $build = $this->resolveModuleBuild();
-        if ($build !== $lastBuild) {
-            $this->SetBuffer('LastAppliedModuleBuild', (string) $build);
+        $this->SetBuffer('LastAppliedModuleBuild', (string) $build);
+        if ($prevLabel !== $label) {
+            $this->SetBuffer('LastAppliedModuleVersionLabel', $label);
             $this->SendDebug('Modul', 'Version ' . $label . ' angewendet', 0);
+            $this->ReloadForm();
         }
     }
 
@@ -365,7 +363,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (IPS_LibraryExists(self::LIBRARY_ID)) {
             $lib = IPS_GetLibrary(self::LIBRARY_ID);
             if (isset($lib['Build']) && is_numeric($lib['Build'])) {
-                $build = (int) $lib['Build'];
+                $build = max($build, (int) $lib['Build']);
             }
             if (isset($lib['Version'])) {
                 if (is_string($lib['Version']) && $lib['Version'] !== '') {
@@ -382,13 +380,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     private function resolveModuleBuild(): int
     {
+        $build = self::MODULE_BUILD;
         if (IPS_LibraryExists(self::LIBRARY_ID)) {
             $lib = IPS_GetLibrary(self::LIBRARY_ID);
             if (isset($lib['Build']) && is_numeric($lib['Build'])) {
-                return (int) $lib['Build'];
+                $build = max($build, (int) $lib['Build']);
             }
         }
-        return self::MODULE_BUILD;
+        return $build;
     }
 
     /** Bestehende Instanzen: Variable nachziehen, wenn Modul aktualisiert wurde. */
@@ -483,12 +482,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     {
         $sec = $this->getUpdateIntervalSec();
         $this->SetTimerInterval('Update', $sec * 1000);
+        /* Pixoo läuft im selben Zyklus wie UpdateValues() — kein zweiter Timer (Worker-Stau) */
+        $this->SetTimerInterval('PixooSync', 0);
         $pixooIp = trim($this->ReadPropertyString('PixooIp'));
-        if ($pixooIp !== '') {
-            $this->SetTimerInterval('PixooSync', $sec * 1000);
-        } else {
-            $this->SetTimerInterval('PixooSync', 0);
-        }
+        $this->SendDebug(
+            'Timer',
+            'Aktualisierung alle ' . $sec . ' s (Werte'
+            . ($pixooIp !== '' ? ' + Pixoo im Update-Timer' : ', Pixoo aus')
+            . ', UpdateIntervalSeconds=' . $this->ReadPropertyInteger('UpdateIntervalSeconds') . ')',
+            0
+        );
         if ($this->ReadPropertyBoolean('PixooHourlyReinit')) {
             $this->SetTimerInterval('HourlyReinit', self::ONE_HOUR_MS);
         } else {
@@ -546,8 +549,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->startActiveTimers();
         $this->syncMessageSubscriptions();
         try {
-            $this->updateEnergyValues();
-            $this->SyncPixoo();
+            $this->runUpdateCycle(false);
         } catch (\Throwable $e) {
             $this->SendDebug('Watchdog', 'Recovery: ' . $e->getMessage(), 0);
         }
@@ -573,18 +575,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!in_array($SenderID, $watched, true)) {
             return;
         }
-        $now = microtime(true);
-        $lastRaw = $this->GetBuffer('LastSourceMessageRefresh');
-        $last = is_numeric($lastRaw) ? (float) $lastRaw : 0.0;
-        if ($last > 0.0 && ($now - $last) < self::SOURCE_REFRESH_MIN_INTERVAL_SEC) {
-            return;
-        }
-        $this->SetBuffer('LastSourceMessageRefresh', (string) $now);
         try {
-            $values = $this->updateEnergyValues();
-            if ($values !== null) {
-                $this->requestPixooSyncIfValuesChanged($values);
-            }
+            $this->runUpdateCycle(true);
         } catch (\Throwable $e) {
             $this->SendDebug('MessageSink', $e->getMessage(), 0);
         }
@@ -692,20 +684,20 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SetValue('SmardSpotCt', $row['eurMwh'] / 1000.0);
     }
 
-    /** Nur IPS-Variablen (Update-Timer, ohne HTTP). */
+    /** Update-Timer: Werte + Pixoo in einem Worker-Lauf (Intervall = UpdateIntervalSeconds). */
     public function UpdateValues(): void
     {
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
         try {
-            $this->updateEnergyValues();
+            $this->runUpdateCycle(false);
         } catch (\Throwable $e) {
             $this->SendDebug('UpdateValues', 'Ausnahme: ' . $e->getMessage(), 0);
         }
     }
 
-    /** Nur Pixoo-Display (PixooSync-Timer, leichter HTTP-Pfad). */
+    /** Manuell / SMARD / Watchdog: nur Pixoo (Werte unverändert). */
     public function SyncPixoo(): void
     {
         if (!$this->ReadPropertyBoolean('Active')) {
@@ -719,8 +711,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /**
-     * Manuell / Formular: Werte + Pixoo.
-     * Update-Timer nutzt nur UpdateValues(); Pixoo läuft über PixooSync (gleiches Intervall).
+     * Manuell / Formular: Werte + Pixoo (ohne Intervall-Sperre).
+     * Update-Timer nutzt runUpdateCycle(); PixooSync-Timer ist deaktiviert (Build 18+).
      */
     public function Refresh(): void
     {
@@ -728,11 +720,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return;
         }
         try {
-            $values = $this->updateEnergyValues();
-            if ($values === null) {
-                return;
-            }
-            $this->syncPixooDisplay($values, true, false);
+            $this->runUpdateCycle(false);
         } catch (\Throwable $e) {
             $this->SendDebug('Refresh', 'Ausnahme: ' . $e->getMessage(), 0);
         }
@@ -741,6 +729,40 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private function getUpdateIntervalSec(): int
     {
         return max(self::UPDATE_INTERVAL_MIN_SEC, $this->ReadPropertyInteger('UpdateIntervalSeconds'));
+    }
+
+    /** MessageSink: gleiches Intervall wie UpdateIntervalSeconds; Timer: immer ausführen. */
+    private function runUpdateCycle(bool $respectIntervalGate): void
+    {
+        if ($respectIntervalGate && $this->isUpdateCycleTooSoon()) {
+            return;
+        }
+        $this->markUpdateCycleNow();
+
+        $values = $this->updateEnergyValues();
+        if ($values === null) {
+            return;
+        }
+        if (trim($this->ReadPropertyString('PixooIp')) === '') {
+            return;
+        }
+        $this->syncPixooDisplay($values, true, false);
+    }
+
+    private function isUpdateCycleTooSoon(): bool
+    {
+        $lastRaw = $this->GetBuffer('LastUpdateCycleAt');
+        $last = is_numeric($lastRaw) ? (float) $lastRaw : 0.0;
+        if ($last <= 0.0) {
+            return false;
+        }
+
+        return (microtime(true) - $last) < (float) $this->getUpdateIntervalSec();
+    }
+
+    private function markUpdateCycleNow(): void
+    {
+        $this->SetBuffer('LastUpdateCycleAt', (string) microtime(true));
     }
 
     /**
@@ -782,24 +804,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     {
         $this->SetBuffer('LastPixooDisplayHash', $this->getPixooDisplayStateHash($values));
         $this->SetBuffer('LastPixooSyncAt', (string) microtime(true));
-    }
-
-    /**
-     * @param array{consumption: float, generation: float, net: float} $values
-     */
-    private function requestPixooSyncIfValuesChanged(array $values): void
-    {
-        if ($this->getPixooDisplayStateHash($values) === $this->GetBuffer('LastPixooDisplayHash')) {
-            return;
-        }
-        if ($this->shouldSkipPixooHttp(true)) {
-            return;
-        }
-        try {
-            $this->syncPixooDisplay($values, true, false);
-        } catch (\Throwable $e) {
-            $this->SendDebug('Pixoo', 'requestPixooSyncIfValuesChanged: ' . $e->getMessage(), 0);
-        }
     }
 
     /**
