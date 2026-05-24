@@ -2,7 +2,7 @@
     "elements": [
         {
             "type": "Label",
-            "caption": "IPS-Variablen (Verbrauch/Erzeugung/Netz) und Pixoo-Display laufen auf getrennten Timern — Werte aktualisieren auch bei Pixoo-Ausfall. Display-Keepalive alle ca. 45 s gegen Uhrenskin."
+            "caption": "IPS-Variablen und Pixoo-Display nutzen dasselbe Aktualisierungsintervall (Feld unten). Werte laufen ohne Pixoo-HTTP weiter; SMARD-Preis separat alle 15 Min."
         },
         {
             "type": "Label",
@@ -28,7 +28,7 @@
         {
             "type": "NumberSpinner",
             "name": "UpdateIntervalSeconds",
-            "caption": "Aktualisierung Werte (Sekunden, mindestens 5; Pixoo-Display separat alle ca. 45 s)",
+            "caption": "Aktualisierung Werte + Pixoo-Display (Sekunden, mindestens 5)",
             "digits": 0,
             "minimum": 5
         },
@@ -189,7 +189,7 @@
         {
             "type": "Button",
             "caption": "Display neu initialisieren",
-            "onClick": "SMAPX_ReinitDisplay($id); echo 'OK';"
+            "onClick": "SMAPX_HeavyReinitDisplay($id); echo 'OK';"
         }
     ],
     "status": [

@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 16;
+    private const MODULE_BUILD = 17;
 
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
@@ -36,8 +36,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private const ONE_HOUR_MS = 3600000;
     private const SMARD_FETCH_MS = 900000;
 
-    /** Leichter Pixoo-Keepalive (nur ItemList) — gegen Uhrenskin, getrennt vom Werte-Timer */
-    private const PIXOO_SYNC_MS = 45000;
+    /** Doppel-Sync vermeiden, wenn Timer und MessageSink fast gleichzeitig feuern (Sekunden) */
+    private const PIXOO_SYNC_DEBOUNCE_SEC = 1.0;
 
     /**
      * Prüft, ob die Instanz noch lebt (Werte-Timer, Puffer). Symcon-Modul-Timer laufen im selben Worker —
@@ -85,7 +85,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** Mindestabstand für Refresh bei VM_UPDATE (Sturm bei schnellen Messwert-Updates) */
     private const SOURCE_REFRESH_MIN_INTERVAL_SEC = 2;
 
-    /** Mindest-Timerintervall „Update“ (Sekunden); kürzer würde oft mit HTTP-Laufzeit von Refresh kollidieren */
+    /** Mindest-Timerintervall Werte + Pixoo (Sekunden) */
     private const UPDATE_INTERVAL_MIN_SEC = 5;
 
     public function Create(): void
@@ -481,11 +481,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** Timer-Intervalle gemäß Konfiguration setzen (auch vom Watchdog bei Ausfall). */
     private function startActiveTimers(): void
     {
-        $sec = max(self::UPDATE_INTERVAL_MIN_SEC, $this->ReadPropertyInteger('UpdateIntervalSeconds'));
+        $sec = $this->getUpdateIntervalSec();
         $this->SetTimerInterval('Update', $sec * 1000);
         $pixooIp = trim($this->ReadPropertyString('PixooIp'));
         if ($pixooIp !== '') {
-            $this->SetTimerInterval('PixooSync', self::PIXOO_SYNC_MS);
+            $this->SetTimerInterval('PixooSync', $sec * 1000);
         } else {
             $this->SetTimerInterval('PixooSync', 0);
         }
@@ -515,7 +515,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return;
         }
 
-        $intervalSec = max(self::UPDATE_INTERVAL_MIN_SEC, $this->ReadPropertyInteger('UpdateIntervalSeconds'));
+        $intervalSec = $this->getUpdateIntervalSec();
         $staleSec = max(120, $intervalSec * 4);
         $lastRaw = $this->GetBuffer('LastValuesAt');
         $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
@@ -581,7 +581,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $this->SetBuffer('LastSourceMessageRefresh', (string) $now);
         try {
-            $this->updateEnergyValues();
+            $values = $this->updateEnergyValues();
+            if ($values !== null) {
+                $this->requestPixooSyncIfValuesChanged($values);
+            }
         } catch (\Throwable $e) {
             $this->SendDebug('MessageSink', $e->getMessage(), 0);
         }
@@ -644,6 +647,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 return;
             }
             $this->applySmardSpotRow($row);
+            $this->SyncPixoo();
         } catch (\Throwable $e) {
             $this->SendDebug('SMARD', 'UpdateSmardPrice: ' . $e->getMessage(), 0);
         }
@@ -708,7 +712,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return;
         }
         try {
-            $this->syncPixooDisplay($this->getCachedEnergyValuesForPixoo(), true);
+            $this->syncPixooDisplay($this->getCachedEnergyValuesForPixoo(), true, false);
         } catch (\Throwable $e) {
             $this->SendDebug('SyncPixoo', 'Ausnahme: ' . $e->getMessage(), 0);
         }
@@ -716,7 +720,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     /**
      * Manuell / Formular: Werte + Pixoo.
-     * Update-Timer nutzt nur UpdateValues(); Pixoo läuft über PixooSync.
+     * Update-Timer nutzt nur UpdateValues(); Pixoo läuft über PixooSync (gleiches Intervall).
      */
     public function Refresh(): void
     {
@@ -728,9 +732,73 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             if ($values === null) {
                 return;
             }
-            $this->syncPixooDisplay($values, true);
+            $this->syncPixooDisplay($values, true, false);
         } catch (\Throwable $e) {
             $this->SendDebug('Refresh', 'Ausnahme: ' . $e->getMessage(), 0);
+        }
+    }
+
+    private function getUpdateIntervalSec(): int
+    {
+        return max(self::UPDATE_INTERVAL_MIN_SEC, $this->ReadPropertyInteger('UpdateIntervalSeconds'));
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function getPixooDisplayStateHash(array $values): string
+    {
+        $parts = [
+            (string) (int) round($values['consumption']),
+            (string) (int) round($values['generation']),
+            (string) (int) round($values['net']),
+            (string) $this->getEffectivePixooBrightness(),
+        ];
+        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            $smard = $this->getSmardEurPerMwhForDisplay();
+            $parts[] = $smard !== null ? (string) round($smard, 2) : '';
+        }
+        return sha1(implode('|', $parts));
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function shouldSkipDuplicatePixooSync(array $values): bool
+    {
+        if ($this->getPixooDisplayStateHash($values) !== $this->GetBuffer('LastPixooDisplayHash')) {
+            return false;
+        }
+        $lastRaw = $this->GetBuffer('LastPixooSyncAt');
+        $last = is_numeric($lastRaw) ? (float) $lastRaw : 0.0;
+
+        return $last > 0.0 && (microtime(true) - $last) < self::PIXOO_SYNC_DEBOUNCE_SEC;
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function markPixooSyncCompleted(array $values): void
+    {
+        $this->SetBuffer('LastPixooDisplayHash', $this->getPixooDisplayStateHash($values));
+        $this->SetBuffer('LastPixooSyncAt', (string) microtime(true));
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function requestPixooSyncIfValuesChanged(array $values): void
+    {
+        if ($this->getPixooDisplayStateHash($values) === $this->GetBuffer('LastPixooDisplayHash')) {
+            return;
+        }
+        if ($this->shouldSkipPixooHttp(true)) {
+            return;
+        }
+        try {
+            $this->syncPixooDisplay($values, true, false);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Pixoo', 'requestPixooSyncIfValuesChanged: ' . $e->getMessage(), 0);
         }
     }
 
@@ -835,15 +903,19 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     /**
      * @param array{consumption: float, generation: float, net: float} $values
-     * @param bool $lightSync leichter Pfad (PixooSync): eigene Cooldown-Logik, Init sendet Live-Werte
+     * @param bool $lightSync leichter Pfad (PixooSync): ItemList ohne schweres GIF
+     * @param bool $heavyInit schweres Init mit Hintergrund-GIF (nur manuelles Reinit)
      */
-    private function syncPixooDisplay(array $values, bool $lightSync = false): void
+    private function syncPixooDisplay(array $values, bool $lightSync = false, bool $heavyInit = false): void
     {
         $pixooIp = trim($this->ReadPropertyString('PixooIp'));
         if ($pixooIp === '') {
             return;
         }
-        if ($this->shouldSkipPixooHttp($lightSync)) {
+        if ($lightSync && !$heavyInit && $this->shouldSkipDuplicatePixooSync($values)) {
+            return;
+        }
+        if ($this->shouldSkipPixooHttp($lightSync && !$heavyInit)) {
             return;
         }
         if (!$this->requireCurlExtension('Pixoo')) {
@@ -851,12 +923,17 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
 
         try {
+            if ($heavyInit) {
+                $this->initPixooDisplayHeavy($pixooIp, $values);
+                $this->recordPixooHttpSuccess(false);
+                $this->markPixooSyncCompleted($values);
+                return;
+            }
+
             if ($this->GetBuffer('PixooInited') !== '1') {
-                if ($lightSync && $this->shouldSkipPixooHeavyHttp()) {
-                    return;
-                }
-                $this->InitPixooDisplay($pixooIp, $values);
+                $this->initPixooDisplayLight($pixooIp, $values);
                 $this->recordPixooHttpSuccess($lightSync);
+                $this->markPixooSyncCompleted($values);
                 return;
             }
 
@@ -868,8 +945,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
             $this->PixooSendItemList($pixooIp, $values['consumption'], $values['generation'], $values['net']);
             $this->recordPixooHttpSuccess($lightSync);
+            $this->markPixooSyncCompleted($values);
         } catch (\Throwable $e) {
-            $this->recordPixooHttpFailure($lightSync);
+            $this->recordPixooHttpFailure($lightSync && !$heavyInit);
             $this->SendDebug('Pixoo', 'syncPixooDisplay: ' . $e->getMessage(), 0);
         }
     }
@@ -951,24 +1029,44 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return false;
     }
 
-    /**
-     * Stündlicher Timer: nur leichte Auffrischung (Helligkeit + ItemList).
-     * Kein vollständiges InitPixooDisplay mehr — das SendHttpGif + mehrere POSTs blockierten den Modul-Worker
-     * oft Minuten und ließ alle anderen Timer (Update, KeepAlive, SMARD) ausstehen (wirkt wie „Totstellung“).
-     */
+    /** Stündlicher Timer: leichte Auffrischung (Helligkeit + ItemList, kein GIF). */
     public function ReinitDisplay(): void
     {
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
         try {
-            $this->updateEnergyValues();
+            $values = $this->updateEnergyValues();
+            if ($values === null) {
+                $values = $this->getCachedEnergyValuesForPixoo();
+            }
             $this->SetBuffer('PixooHeavyPausedUntil', '');
             $this->SetBuffer('PixooLightPausedUntil', '');
-            $this->syncPixooDisplay($this->getCachedEnergyValuesForPixoo(), true);
+            $this->syncPixooDisplay($values, true, false);
         } catch (\Throwable $e) {
             $this->recordPixooHttpFailure(true);
             $this->SendDebug('Pixoo', 'ReinitDisplay: ' . $e->getMessage(), 0);
+        }
+    }
+
+    /** Manuell / Formular: schweres Init mit Hintergrund-GIF. */
+    public function HeavyReinitDisplay(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        try {
+            $values = $this->updateEnergyValues();
+            if ($values === null) {
+                $values = $this->getCachedEnergyValuesForPixoo();
+            }
+            $this->SetBuffer('PixooInited', '0');
+            $this->SetBuffer('PixooHeavyPausedUntil', '');
+            $this->SetBuffer('PixooLightPausedUntil', '');
+            $this->syncPixooDisplay($values, false, true);
+        } catch (\Throwable $e) {
+            $this->recordPixooHttpFailure(false);
+            $this->SendDebug('Pixoo', 'HeavyReinitDisplay: ' . $e->getMessage(), 0);
         }
     }
 
@@ -1157,7 +1255,24 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /**
      * @param array{consumption: float, generation: float, net: float} $values
      */
-    private function InitPixooDisplay(string $ip, array $values): void
+    private function initPixooDisplayLight(string $ip, array $values): void
+    {
+        $eff = $this->getEffectivePixooBrightness();
+        if ($this->PixooPostRaw($ip, [
+            'Command' => 'Channel/SetBrightness',
+            'Brightness' => max(0, min(100, $eff)),
+        ]) === null) {
+            throw new \RuntimeException('SetBrightness fehlgeschlagen');
+        }
+        $this->SetBuffer('PixooLastBrightness', (string) $eff);
+        $this->PixooSendItemList($ip, $values['consumption'], $values['generation'], $values['net']);
+        $this->SetBuffer('PixooInited', '1');
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function initPixooDisplayHeavy(string $ip, array $values): void
     {
         $eff = $this->getEffectivePixooBrightness();
         if ($this->PixooPostRaw($ip, [
