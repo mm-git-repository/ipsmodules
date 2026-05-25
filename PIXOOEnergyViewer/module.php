@@ -8,13 +8,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 28;
+    private const MODULE_BUILD = 29;
 
     /** Symcon Instanz-Status (IS_SBASE 100 + Offset) */
     private const IS_CREATING = 101;
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
     private const IS_NOTCREATED = 105;
+
+    /** Nach IPS-Start: Objektbaum lädt — „existiert nicht“ kurz ignorieren wenn alle IDs gesetzt */
+    private const CONFIG_VALIDATION_GRACE_SEC = 180;
 
     /** Verhindert Rekursion ensureInstanceOperational → ApplyChanges */
     private bool $applyChangesInProgress = false;
@@ -409,6 +412,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ensureInstanceOperational()) {
             return false;
         }
+        $this->recoverConfigStatusIfDeferred();
         $this->armStartupGuardTimer();
         $this->ensureKernelLifecycleMessages();
         if ($this->handlePostKernelRestartIfNeeded()) {
@@ -451,7 +455,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 return;
             }
 
-            $configIssues = $this->collectConfigIssues();
+            $configIssues = $this->getEffectiveConfigIssues();
             if ($configIssues !== []) {
                 $this->SetStatus(201);
                 $this->stopAllTimers();
@@ -485,7 +489,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private function startInstanceRuntime(bool $runInitialCycle = true): void
     {
-        if (!$this->ReadPropertyBoolean('Active') || $this->collectConfigIssues() !== []) {
+        if (!$this->ReadPropertyBoolean('Active') || $this->hasEffectiveConfigIssues()) {
             return;
         }
         if (!$this->isIpsKernelReady()) {
@@ -560,7 +564,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private function handlePostKernelRestartIfNeeded(): bool
     {
-        if (!$this->ReadPropertyBoolean('Active') || $this->collectConfigIssues() !== []) {
+        if (!$this->ReadPropertyBoolean('Active') || $this->hasEffectiveConfigIssues()) {
             return false;
         }
         if (!$this->isIpsKernelReady()) {
@@ -651,7 +655,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** StartupGuard mit Intervall > 0, damit Recovery auch ohne ApplyChanges nach IPS-Neustart läuft. */
     private function armStartupGuardTimer(): void
     {
-        if (!$this->ReadPropertyBoolean('Active') || $this->collectConfigIssues() !== []) {
+        if (!$this->ReadPropertyBoolean('Active') || $this->hasEffectiveConfigIssues()) {
             return;
         }
         $this->ensureTimerDefinitions();
@@ -791,7 +795,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        if ($this->collectConfigIssues() !== []) {
+        if ($this->hasEffectiveConfigIssues()) {
             return;
         }
         if (!$this->shouldSkipRuntimeStartDebounce($source)) {
@@ -827,7 +831,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private function instanceNeedsRuntimeRecovery(): bool
     {
-        if (!$this->ReadPropertyBoolean('Active') || $this->collectConfigIssues() !== []) {
+        if (!$this->ReadPropertyBoolean('Active') || $this->hasEffectiveConfigIssues()) {
             return false;
         }
         if ($this->needsRecoveryAfterKernelRestart()) {
@@ -880,7 +884,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->isIpsKernelReady()) {
             return;
         }
-        if (!$this->ReadPropertyBoolean('Active') || $this->collectConfigIssues() !== []) {
+        if (!$this->ReadPropertyBoolean('Active') || $this->hasEffectiveConfigIssues()) {
             return;
         }
         if ($this->needsRecoveryAfterKernelRestart()) {
@@ -906,7 +910,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $this->armStartupGuardTimer();
         $this->ensureKernelLifecycleMessages();
-        if ($this->collectConfigIssues() !== []) {
+        if ($this->hasEffectiveConfigIssues()) {
             return;
         }
         if ($this->handlePostKernelRestartIfNeeded()) {
@@ -1140,7 +1144,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $this->armStartupGuardTimer();
         $this->ensureKernelLifecycleMessages();
-        if ($this->collectConfigIssues() !== []) {
+        if ($this->hasEffectiveConfigIssues()) {
             return;
         }
         if ($this->handlePostKernelRestartIfNeeded()) {
@@ -1260,7 +1264,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        if ($this->collectConfigIssues() !== []) {
+        if ($this->hasEffectiveConfigIssues()) {
             return;
         }
         $watched = $this->getWatchedVariableIds();
@@ -1311,7 +1315,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private function syncMessageSubscriptions(): void
     {
         $this->clearVariableMessageSubscriptions();
-        if (!$this->ReadPropertyBoolean('Active') || $this->collectConfigIssues() !== []) {
+        if (!$this->ReadPropertyBoolean('Active') || $this->hasEffectiveConfigIssues()) {
             return;
         }
         foreach ($this->getWatchedVariableIds() as $vid) {
@@ -1826,7 +1830,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     private function ParseConfig(): bool
     {
-        return $this->collectConfigIssues() === [];
+        return !$this->hasEffectiveConfigIssues();
     }
 
     private function smardHttpGet(string $url): ?string
@@ -1921,6 +1925,100 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             ['property' => 'Wr2String1Var', 'label' => 'Wechselrichter 2, Variable 1'],
             ['property' => 'Wr2String2Var', 'label' => 'Wechselrichter 2, Variable 2'],
         ];
+    }
+
+    /** Status 201 nach IPS-Neustart aufheben, sobald Objektbaum die Quellvariablen kennt. */
+    private function recoverConfigStatusIfDeferred(): void
+    {
+        if ($this->getInstanceStatus() !== 201) {
+            return;
+        }
+        if ($this->hasEffectiveConfigIssues()) {
+            return;
+        }
+        $this->SendDebug(
+            'Konfiguration',
+            'Quellvariablen nach IPS-Neustart verfügbar — Fehlerstatus (201) aufgehoben.',
+            0
+        );
+        $this->SetStatus(self::IS_ACTIVE);
+        $this->ensureTimerDefinitions();
+        $this->startActiveTimers();
+        $this->syncMessageSubscriptions();
+    }
+
+    private function hasAllSourceVariableIdsConfigured(): bool
+    {
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            if ($this->ReadPropertyInteger($def['property']) <= 0) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function getKernelUptimeSec(): int
+    {
+        $start = $this->getKernelStartTime();
+        if ($start <= 0) {
+            return PHP_INT_MAX;
+        }
+
+        return max(0, time() - $start);
+    }
+
+    private function isTransientConfigIssue(string $issue): bool
+    {
+        return str_contains($issue, 'existiert nicht')
+            || str_contains($issue, 'ist keine Variable')
+            || str_contains($issue, 'ungültigen Typ');
+    }
+
+    private function hasEffectiveConfigIssues(): bool
+    {
+        return $this->getEffectiveConfigIssues() !== [];
+    }
+
+    /**
+     * Konfigurationsprüfung mit Kulanz nach IPS-Neustart: alle sechs IDs gesetzt, Objekt noch nicht geladen.
+     *
+     * @return list<string>
+     */
+    private function getEffectiveConfigIssues(): array
+    {
+        $issues = $this->collectConfigIssues();
+        if ($issues === []) {
+            return [];
+        }
+        if (!$this->hasAllSourceVariableIdsConfigured()) {
+            return $issues;
+        }
+        if ($this->getKernelUptimeSec() > self::CONFIG_VALIDATION_GRACE_SEC) {
+            return $issues;
+        }
+        $hard = [];
+        foreach ($issues as $issue) {
+            if (str_contains($issue, 'keine Variable gewählt')) {
+                $hard[] = $issue;
+                continue;
+            }
+            if ($this->isTransientConfigIssue($issue)) {
+                continue;
+            }
+            $hard[] = $issue;
+        }
+        if ($hard === [] && $issues !== []) {
+            $this->SendDebug(
+                'Konfiguration',
+                'Konfigurationsprüfung nach IPS-Neustart zurückgestellt (Objektbaum lädt, '
+                . count($issues) . ' Meldung(en), Kernel-Uptime ' . $this->getKernelUptimeSec() . ' s / '
+                . self::CONFIG_VALIDATION_GRACE_SEC . ' s).',
+                0
+            );
+        }
+
+        return $hard;
     }
 
     /** @return list<string> leer = Konfiguration in Ordnung */
