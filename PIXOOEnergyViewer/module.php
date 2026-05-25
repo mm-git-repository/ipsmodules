@@ -8,7 +8,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 27;
+    private const MODULE_BUILD = 28;
+
+    /** Symcon Instanz-Status (IS_SBASE 100 + Offset) */
+    private const IS_CREATING = 101;
+    private const IS_ACTIVE = 102;
+    private const IS_INACTIVE = 104;
+    private const IS_NOTCREATED = 105;
+
+    /** Verhindert Rekursion ensureInstanceOperational → ApplyChanges */
+    private bool $applyChangesInProgress = false;
 
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
@@ -324,41 +333,149 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return 0;
     }
 
+    private function getInstanceStatus(): int
+    {
+        if (!function_exists('IPS_GetInstance')) {
+            return self::IS_ACTIVE;
+        }
+
+        return (int) (IPS_GetInstance($this->InstanceID)['InstanceStatus'] ?? 0);
+    }
+
+    /**
+     * Fehlende Properties aus migrateDefaultConfiguration() in der Instanz-Konfiguration ergänzen
+     * (verhindert ReadProperty-Exception bei Modul-Updates).
+     */
+    private function ensureConfigurationDefaults(): void
+    {
+        if (!function_exists('IPS_GetConfiguration') || !function_exists('IPS_SetProperty')) {
+            return;
+        }
+        $raw = IPS_GetConfiguration($this->InstanceID);
+        $data = json_decode($raw, true);
+        if (!is_array($data) || !isset($data['configuration']) || !is_array($data['configuration'])) {
+            return;
+        }
+        foreach ($this->migrateDefaultConfiguration() as $key => $default) {
+            if (array_key_exists($key, $data['configuration'])) {
+                continue;
+            }
+            IPS_SetProperty($this->InstanceID, $key, $default);
+        }
+    }
+
+    /**
+     * Instanz aus „creating“ (101) holen — sonst feuern Modul-Timer nicht.
+     *
+     * @return bool true wenn Laufzeit-Code ausgeführt werden darf
+     */
+    private function ensureInstanceOperational(): bool
+    {
+        $status = $this->getInstanceStatus();
+        if ($status !== self::IS_CREATING && $status !== self::IS_NOTCREATED) {
+            return true;
+        }
+        if ($this->applyChangesInProgress) {
+            return false;
+        }
+        $this->SendDebug(
+            'Start',
+            'Instanz-Status ' . $status . ' (creating) — ApplyChanges wird nachgezogen.',
+            0
+        );
+        $this->applyChangesInProgress = true;
+        try {
+            $this->ensureConfigurationDefaults();
+            $this->runApplyChangesBody();
+        } catch (\Throwable $e) {
+            $this->SendDebug('Start', 'ensureInstanceOperational: ' . $e->getMessage(), 0);
+
+            return false;
+        } finally {
+            $this->applyChangesInProgress = false;
+        }
+        $after = $this->getInstanceStatus();
+
+        return $after !== self::IS_CREATING && $after !== self::IS_NOTCREATED;
+    }
+
+    /**
+     * Standard-Einstieg für Timer: operational → Guard/Kernel → Post-Neustart.
+     *
+     * @return bool false wenn Zyklus nicht nötig (z. B. Post-Neustart hat alles erledigt)
+     */
+    private function prepareModuleTimerCycle(): bool
+    {
+        if (!$this->ensureInstanceOperational()) {
+            return false;
+        }
+        $this->armStartupGuardTimer();
+        $this->ensureKernelLifecycleMessages();
+        if ($this->handlePostKernelRestartIfNeeded()) {
+            return false;
+        }
+
+        return true;
+    }
+
     public function ApplyChanges(): void
     {
-        $creating = (IPS_GetInstance($this->InstanceID)['InstanceStatus'] ?? 0) === 100;
-        parent::ApplyChanges();
-        $this->ensureTimerDefinitions();
-        $this->ensureModuleVersionVariable();
-        $this->applyModuleVersionInfo();
-        $this->ensureKernelLifecycleMessages();
-
-        if (!$this->ReadPropertyBoolean('Active')) {
-            $this->SetStatus(104);
-            $this->stopAllTimers();
-            $this->clearVariableMessageSubscriptions();
+        if ($this->applyChangesInProgress) {
             return;
         }
+        $this->applyChangesInProgress = true;
+        try {
+            $this->runApplyChangesBody();
+        } finally {
+            $this->applyChangesInProgress = false;
+        }
+    }
 
-        $configIssues = $this->collectConfigIssues();
-        if ($configIssues !== []) {
-            $this->SetStatus(201);
-            $this->stopAllTimers();
-            $this->clearVariableMessageSubscriptions();
-            foreach ($configIssues as $line) {
-                $this->SendDebug('Konfiguration', $line, 0);
+    private function runApplyChangesBody(): void
+    {
+        try {
+            $this->ensureConfigurationDefaults();
+            $creating = $this->getInstanceStatus() === self::IS_CREATING;
+            parent::ApplyChanges();
+            $this->ensureTimerDefinitions();
+            $this->ensureModuleVersionVariable();
+            $this->applyModuleVersionInfo();
+            $this->ensureKernelLifecycleMessages();
+
+            if (!$this->ReadPropertyBoolean('Active')) {
+                $this->SetStatus(self::IS_INACTIVE);
+                $this->stopAllTimers();
+                $this->clearVariableMessageSubscriptions();
+                $this->SendDebug('Start', 'ApplyChanges abgeschlossen, Status=' . $this->getInstanceStatus(), 0);
+
+                return;
             }
-            return;
-        }
 
-        $this->SetStatus(102);
-        $this->SetBuffer('PixooInited', '0');
-        $this->startInstanceRuntime(!$creating);
-        if (!function_exists('IPS_GetKernelRunlevel')
-            || IPS_GetKernelRunlevel() === $this->getKrReadyRunlevel()) {
-            $this->triggerInstanceRuntimeFromKernel('ApplyChanges');
+            $configIssues = $this->collectConfigIssues();
+            if ($configIssues !== []) {
+                $this->SetStatus(201);
+                $this->stopAllTimers();
+                $this->clearVariableMessageSubscriptions();
+                foreach ($configIssues as $line) {
+                    $this->SendDebug('Konfiguration', $line, 0);
+                }
+                $this->SendDebug('Start', 'ApplyChanges abgeschlossen, Status=' . $this->getInstanceStatus(), 0);
+
+                return;
+            }
+
+            $this->SetStatus(self::IS_ACTIVE);
+            $this->SetBuffer('PixooInited', '0');
+            $this->startInstanceRuntime(!$creating);
+            if (!function_exists('IPS_GetKernelRunlevel')
+                || IPS_GetKernelRunlevel() === $this->getKrReadyRunlevel()) {
+                $this->triggerInstanceRuntimeFromKernel('ApplyChanges');
+            }
+            $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_FAST_MS);
+            $this->SendDebug('Start', 'ApplyChanges abgeschlossen, Status=' . $this->getInstanceStatus(), 0);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Start', 'ApplyChanges: ' . $e->getMessage(), 0);
         }
-        $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_FAST_MS);
     }
 
     /**
@@ -459,7 +576,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return false;
         }
 
-        $this->SetStatus(102);
+        $this->SetStatus(self::IS_ACTIVE);
         $this->registerKernelMessageIfMissing($this->getIpsKernelMessageId());
         $this->ensureTimerDefinitions();
         $this->startActiveTimers();
@@ -623,6 +740,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     private function handleKernelMessage(int $message, array $data): void
     {
+        $this->ensureInstanceOperational();
         if ($this->isKernelInitMessage($message, $data)) {
             $this->registerKernelMessageIfMissing($this->getIpsKernelMessageId());
             $this->armStartupGuardTimer();
@@ -684,7 +802,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             }
         }
         $this->SetBuffer('LastRuntimeStartAt', (string) microtime(true));
-        $this->SetStatus(102);
+        $this->SetStatus(self::IS_ACTIVE);
         $this->SendDebug('Start', 'Laufzeit gestartet (Grund: ' . $source . ')', 0);
         $this->startInstanceRuntime(true);
     }
@@ -783,6 +901,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->isIpsKernelReady()) {
             return;
         }
+        if (!$this->ensureInstanceOperational()) {
+            return;
+        }
+        $this->armStartupGuardTimer();
         $this->ensureKernelLifecycleMessages();
         if ($this->collectConfigIssues() !== []) {
             return;
@@ -803,6 +925,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     public function GetConfigurationForm(): string
     {
+        $this->ensureInstanceOperational();
         $path = __DIR__ . DIRECTORY_SEPARATOR . 'form.json';
         $raw = @file_get_contents($path);
         if ($raw === false || $raw === '') {
@@ -1012,6 +1135,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
+        if (!$this->ensureInstanceOperational()) {
+            return;
+        }
         $this->armStartupGuardTimer();
         $this->ensureKernelLifecycleMessages();
         if ($this->collectConfigIssues() !== []) {
@@ -1199,9 +1325,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        $this->armStartupGuardTimer();
-        $this->ensureKernelLifecycleMessages();
-        if ($this->handlePostKernelRestartIfNeeded()) {
+        if (!$this->prepareModuleTimerCycle()) {
             return;
         }
         $this->bootstrapRuntimeIfNeeded();
@@ -1257,9 +1381,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        $this->armStartupGuardTimer();
-        $this->ensureKernelLifecycleMessages();
-        if ($this->handlePostKernelRestartIfNeeded()) {
+        if (!$this->prepareModuleTimerCycle()) {
             return;
         }
         $this->bootstrapRuntimeIfNeeded();
