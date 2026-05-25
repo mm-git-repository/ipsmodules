@@ -35,7 +35,14 @@
         {
             "type": "CheckBox",
             "name": "PixooHourlyReinit",
-            "caption": "Display stündlich auffrischen (Custom-Kanal + Texte; alle 6 h Hintergrund-GIF gegen Ziffernblatt)"
+            "caption": "Display-Refresh aktiv (Custom-Kanal + Texte; alle 6 h Hintergrund-GIF gegen Ziffernblatt)"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "PixooDisplayRefreshMinutes",
+            "caption": "Display-Refresh-Intervall (Minuten, mindestens 15)",
+            "digits": 0,
+            "minimum": 15
         },
         {
             "type": "ExpansionPanel",

@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 25;
+    private const MODULE_BUILD = 26;
 
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
@@ -33,7 +33,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** |Netz| unter diesem Wert (W) gilt auf dem Pixoo als „0“ → gelb */
     private const NET_ZERO_EPSILON_W = 0.5;
 
-    private const ONE_HOUR_MS = 3600000;
+    /** Display-Refresh-Timer: Mindestintervall und Standard (Minuten) */
+    private const DISPLAY_REFRESH_MIN_MINUTES = 15;
+    private const DISPLAY_REFRESH_DEFAULT_MINUTES = 60;
     private const SMARD_FETCH_MS = 900000;
 
     /** Kurz-Debounce: identischer Pixoo-Inhalt nicht zweimal innerhalb 1 s (z. B. SMARD direkt nach Update-Timer) */
@@ -134,6 +136,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterPropertyInteger('PixooNightHourFrom', 22);
         $this->RegisterPropertyInteger('PixooNightHourTo', 6);
         $this->RegisterPropertyBoolean('PixooHourlyReinit', true);
+        $this->RegisterPropertyInteger('PixooDisplayRefreshMinutes', self::DISPLAY_REFRESH_DEFAULT_MINUTES);
 
         $this->RegisterPropertyInteger('HmRealPowerPlusVar', 0);
         $this->RegisterPropertyInteger('HmRealPowerMinusVar', 0);
@@ -223,6 +226,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'PixooNightHourFrom' => 22,
             'PixooNightHourTo' => 6,
             'PixooHourlyReinit' => true,
+            'PixooDisplayRefreshMinutes' => self::DISPLAY_REFRESH_DEFAULT_MINUTES,
             'HmRealPowerPlusVar' => 0,
             'HmRealPowerMinusVar' => 0,
             'Wr1String1Var' => 0,
@@ -864,7 +868,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             0
         );
         if ($this->ReadPropertyBoolean('PixooHourlyReinit')) {
-            $this->setTimerIntervalSafe('HourlyReinit', self::ONE_HOUR_MS);
+            $refreshMin = $this->getDisplayRefreshIntervalMinutes();
+            $this->setTimerIntervalSafe('HourlyReinit', $refreshMin * 60000);
         } else {
             $this->setTimerIntervalSafe('HourlyReinit', 0);
         }
@@ -1173,6 +1178,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private function getUpdateIntervalSec(): int
     {
         return max(self::UPDATE_INTERVAL_MIN_SEC, $this->ReadPropertyInteger('UpdateIntervalSeconds'));
+    }
+
+    private function getDisplayRefreshIntervalMinutes(): int
+    {
+        return max(
+            self::DISPLAY_REFRESH_MIN_MINUTES,
+            $this->ReadPropertyInteger('PixooDisplayRefreshMinutes')
+        );
     }
 
     /** MessageSink: gleiches Intervall wie UpdateIntervalSeconds; Timer: immer ausführen. */
