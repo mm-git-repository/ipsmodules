@@ -8,7 +8,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 31;
+    private const MODULE_BUILD = 32;
+
+    /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
+    private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
 
     /** Symcon Instanz-Status (IS_SBASE 100 + Offset) */
     private const IS_CREATING = 101;
@@ -354,13 +357,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!function_exists('IPS_GetConfiguration') || !function_exists('IPS_SetProperty')) {
             return;
         }
-        $raw = IPS_GetConfiguration($this->InstanceID);
-        $data = json_decode($raw, true);
-        if (!is_array($data) || !isset($data['configuration']) || !is_array($data['configuration'])) {
+        $values = $this->getPersistedConfigurationValues();
+        if ($values === null) {
             return;
         }
         foreach ($this->migrateDefaultConfiguration() as $key => $default) {
-            if (array_key_exists($key, $data['configuration'])) {
+            if (array_key_exists($key, $values)) {
                 continue;
             }
             IPS_SetProperty($this->InstanceID, $key, $default);
@@ -438,9 +440,29 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private function runApplyChangesBody(): void
     {
         try {
+            $configSnapshot = $this->takeSourceVariableConfigurationSnapshot();
             $this->ensureConfigurationDefaults();
             $creating = $this->getInstanceStatus() === self::IS_CREATING;
             parent::ApplyChanges();
+            $restoredFromSnapshot = $this->restoreSourceVariableIdsFromSnapshot($configSnapshot);
+            $restoredFromBuffer = $this->restoreSourceVariableIdsFromBuffer();
+            if ($restoredFromSnapshot > 0 || $restoredFromBuffer > 0) {
+                parent::ApplyChanges();
+                if ($restoredFromSnapshot > 0) {
+                    $this->SendDebug(
+                        'Konfiguration',
+                        $restoredFromSnapshot . ' Quellvariablen-Property(s) aus gespeicherter Konfiguration wiederhergestellt.',
+                        0
+                    );
+                }
+                if ($restoredFromBuffer > 0) {
+                    $this->SendDebug(
+                        'Konfiguration',
+                        $restoredFromBuffer . ' Quellvariablen-Property(s) aus Instanz-Puffer-Backup wiederhergestellt.',
+                        0
+                    );
+                }
+            }
             $this->ensureTimerDefinitions();
             $this->ensureModuleVersionVariable();
             $this->applyModuleVersionInfo();
@@ -491,6 +513,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 $this->triggerInstanceRuntimeFromKernel('ApplyChanges');
             }
             $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_FAST_MS);
+            $this->backupSourceVariableIdsToBuffer();
             $this->SendDebug('Start', 'ApplyChanges abgeschlossen, Status=' . $this->getInstanceStatus(), 0);
         } catch (\Throwable $e) {
             $this->SendDebug('Start', 'ApplyChanges: ' . $e->getMessage(), 0);
@@ -935,6 +958,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
             return;
         }
+        $this->restoreSourceVariableIdsFromBuffer();
         $this->recoverConfigStatusIfDeferred();
         $this->armStartupGuardTimer();
         $this->ensureKernelLifecycleMessages();
@@ -1991,33 +2015,165 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
     }
 
-    /** Property aus Instanz-JSON, falls ReadProperty* nach Neustart noch 0 liefert. */
+    /**
+     * Symcon speichert Modul-Properties teils unter "configuration", teils flach im JSON-Root.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function getPersistedConfigurationValues(): ?array
+    {
+        if (!function_exists('IPS_GetConfiguration')) {
+            return null;
+        }
+        $raw = IPS_GetConfiguration($this->InstanceID);
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            return null;
+        }
+        if (isset($data['configuration']) && is_array($data['configuration'])) {
+            return $data['configuration'];
+        }
+
+        return $data;
+    }
+
+    /** @param mixed $stored */
+    private function coerceVariableIdFromStoredValue($stored): int
+    {
+        if (is_array($stored)) {
+            foreach (['variableID', 'VariableID', 'value', 'Value', 'id', 'ID'] as $subKey) {
+                if (isset($stored[$subKey])) {
+                    return self::migrateCoerceInt($stored[$subKey]);
+                }
+            }
+
+            return 0;
+        }
+
+        return self::migrateCoerceInt($stored);
+    }
+
+    /**
+     * @return array<string, int> Property-Name => Variable-ID
+     */
+    private function takeSourceVariableConfigurationSnapshot(): array
+    {
+        $snapshot = [];
+        $values = $this->getPersistedConfigurationValues();
+        if ($values === null) {
+            return $snapshot;
+        }
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            if (!array_key_exists($key, $values)) {
+                continue;
+            }
+            $id = $this->coerceVariableIdFromStoredValue($values[$key]);
+            if ($id > 0) {
+                $snapshot[$key] = $id;
+            }
+        }
+
+        return $snapshot;
+    }
+
+    /**
+     * parent::ApplyChanges() setzt SelectVariable-Properties nach IPS-Neustart oft auf 0 — aus Snapshot zurückschreiben.
+     *
+     * @param array<string, int> $snapshot
+     */
+    private function restoreSourceVariableIdsFromSnapshot(array $snapshot): int
+    {
+        if ($snapshot === [] || !function_exists('IPS_SetProperty')) {
+            return 0;
+        }
+        $restored = 0;
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            if (!isset($snapshot[$key]) || $snapshot[$key] <= 0) {
+                continue;
+            }
+            if ($this->ReadPropertyInteger($key) > 0) {
+                continue;
+            }
+            IPS_SetProperty($this->InstanceID, $key, $snapshot[$key]);
+            $restored++;
+        }
+
+        return $restored;
+    }
+
+    private function backupSourceVariableIdsToBuffer(): void
+    {
+        $backup = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            $id = $this->readConfiguredPropertyInteger($key);
+            if ($id > 0) {
+                $backup[$key] = $id;
+            }
+        }
+        if (count($backup) !== count($this->getVariableSlotDefinitions())) {
+            return;
+        }
+        $encoded = json_encode($backup, JSON_UNESCAPED_UNICODE);
+        if ($encoded !== false && $encoded !== '') {
+            $this->SetBuffer(self::SOURCE_VAR_ID_BACKUP_BUFFER, $encoded);
+        }
+    }
+
+    private function restoreSourceVariableIdsFromBuffer(): int
+    {
+        $raw = $this->GetBuffer(self::SOURCE_VAR_ID_BACKUP_BUFFER);
+        if ($raw === '' || $raw === '0') {
+            return 0;
+        }
+        $backup = json_decode($raw, true);
+        if (!is_array($backup)) {
+            return 0;
+        }
+        $normalized = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            if (!isset($backup[$key])) {
+                return 0;
+            }
+            $id = self::migrateCoerceInt($backup[$key]);
+            if ($id <= 0) {
+                return 0;
+            }
+            $normalized[$key] = $id;
+        }
+
+        return $this->restoreSourceVariableIdsFromSnapshot($normalized);
+    }
+
+    /** Property aus Instanz-JSON / Puffer, falls ReadProperty* nach Neustart noch 0 liefert. */
     private function readConfiguredPropertyInteger(string $key): int
     {
         $fromProperty = $this->ReadPropertyInteger($key);
         if ($fromProperty > 0) {
             return $fromProperty;
         }
-        if (!function_exists('IPS_GetConfiguration')) {
-            return $fromProperty;
-        }
-        $raw = IPS_GetConfiguration($this->InstanceID);
-        $data = json_decode($raw, true);
-        if (!is_array($data) || !isset($data['configuration'][$key])) {
-            return $fromProperty;
-        }
-
-        $stored = $data['configuration'][$key];
-        if (is_array($stored)) {
-            if (isset($stored['variableID'])) {
-                return self::migrateCoerceInt($stored['variableID']);
-            }
-            if (isset($stored['VariableID'])) {
-                return self::migrateCoerceInt($stored['VariableID']);
+        $values = $this->getPersistedConfigurationValues();
+        if ($values !== null && array_key_exists($key, $values)) {
+            $fromFile = $this->coerceVariableIdFromStoredValue($values[$key]);
+            if ($fromFile > 0) {
+                return $fromFile;
             }
         }
+        $raw = $this->GetBuffer(self::SOURCE_VAR_ID_BACKUP_BUFFER);
+        if ($raw !== '' && $raw !== '0') {
+            $backup = json_decode($raw, true);
+            if (is_array($backup) && isset($backup[$key])) {
+                $fromBuffer = self::migrateCoerceInt($backup[$key]);
+                if ($fromBuffer > 0) {
+                    return $fromBuffer;
+                }
+            }
+        }
 
-        return self::migrateCoerceInt($stored);
+        return $fromProperty;
     }
 
     private function logConfiguredSourceVariableIds(): void
@@ -2034,16 +2190,15 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!function_exists('IPS_GetConfiguration')) {
             return;
         }
-        $raw = IPS_GetConfiguration($this->InstanceID);
-        $data = json_decode($raw, true);
-        if (!is_array($data) || !isset($data['configuration']) || !is_array($data['configuration'])) {
-            $this->SendDebug('Konfiguration', 'IPS_GetConfiguration: kein configuration-Block lesbar.', 0);
+        $values = $this->getPersistedConfigurationValues();
+        if ($values === null) {
+            $this->SendDebug('Konfiguration', 'IPS_GetConfiguration: nicht lesbar.', 0);
 
             return;
         }
         foreach ($this->getVariableSlotDefinitions() as $def) {
             $key = $def['property'];
-            $val = $data['configuration'][$key] ?? null;
+            $val = $values[$key] ?? null;
             $encoded = json_encode($val, JSON_UNESCAPED_UNICODE);
             $this->SendDebug(
                 'Konfiguration',
