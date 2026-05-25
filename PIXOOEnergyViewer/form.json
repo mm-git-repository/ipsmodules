@@ -35,7 +35,7 @@
         {
             "type": "CheckBox",
             "name": "PixooHourlyReinit",
-            "caption": "Display-Refresh aktiv (Custom-Kanal + Texte; alle 6 h Hintergrund-GIF gegen Ziffernblatt)"
+            "caption": "Display-Refresh aktiv (wie Button „Display neu initialisieren“: Custom-Kanal + Hintergrund-GIF + Texte)"
         },
         {
             "type": "NumberSpinner",

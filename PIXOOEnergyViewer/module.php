@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 33;
+    private const MODULE_BUILD = 34;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -82,9 +82,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     /** Doppelstart durch KR_READY + KERNELSTARTED vermeiden (Sekunden) */
     private const KERNEL_RUNTIME_START_DEBOUNCE_SEC = 3.0;
-
-    /** Stündlicher Reinit: alle 6 h zusätzlich Hintergrund-GIF */
-    private const HOURLY_HEAVY_GIF_INTERVAL_SEC = 21600;
 
     /** Watchdog: Display-Recovery wenn kein erfolgreicher Pixoo-Sync mindestens so lange */
     private const PIXOO_DISPLAY_STALE_MIN_SEC = 600;
@@ -1825,33 +1822,13 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return false;
     }
 
-    /** Stündlicher Timer: Custom-Kanal + Auffrischung; alle 6 h zusätzlich Hintergrund-GIF. */
+    /** Display-Refresh-Timer: gleiches schweres Init wie Button „Display neu initialisieren“. */
     public function ReinitDisplay(): void
     {
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        try {
-            $values = $this->updateEnergyValues();
-            if ($values === null) {
-                $values = $this->getCachedEnergyValuesForPixoo();
-            }
-            $this->SetBuffer('PixooHeavyPausedUntil', '');
-            $this->SetBuffer('PixooLightPausedUntil', '');
-            $this->SetBuffer('PixooInited', '0');
-            $lastHeavyRaw = $this->GetBuffer('PixooLastHeavyGifAt');
-            $lastHeavy = is_numeric($lastHeavyRaw) ? (int) $lastHeavyRaw : 0;
-            $heavyGifDue = $lastHeavy <= 0 || (time() - $lastHeavy) >= self::HOURLY_HEAVY_GIF_INTERVAL_SEC;
-            if ($heavyGifDue) {
-                $this->syncPixooDisplay($values, false, true, true);
-            } else {
-                $this->syncPixooDisplay($values, true, false, true);
-            }
-        } catch (\Throwable $e) {
-            $this->SetBuffer('PixooInited', '0');
-            $this->recordPixooHttpFailure(true);
-            $this->SendDebug('Pixoo', 'ReinitDisplay: ' . $e->getMessage(), 0);
-        }
+        $this->runHeavyReinitCore();
     }
 
     /** Manuell / Formular: schweres Init mit Hintergrund-GIF. */
