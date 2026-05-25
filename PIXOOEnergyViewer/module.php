@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 29;
+    private const MODULE_BUILD = 30;
 
     /** Symcon Instanz-Status (IS_SBASE 100 + Offset) */
     private const IS_CREATING = 101;
@@ -455,17 +455,28 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 return;
             }
 
+            $rawConfigIssues = $this->collectConfigIssues();
             $configIssues = $this->getEffectiveConfigIssues();
             if ($configIssues !== []) {
                 $this->SetStatus(201);
-                $this->stopAllTimers();
+                $this->stopRuntimeTimers();
+                $this->armStartupGuardTimer(true);
                 $this->clearVariableMessageSubscriptions();
                 foreach ($configIssues as $line) {
                     $this->SendDebug('Konfiguration', $line, 0);
                 }
+                $this->logConfigValidationDiagnostic($rawConfigIssues, $configIssues);
                 $this->SendDebug('Start', 'ApplyChanges abgeschlossen, Status=' . $this->getInstanceStatus(), 0);
 
                 return;
+            }
+            if ($rawConfigIssues !== []) {
+                $this->markConfigValidationGrace();
+                $this->SendDebug(
+                    'Konfiguration',
+                    'Konfiguration vorübergehend unvollständig nach IPS-Neustart — Laufzeit startet, erneute Prüfung folgt.',
+                    0
+                );
             }
 
             $this->SetStatus(self::IS_ACTIVE);
@@ -570,6 +581,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->isIpsKernelReady()) {
             return false;
         }
+        $this->markConfigValidationGrace();
         $kernelStart = $this->getKernelStartTime();
         if ($kernelStart <= 0) {
             return false;
@@ -652,15 +664,20 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
     }
 
-    /** StartupGuard mit Intervall > 0, damit Recovery auch ohne ApplyChanges nach IPS-Neustart läuft. */
-    private function armStartupGuardTimer(): void
+    /**
+     * StartupGuard mit Intervall > 0 — auch bei Status 201, damit Konfiguration/Neustart-Recovery läuft.
+     *
+     * @param bool $forceFast nach Konfig-Fehler oder KR_INIT schneller erneut prüfen
+     */
+    private function armStartupGuardTimer(bool $forceFast = false): void
     {
-        if (!$this->ReadPropertyBoolean('Active') || $this->hasEffectiveConfigIssues()) {
+        if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
         $this->ensureTimerDefinitions();
-        if ($this->GetTimerInterval('StartupGuard') <= 0) {
-            $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_FAST_MS);
+        $ms = $forceFast ? self::STARTUP_GUARD_FAST_MS : self::STARTUP_GUARD_MS;
+        if ($forceFast || $this->GetTimerInterval('StartupGuard') <= 0) {
+            $this->setTimerIntervalSafe('StartupGuard', $ms);
         }
     }
 
@@ -746,12 +763,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     {
         $this->ensureInstanceOperational();
         if ($this->isKernelInitMessage($message, $data)) {
+            $this->markConfigValidationGrace();
             $this->registerKernelMessageIfMissing($this->getIpsKernelMessageId());
-            $this->armStartupGuardTimer();
+            $this->armStartupGuardTimer(true);
 
             return;
         }
         if ($this->isKernelReadyMessage($message, $data)) {
+            $this->recoverConfigStatusIfDeferred();
             $this->onIpsKernelReady();
 
             return;
@@ -903,14 +922,25 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return;
         }
         if (!$this->isIpsKernelReady()) {
+            $this->armStartupGuardTimer(true);
+
             return;
         }
         if (!$this->ensureInstanceOperational()) {
+            $this->armStartupGuardTimer(true);
+
             return;
         }
+        $this->recoverConfigStatusIfDeferred();
         $this->armStartupGuardTimer();
         $this->ensureKernelLifecycleMessages();
         if ($this->hasEffectiveConfigIssues()) {
+            $this->logConfigValidationDiagnostic(
+                $this->collectConfigIssues(),
+                $this->getEffectiveConfigIssues()
+            );
+            $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_FAST_MS);
+
             return;
         }
         if ($this->handlePostKernelRestartIfNeeded()) {
@@ -1082,13 +1112,19 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return !$missing;
     }
 
-    private function stopAllTimers(): void
+    /** Laufzeit-Timer aus; StartupGuard bleibt für Recovery nach IPS-Neustart / Status 201. */
+    private function stopRuntimeTimers(): void
     {
         $this->setTimerIntervalSafe('Update', 0);
         $this->setTimerIntervalSafe('PixooSync', 0);
         $this->setTimerIntervalSafe('HourlyReinit', 0);
         $this->setTimerIntervalSafe('SmardFetch', 0);
         $this->setTimerIntervalSafe('HealthWatchdog', 0);
+    }
+
+    private function stopAllTimers(): void
+    {
+        $this->stopRuntimeTimers();
         $this->setTimerIntervalSafe('StartupGuard', 0);
     }
 
@@ -1950,7 +1986,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private function hasAllSourceVariableIdsConfigured(): bool
     {
         foreach ($this->getVariableSlotDefinitions() as $def) {
-            if ($this->ReadPropertyInteger($def['property']) <= 0) {
+            if ($this->readConfiguredPropertyInteger($def['property']) <= 0) {
                 return false;
             }
         }
@@ -1958,14 +1994,79 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return true;
     }
 
+    /** Property aus Instanz-JSON, falls ReadProperty* nach Neustart noch 0 liefert. */
+    private function readConfiguredPropertyInteger(string $key): int
+    {
+        $fromProperty = $this->ReadPropertyInteger($key);
+        if ($fromProperty > 0) {
+            return $fromProperty;
+        }
+        if (!function_exists('IPS_GetConfiguration')) {
+            return $fromProperty;
+        }
+        $raw = IPS_GetConfiguration($this->InstanceID);
+        $data = json_decode($raw, true);
+        if (!is_array($data) || !isset($data['configuration'][$key])) {
+            return $fromProperty;
+        }
+
+        return self::migrateCoerceInt($data['configuration'][$key]);
+    }
+
+    private function markConfigValidationGrace(): void
+    {
+        $this->SetBuffer('ConfigGraceUntil', (string) (time() + self::CONFIG_VALIDATION_GRACE_SEC));
+    }
+
+    private function isInConfigValidationGrace(): bool
+    {
+        $untilRaw = $this->GetBuffer('ConfigGraceUntil');
+        if (is_numeric($untilRaw) && time() < (int) $untilRaw) {
+            return true;
+        }
+        $start = $this->getKernelStartTime();
+        if ($start > 0) {
+            return (time() - $start) <= self::CONFIG_VALIDATION_GRACE_SEC;
+        }
+
+        return $this->needsRecoveryAfterKernelRestart();
+    }
+
     private function getKernelUptimeSec(): int
     {
         $start = $this->getKernelStartTime();
         if ($start <= 0) {
-            return PHP_INT_MAX;
+            return 0;
         }
 
         return max(0, time() - $start);
+    }
+
+    /**
+     * @param list<string> $rawIssues
+     * @param list<string> $effectiveIssues
+     */
+    private function logConfigValidationDiagnostic(array $rawIssues, array $effectiveIssues): void
+    {
+        $lastRaw = $this->GetBuffer('LastConfigDiagAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        if ($last > 0 && (time() - $last) < 60) {
+            return;
+        }
+        $this->SetBuffer('LastConfigDiagAt', (string) time());
+        $this->SendDebug(
+            'Konfiguration',
+            'Diagnose: Status=' . $this->getInstanceStatus()
+            . ', Roh-Fehler=' . count($rawIssues)
+            . ', effektiv=' . count($effectiveIssues)
+            . ', Grace=' . ($this->isInConfigValidationGrace() ? 'ja' : 'nein')
+            . ', KernelStart=' . $this->getKernelStartTime()
+            . ', Kernel-Uptime=' . $this->getKernelUptimeSec() . ' s',
+            0
+        );
+        foreach (array_slice($rawIssues, 0, 6) as $line) {
+            $this->SendDebug('Konfiguration', $line, 0);
+        }
     }
 
     private function isTransientConfigIssue(string $issue): bool
@@ -1994,7 +2095,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->hasAllSourceVariableIdsConfigured()) {
             return $issues;
         }
-        if ($this->getKernelUptimeSec() > self::CONFIG_VALIDATION_GRACE_SEC) {
+        if (!$this->isInConfigValidationGrace()) {
             return $issues;
         }
         $hard = [];
@@ -2028,7 +2129,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         foreach ($this->getVariableSlotDefinitions() as $def) {
             $prop = $def['property'];
             $label = $def['label'];
-            $id = $this->ReadPropertyInteger($prop);
+            $id = $this->readConfiguredPropertyInteger($prop);
 
             if ($id <= 0) {
                 $issues[] = "{$label}: keine Variable gewählt (Property \"{$prop}\" = 0).";
