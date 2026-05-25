@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 26;
+    private const MODULE_BUILD = 27;
 
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
@@ -188,7 +188,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterTimer('HourlyReinit', 0, 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);');
         $this->RegisterTimer('SmardFetch', 0, 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);');
         $this->RegisterTimer('HealthWatchdog', 0, 'SMAPX_HealthWatchdog($_IPS[\'TARGET\']);');
-        $this->RegisterTimer('StartupGuard', 0, 'SMAPX_StartupGuardRecovery($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('StartupGuard', self::STARTUP_GUARD_FAST_MS, 'SMAPX_StartupGuardRecovery($_IPS[\'TARGET\']);');
         $this->ensureKernelLifecycleMessages();
     }
 
@@ -385,6 +385,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$runInitialCycle) {
             return;
         }
+        if ($this->needsSmardRefresh()) {
+            $this->fetchAndApplySmardIfEnabled(true);
+        }
         try {
             $this->runUpdateCycle(false);
         } catch (\Throwable $e) {
@@ -416,14 +419,115 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /**
-     * Kernel-Meldungen (nicht persistent über Neustart) + StartupGuard armen + sofort starten wenn bereit.
+     * Kernel-Meldungen (nicht persistent über Neustart) + StartupGuard armen.
      */
     private function ensureKernelLifecycleMessages(): void
     {
         $this->registerKernelMessageIfMissing($this->getIpsKernelMessageId());
         $this->armStartupGuardTimer();
-        if ($this->ReadPropertyBoolean('Active') && $this->isIpsKernelReady()) {
-            $this->triggerInstanceRuntimeFromKernel('Kernel-Lifecycle');
+    }
+
+    private function getKernelStartTime(): int
+    {
+        if (!function_exists('IPS_GetKernelStartTime')) {
+            return 0;
+        }
+
+        return (int) IPS_GetKernelStartTime();
+    }
+
+    /**
+     * Einmaliger Lauf nach IPS-Dienst-Neustart: Timer, Heavy-Display-Init, SMARD, Werte.
+     *
+     * @return bool true wenn dieser Kernel-Start gerade behandelt wurde
+     */
+    private function handlePostKernelRestartIfNeeded(): bool
+    {
+        if (!$this->ReadPropertyBoolean('Active') || $this->collectConfigIssues() !== []) {
+            return false;
+        }
+        if (!$this->isIpsKernelReady()) {
+            return false;
+        }
+        $kernelStart = $this->getKernelStartTime();
+        if ($kernelStart <= 0) {
+            return false;
+        }
+        $handledRaw = $this->GetBuffer('HandledKernelStartAt');
+        $handled = is_numeric($handledRaw) ? (int) $handledRaw : 0;
+        if ($handled === $kernelStart) {
+            return false;
+        }
+
+        $this->SetStatus(102);
+        $this->registerKernelMessageIfMissing($this->getIpsKernelMessageId());
+        $this->ensureTimerDefinitions();
+        $this->startActiveTimers();
+        $this->syncMessageSubscriptions();
+
+        $pixooIp = trim($this->ReadPropertyString('PixooIp'));
+        if ($pixooIp !== '') {
+            $this->SetBuffer('PixooInited', '0');
+            try {
+                $this->runHeavyReinitCore();
+            } catch (\Throwable $e) {
+                $this->SendDebug('Start', 'Display-Init nach Neustart: ' . $e->getMessage(), 0);
+            }
+        }
+
+        $this->fetchAndApplySmardIfEnabled(false);
+
+        try {
+            $this->runUpdateCycle(false);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Start', 'Werte nach Neustart: ' . $e->getMessage(), 0);
+        }
+
+        $this->SetBuffer('HandledKernelStartAt', (string) $kernelStart);
+        $this->SendDebug('Start', 'IPS-Neustart abgeschlossen (Timer, Display-Init, SMARD, Werte)', 0);
+
+        return true;
+    }
+
+    private function needsSmardRefresh(): bool
+    {
+        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            return false;
+        }
+        $lastRaw = $this->GetBuffer('LastSmardFetchAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        if ($last <= 0) {
+            return true;
+        }
+        $kernelStart = $this->getKernelStartTime();
+        if ($kernelStart > 0 && $last < $kernelStart) {
+            return true;
+        }
+
+        return (time() - $last) > (int) (self::SMARD_FETCH_MS / 1000);
+    }
+
+    private function fetchAndApplySmardIfEnabled(bool $syncPixooAfter = true): void
+    {
+        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            return;
+        }
+        if (!$this->requireCurlExtension('SMARD')) {
+            return;
+        }
+        try {
+            $row = $this->fetchSmardSpotRow();
+            if ($row === null) {
+                $this->SendDebug('SMARD', 'Kein gültiger Preis (API/Zeitreihe) — letzter Wert bleibt.', 0);
+
+                return;
+            }
+            $this->applySmardSpotRow($row);
+            if ($syncPixooAfter && trim($this->ReadPropertyString('PixooIp')) !== '') {
+                $this->syncPixooDisplay($this->getCachedEnergyValuesForPixoo(), true, false);
+            }
+        } catch (\Throwable $e) {
+            $this->SendDebug('SMARD', 'fetchAndApplySmardIfEnabled: ' . $e->getMessage(), 0);
         }
     }
 
@@ -557,6 +661,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (strncmp($source, 'Kernel-Neustart', strlen('Kernel-Neustart')) === 0) {
             return true;
         }
+        if (strncmp($source, 'IPS-Neustart', strlen('IPS-Neustart')) === 0) {
+            return true;
+        }
 
         return false;
     }
@@ -585,6 +692,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** KR_READY — ApplyChanges() läuft nach Neustart oft nicht. */
     private function onIpsKernelReady(): void
     {
+        if ($this->handlePostKernelRestartIfNeeded()) {
+            return;
+        }
         $this->triggerInstanceRuntimeFromKernel('KR_READY');
     }
 
@@ -603,6 +713,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return false;
         }
         if ($this->needsRecoveryAfterKernelRestart()) {
+            return true;
+        }
+        if ($this->needsSmardRefresh()) {
             return true;
         }
         if ($this->GetTimerInterval('Update') <= 0) {
@@ -624,6 +737,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     {
         if ($this->needsRecoveryAfterKernelRestart()) {
             return $this->describeKernelRestartRecoveryReason();
+        }
+        if ($this->needsSmardRefresh()) {
+            return 'SMARD-Preis veraltet oder noch nicht geladen';
         }
         if ($this->GetTimerInterval('Update') <= 0) {
             return 'Update-Timer aus';
@@ -669,6 +785,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $this->ensureKernelLifecycleMessages();
         if ($this->collectConfigIssues() !== []) {
+            return;
+        }
+        if ($this->handlePostKernelRestartIfNeeded()) {
+            $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
+
             return;
         }
         if (!$this->instanceNeedsRuntimeRecovery()) {
@@ -896,6 +1017,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if ($this->collectConfigIssues() !== []) {
             return;
         }
+        if ($this->handlePostKernelRestartIfNeeded()) {
+            return;
+        }
 
         $intervalSec = $this->getUpdateIntervalSec();
         $staleSec = $this->needsRecoveryAfterKernelRestart()
@@ -1072,23 +1196,19 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** Viertelstunden-Day-Ahead-Preis (www.smard.de), für Pixoo-Anzeige */
     public function UpdateSmardPrice(): void
     {
-        if (!$this->ReadPropertyBoolean('Active') || !$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        if (!$this->requireCurlExtension('SMARD')) {
+        $this->armStartupGuardTimer();
+        $this->ensureKernelLifecycleMessages();
+        if ($this->handlePostKernelRestartIfNeeded()) {
             return;
         }
-        try {
-            $row = $this->fetchSmardSpotRow();
-            if ($row === null) {
-                $this->SendDebug('SMARD', 'Kein gültiger Preis (API/Zeitreihe) — letzter Wert bleibt.', 0);
-                return;
-            }
-            $this->applySmardSpotRow($row);
-            $this->SyncPixoo();
-        } catch (\Throwable $e) {
-            $this->SendDebug('SMARD', 'UpdateSmardPrice: ' . $e->getMessage(), 0);
+        $this->bootstrapRuntimeIfNeeded();
+        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            return;
         }
+        $this->fetchAndApplySmardIfEnabled(true);
     }
 
     /**
@@ -1127,6 +1247,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     {
         $this->SetBuffer('SmardEurPerMwh', (string) $row['eurMwh']);
         $this->SetBuffer('SmardSpotTsMs', (string) $row['tsMs']);
+        $this->SetBuffer('LastSmardFetchAt', (string) time());
         $this->SetValue('SmardSpotCt', $row['eurMwh'] / 1000.0);
     }
 
@@ -1138,6 +1259,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $this->armStartupGuardTimer();
         $this->ensureKernelLifecycleMessages();
+        if ($this->handlePostKernelRestartIfNeeded()) {
+            return;
+        }
         $this->bootstrapRuntimeIfNeeded();
         try {
             $this->runUpdateCycle(false);
