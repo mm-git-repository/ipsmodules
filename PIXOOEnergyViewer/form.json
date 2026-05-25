@@ -35,7 +35,7 @@
         {
             "type": "CheckBox",
             "name": "PixooHourlyReinit",
-            "caption": "Display stündlich auffrischen (Cloud-Kanal + Texte; alle 6 h Hintergrund-GIF gegen Ziffernblatt)"
+            "caption": "Display stündlich auffrischen (Custom-Kanal + Texte; alle 6 h Hintergrund-GIF gegen Ziffernblatt)"
         },
         {
             "type": "ExpansionPanel",
@@ -189,7 +189,7 @@
         {
             "type": "Button",
             "caption": "Display neu initialisieren",
-            "onClick": "SMAPX_HeavyReinitDisplay($id); echo 'OK';"
+            "onClick": "echo SMAPX_HeavyReinitDisplayFeedback($id);"
         }
     ],
     "status": [

@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 21;
+    private const MODULE_BUILD = 22;
 
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
@@ -51,8 +51,17 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SendHttpGif (großes Payload) — längeres Timeout nach langer Laufzeit */
     private const PIXOO_GIF_HTTP_TIMEOUT_SEC = 10.0;
 
-    /** Divoom: 0 = Faces/Uhr, 1 = Cloud (HTTP-Draw), 2 = Visualizer, 3 = Custom */
-    private const PIXOO_CHANNEL_CLOUD = 1;
+    /** Divoom: 0 = Faces/Uhr, 1 = Cloud, 2 = Visualizer, 3 = Custom (HTTP-Draw) */
+    private const PIXOO_CHANNEL_CUSTOM = 3;
+
+    /** Custom-Seite 1–3 auf dem Pixoo (HTTP-Anzeige) */
+    private const PIXOO_CUSTOM_PAGE = 1;
+
+    /** Nach IPS-Neustart: RegisterMessage fehlt — Update-Timer per Guard nachziehen (ms) */
+    private const STARTUP_GUARD_MS = 30000;
+
+    /** Doppelstart durch KR_READY + KERNELSTARTED vermeiden (Sekunden) */
+    private const KERNEL_RUNTIME_START_DEBOUNCE_SEC = 3.0;
 
     /** Stündlicher Reinit: alle 6 h zusätzlich Hintergrund-GIF */
     private const HOURLY_HEAVY_GIF_INTERVAL_SEC = 21600;
@@ -94,8 +103,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** IPS_VARIABLEMESSAGE + VM_UPDATE — Variable geändert (Symcon Messages-Doku) */
     private const VM_UPDATE_MESSAGE = 10603;
 
-    /** IPS_KERNELMESSAGE + KR_READY — Kernel läuft (nach IPS-Dienst-Neustart) */
+    /** IPS_KERNELMESSAGE + KR_READY — Kernel läuft */
     private const IPS_KERNEL_READY_MESSAGE = 10103;
+
+    /** IPS_KERNELSTARTED — nach KR_READY, synchron verarbeitet (ab 4.2) */
+    private const IPS_KERNEL_STARTED_MESSAGE = 10001;
 
     /** Mindest-Timerintervall Werte + Pixoo (Sekunden) */
     private const UPDATE_INTERVAL_MIN_SEC = 5;
@@ -371,33 +383,80 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return IPS_GetKernelRunlevel() >= self::IPS_KERNEL_READY_MESSAGE;
     }
 
-    /** Abonniert KR_READY (Sender 0), damit Instanzen nach IPS-Dienst-Neustart ohne erneutes „Übernehmen“ laufen. */
+    /**
+     * Kernel-Meldungen (nicht persistent über Neustart) + sofort starten wenn Kernel schon bereit.
+     * Zusätzlich StartupGuard-Timer in ensureTimerDefinitions.
+     */
     private function ensureKernelLifecycleMessages(): void
+    {
+        $this->registerKernelMessageIfMissing(self::IPS_KERNEL_READY_MESSAGE);
+        $this->registerKernelMessageIfMissing(self::IPS_KERNEL_STARTED_MESSAGE);
+        if ($this->ReadPropertyBoolean('Active') && $this->isIpsKernelReady()) {
+            $this->triggerInstanceRuntimeFromKernel('Kernel-Lifecycle');
+        }
+    }
+
+    private function registerKernelMessageIfMissing(int $messageId): void
     {
         $list = $this->GetMessageList();
         if (is_array($list) && isset($list[0]) && is_array($list[0])) {
-            if (in_array(self::IPS_KERNEL_READY_MESSAGE, $list[0], true)) {
+            if (in_array($messageId, $list[0], true)) {
                 return;
             }
         }
-        $this->RegisterMessage(0, self::IPS_KERNEL_READY_MESSAGE);
+        $this->RegisterMessage(0, $messageId);
     }
 
-    /** Nach IPS-Neustart: ApplyChanges() wird nicht erneut aufgerufen — hier Timer/Abos setzen. */
-    private function onIpsKernelReady(): void
+    private function triggerInstanceRuntimeFromKernel(string $source): void
     {
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
-        $configIssues = $this->collectConfigIssues();
-        if ($configIssues !== []) {
-            $this->SetStatus(201);
-            $this->stopAllTimers();
-            $this->clearVariableMessageSubscriptions();
+        if ($this->collectConfigIssues() !== []) {
             return;
         }
+        $lastRaw = $this->GetBuffer('LastRuntimeStartAt');
+        $last = is_numeric($lastRaw) ? (float) $lastRaw : 0.0;
+        if ($last > 0.0 && (microtime(true) - $last) < self::KERNEL_RUNTIME_START_DEBOUNCE_SEC) {
+            return;
+        }
+        $this->SetBuffer('LastRuntimeStartAt', (string) microtime(true));
         $this->SetStatus(102);
-        $this->SendDebug('Start', 'IPS-Kernel bereit — Instanz-Laufzeit wird gestartet.', 0);
+        $this->SendDebug('Start', $source . ' — Instanz-Laufzeit wird gestartet.', 0);
+        $this->startInstanceRuntime(true);
+    }
+
+    /** KR_READY — ApplyChanges() läuft nach Neustart oft nicht. */
+    private function onIpsKernelReady(): void
+    {
+        $this->triggerInstanceRuntimeFromKernel('KR_READY');
+    }
+
+    /** IPS_KERNELSTARTED — synchron nach KR_READY. */
+    private function onIpsKernelStarted(): void
+    {
+        $this->triggerInstanceRuntimeFromKernel('KERNELSTARTED');
+    }
+
+    /**
+     * Unabhängig von RegisterMessage: wenn Update-Timer nach IPS-Neustart noch aus ist, Laufzeit starten.
+     */
+    public function StartupGuardRecovery(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        if (!$this->isIpsKernelReady()) {
+            return;
+        }
+        $this->ensureKernelLifecycleMessages();
+        if ($this->collectConfigIssues() !== []) {
+            return;
+        }
+        if ($this->GetTimerInterval('Update') > 0) {
+            return;
+        }
+        $this->SendDebug('Start', 'StartupGuard: Update-Timer aus — Recovery nach IPS-Neustart.', 0);
         $this->startInstanceRuntime(true);
     }
 
@@ -515,6 +574,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'HourlyReinit' => 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);',
             'SmardFetch' => 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);',
             'HealthWatchdog' => 'SMAPX_HealthWatchdog($_IPS[\'TARGET\']);',
+            'StartupGuard' => 'SMAPX_StartupGuardRecovery($_IPS[\'TARGET\']);',
         ];
         foreach ($timers as $name => $script) {
             $this->registerTimerIfMissing($name, $script);
@@ -560,6 +620,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SetTimerInterval('HourlyReinit', 0);
         $this->SetTimerInterval('SmardFetch', 0);
         $this->SetTimerInterval('HealthWatchdog', 0);
+        $this->SetTimerInterval('StartupGuard', 0);
     }
 
     /** Timer-Intervalle gemäß Konfiguration setzen (auch vom Watchdog bei Ausfall). */
@@ -588,6 +649,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->SetTimerInterval('SmardFetch', 0);
         }
         $this->SetTimerInterval('HealthWatchdog', self::HEALTH_WATCHDOG_MS);
+        $this->SetTimerInterval('StartupGuard', self::STARTUP_GUARD_MS);
     }
 
     /**
@@ -642,6 +704,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SetBuffer('PixooFailCount', '0');
         $this->SetBuffer('PixooHeavyPausedUntil', '');
         $this->SetBuffer('PixooLightPausedUntil', '');
+        $this->ensureTimerDefinitions();
+        $this->ensureKernelLifecycleMessages();
         $this->startActiveTimers();
         $this->syncMessageSubscriptions();
         try {
@@ -674,12 +738,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if ($channel !== null) {
             $this->SetBuffer('PixooChannelIndex', (string) $channel);
         }
-        $onClockChannel = $channel === 0;
+        $wrongDrawChannel = $channel !== null && $channel !== self::PIXOO_CHANNEL_CUSTOM;
 
-        if ($onClockChannel) {
+        if ($wrongDrawChannel) {
             return [
                 'needs' => true,
-                'reason' => 'Pixoo-Kanal 0 (Ziffernblatt) — Cloud-Kanal erzwingen',
+                'reason' => 'Pixoo-Kanal ' . $channel . ' (nicht Custom/HTTP) — Draw-Kanal erzwingen',
             ];
         }
         if ($displayStale) {
@@ -699,9 +763,15 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
     {
         unset($TimeStamp, $Data);
-        if ($SenderID === 0 && $Message === self::IPS_KERNEL_READY_MESSAGE) {
-            $this->onIpsKernelReady();
-            return;
+        if ($SenderID === 0) {
+            if ($Message === self::IPS_KERNEL_READY_MESSAGE) {
+                $this->onIpsKernelReady();
+                return;
+            }
+            if ($Message === self::IPS_KERNEL_STARTED_MESSAGE) {
+                $this->onIpsKernelStarted();
+                return;
+            }
         }
         if ($Message !== self::VM_UPDATE_MESSAGE) {
             return;
@@ -1091,6 +1161,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 return;
             }
 
+            if (!$this->pixooIsOnDrawChannel($pixooIp)) {
+                $this->pixooEnsureDrawChannel($pixooIp);
+            }
+
             $eff = $this->getEffectivePixooBrightness();
             if ($this->GetBuffer('PixooLastBrightness') !== (string) $eff) {
                 $this->PixooSetBrightness($pixooIp, $eff);
@@ -1184,7 +1258,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return false;
     }
 
-    /** Stündlicher Timer: Cloud-Kanal + Auffrischung; alle 6 h zusätzlich Hintergrund-GIF. */
+    /** Stündlicher Timer: Custom-Kanal + Auffrischung; alle 6 h zusätzlich Hintergrund-GIF. */
     public function ReinitDisplay(): void
     {
         if (!$this->ReadPropertyBoolean('Active')) {
@@ -1219,6 +1293,32 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
+        $this->runHeavyReinitCore();
+    }
+
+    /** Formular-Button: Erfolg oder Fehlertext statt blindem OK. */
+    public function HeavyReinitDisplayFeedback(): string
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return 'Modul ist inaktiv.';
+        }
+        if (trim($this->ReadPropertyString('PixooIp')) === '') {
+            return 'Keine Pixoo-IP konfiguriert.';
+        }
+        if (!$this->requireCurlExtension('Pixoo')) {
+            return 'PHP-Erweiterung cURL fehlt.';
+        }
+        if ($this->collectConfigIssues() !== []) {
+            return 'Konfiguration unvollständig (sechs Quellvariablen prüfen).';
+        }
+        if ($this->runHeavyReinitCore()) {
+            return 'Display initialisiert (Kanal Custom, Seite ' . self::PIXOO_CUSTOM_PAGE . ').';
+        }
+        return 'Display-Init fehlgeschlagen — Meldungsarchiv Kategorie „Pixoo“ prüfen.';
+    }
+
+    private function runHeavyReinitCore(): bool
+    {
         try {
             $values = $this->updateEnergyValues();
             if ($values === null) {
@@ -1228,9 +1328,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->SetBuffer('PixooHeavyPausedUntil', '');
             $this->SetBuffer('PixooLightPausedUntil', '');
             $this->syncPixooDisplay($values, false, true, true);
+            return $this->GetBuffer('PixooInited') === '1';
         } catch (\Throwable $e) {
             $this->SetBuffer('PixooInited', '0');
             $this->SendDebug('Pixoo', 'HeavyReinitDisplay: ' . $e->getMessage(), 0);
+            return false;
         }
     }
 
@@ -1421,7 +1523,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private function initPixooDisplayLight(string $ip, array $values): void
     {
-        $this->pixooEnsureCloudChannel($ip);
+        $this->pixooEnsureDrawChannel($ip);
         $eff = $this->getEffectivePixooBrightness();
         $this->pixooPostCommand($ip, [
             'Command' => 'Channel/SetBrightness',
@@ -1437,7 +1539,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private function initPixooDisplayHeavy(string $ip, array $values): void
     {
-        $this->pixooEnsureCloudChannel($ip);
+        $this->pixooEnsureDrawChannel($ip);
+        $this->pixooPrepareHeavyDraw($ip);
         $eff = $this->getEffectivePixooBrightness();
         $this->pixooPostCommand($ip, [
             'Command' => 'Channel/SetBrightness',
@@ -1450,13 +1553,53 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SetBuffer('PixooLastHeavyGifAt', (string) time());
     }
 
-    private function pixooEnsureCloudChannel(string $ip): void
+    /** HTTP-Draw: Custom-Kanal (3) + Custom-Seite — nicht Cloud (1). */
+    private function pixooEnsureDrawChannel(string $ip): void
     {
+        $page = self::PIXOO_CUSTOM_PAGE;
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Channel/SetCustomPageIndex',
+            'CustomPageIndex' => $page,
+        ]);
         $this->pixooPostCommand($ip, [
             'Command' => 'Channel/SetIndex',
-            'SelectIndex' => self::PIXOO_CHANNEL_CLOUD,
+            'SelectIndex' => self::PIXOO_CHANNEL_CUSTOM,
         ]);
-        $this->SetBuffer('PixooChannelIndex', (string) self::PIXOO_CHANNEL_CLOUD);
+        $ch = $this->pixooGetChannelIndex($ip);
+        if ($ch !== self::PIXOO_CHANNEL_CUSTOM) {
+            throw new \RuntimeException(
+                'Channel/GetIndex: erwartet Custom (' . self::PIXOO_CHANNEL_CUSTOM . '), ist '
+                . ($ch === null ? '?' : (string) $ch)
+            );
+        }
+        $this->SetBuffer('PixooChannelIndex', (string) self::PIXOO_CHANNEL_CUSTOM);
+    }
+
+    private function pixooIsOnDrawChannel(string $ip): bool
+    {
+        $buf = $this->GetBuffer('PixooChannelIndex');
+        if ($buf === (string) self::PIXOO_CHANNEL_CUSTOM) {
+            return true;
+        }
+        $ch = $this->pixooGetChannelIndex($ip);
+        if ($ch === null) {
+            return false;
+        }
+        $this->SetBuffer('PixooChannelIndex', (string) $ch);
+        return $ch === self::PIXOO_CHANNEL_CUSTOM;
+    }
+
+    private function pixooPrepareHeavyDraw(string $ip): void
+    {
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Channel/OnOffScreen',
+            'OnOff' => 1,
+        ]);
+        try {
+            $this->pixooPostCommand($ip, ['Command' => 'Draw/ResetHttpGifId']);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Pixoo', 'Draw/ResetHttpGifId: ' . $e->getMessage(), 0);
+        }
     }
 
     private function pixooGetChannelIndex(string $ip): ?int
