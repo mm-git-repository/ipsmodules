@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 23;
+    private const MODULE_BUILD = 24;
 
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
@@ -60,6 +60,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** Nach IPS-Neustart: RegisterMessage fehlt — Update-Timer per Guard nachziehen (ms) */
     private const STARTUP_GUARD_MS = 30000;
 
+    /** Erstes StartupGuard-Intervall nach Übernehmen/Aktivieren (schneller erster Check) */
+    private const STARTUP_GUARD_FAST_MS = 10000;
+
     /** Doppelstart durch KR_READY + KERNELSTARTED vermeiden (Sekunden) */
     private const KERNEL_RUNTIME_START_DEBOUNCE_SEC = 3.0;
 
@@ -103,8 +106,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** IPS_VARIABLEMESSAGE + VM_UPDATE — Variable geändert (Symcon Messages-Doku) */
     private const VM_UPDATE_MESSAGE = 10603;
 
-    /** IPS_KERNELMESSAGE + KR_READY — Kernel läuft */
-    private const IPS_KERNEL_READY_MESSAGE = 10103;
+    /** IPS_KERNELMESSAGE — Kernel-Status (Symcon: RegisterMessage(0, 10100)) */
+    private const IPS_KERNEL_MESSAGE = 10100;
+
+    /** KR_READY — Runlevel in MessageSink $Data[0] bzw. IPS_GetKernelRunlevel() */
+    private const KR_READY_RUNLEVEL = 10103;
 
     /** IPS_KERNELSTARTED — nach KR_READY, synchron verarbeitet (ab 4.2) */
     private const IPS_KERNEL_STARTED_MESSAGE = 10001;
@@ -341,10 +347,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SetStatus(102);
         $this->SetBuffer('PixooInited', '0');
         $this->startInstanceRuntime(!$creating);
+        if ($this->isIpsKernelReady()) {
+            $this->triggerInstanceRuntimeFromKernel('ApplyChanges');
+        }
+        $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_FAST_MS);
     }
 
     /**
-     * Timer und VM_UPDATE-Abos starten. Bei IPS-Neustart erst nach KR_READY (10103), nicht nur bei „Übernehmen“.
+     * Timer und VM_UPDATE-Abos starten. Bei IPS-Neustart erst nach KR_READY, nicht nur bei Aktivieren.
      *
      * @param bool $runInitialCycle direkt einen Update-Zyklus (nach Neustart / Übernehmen)
      */
@@ -379,7 +389,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!function_exists('IPS_GetKernelRunlevel')) {
             return true;
         }
-        return IPS_GetKernelRunlevel() >= self::IPS_KERNEL_READY_MESSAGE;
+        return IPS_GetKernelRunlevel() >= self::KR_READY_RUNLEVEL;
     }
 
     /**
@@ -388,10 +398,58 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private function ensureKernelLifecycleMessages(): void
     {
-        $this->registerKernelMessageIfMissing(self::IPS_KERNEL_READY_MESSAGE);
-        $this->registerKernelMessageIfMissing(self::IPS_KERNEL_STARTED_MESSAGE);
+        $this->registerKernelMessageIfMissing(self::IPS_KERNEL_MESSAGE);
         if ($this->ReadPropertyBoolean('Active') && $this->isIpsKernelReady()) {
             $this->triggerInstanceRuntimeFromKernel('Kernel-Lifecycle');
+        }
+    }
+
+    private function kernelRunlevelFromMessageData(array $data): ?int
+    {
+        if ($data === [] || !isset($data[0]) || !is_numeric($data[0])) {
+            return null;
+        }
+
+        return (int) $data[0];
+    }
+
+    private function isKernelReadyMessage(int $message, array $data): bool
+    {
+        if ($message === self::KR_READY_RUNLEVEL) {
+            return true;
+        }
+        if ($message !== self::IPS_KERNEL_MESSAGE) {
+            return false;
+        }
+        $runlevel = $this->kernelRunlevelFromMessageData($data);
+        if ($runlevel === null) {
+            return $this->isIpsKernelReady();
+        }
+
+        return $runlevel >= self::KR_READY_RUNLEVEL;
+    }
+
+    private function isKernelStartedMessage(int $message, array $data): bool
+    {
+        if ($message === self::IPS_KERNEL_STARTED_MESSAGE) {
+            return true;
+        }
+        if ($message !== self::IPS_KERNEL_MESSAGE) {
+            return false;
+        }
+
+        return $this->kernelRunlevelFromMessageData($data) === self::IPS_KERNEL_STARTED_MESSAGE;
+    }
+
+    private function handleKernelMessage(int $message, array $data): void
+    {
+        if ($this->isKernelReadyMessage($message, $data)) {
+            $this->onIpsKernelReady();
+
+            return;
+        }
+        if ($this->isKernelStartedMessage($message, $data)) {
+            $this->onIpsKernelStarted();
         }
     }
 
@@ -421,7 +479,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $this->SetBuffer('LastRuntimeStartAt', (string) microtime(true));
         $this->SetStatus(102);
-        $this->SendDebug('Start', $source . ' — Instanz-Laufzeit wird gestartet.', 0);
+        $this->SendDebug('Start', 'Laufzeit gestartet (Grund: ' . $source . ')', 0);
         $this->startInstanceRuntime(true);
     }
 
@@ -438,7 +496,60 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /**
-     * Unabhängig von RegisterMessage: wenn Update-Timer nach IPS-Neustart noch aus ist, Laufzeit starten.
+     * Update-Timer aus oder Werte veraltet — typisch nach IPS-Dienst-Neustart ohne ApplyChanges.
+     */
+    private function instanceNeedsRuntimeRecovery(): bool
+    {
+        if (!$this->ReadPropertyBoolean('Active') || $this->collectConfigIssues() !== []) {
+            return false;
+        }
+        if ($this->GetTimerInterval('Update') <= 0) {
+            return true;
+        }
+        $intervalSec = $this->getUpdateIntervalSec();
+        $staleSec = max(60, $intervalSec * 2);
+        $lastRaw = $this->GetBuffer('LastValuesAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        $now = time();
+        if ($last <= 0 || $last > $now) {
+            return true;
+        }
+
+        return ($now - $last) > $staleSec;
+    }
+
+    private function describeRuntimeRecoveryReason(): string
+    {
+        if ($this->GetTimerInterval('Update') <= 0) {
+            return 'Update-Timer aus';
+        }
+        $lastRaw = $this->GetBuffer('LastValuesAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        $age = $last > 0 ? (string) (time() - $last) : '?';
+
+        return 'Werte veraltet (letzte Aktualisierung vor ' . $age . ' s)';
+    }
+
+    /**
+     * Timer/Abos nachziehen wenn Laufzeit eingefroren wirkt (UpdateValues, StartupGuard).
+     */
+    private function bootstrapRuntimeIfNeeded(string $source = 'Bootstrap'): void
+    {
+        if (!$this->instanceNeedsRuntimeRecovery()) {
+            return;
+        }
+        if (!$this->isIpsKernelReady()) {
+            return;
+        }
+        if (!$this->ReadPropertyBoolean('Active') || $this->collectConfigIssues() !== []) {
+            return;
+        }
+        $this->ensureKernelLifecycleMessages();
+        $this->triggerInstanceRuntimeFromKernel($source);
+    }
+
+    /**
+     * Unabhängig von RegisterMessage: eingefrorene Laufzeit nach IPS-Neustart erkennen und starten.
      */
     public function StartupGuardRecovery(): void
     {
@@ -452,11 +563,13 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if ($this->collectConfigIssues() !== []) {
             return;
         }
-        if ($this->GetTimerInterval('Update') > 0) {
+        if (!$this->instanceNeedsRuntimeRecovery()) {
+            $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
+
             return;
         }
-        $this->SendDebug('Start', 'StartupGuard: Update-Timer aus — Recovery nach IPS-Neustart.', 0);
-        $this->startInstanceRuntime(true);
+        $this->bootstrapRuntimeIfNeeded('StartupGuard: ' . $this->describeRuntimeRecoveryReason());
+        $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
     }
 
     public function GetConfigurationForm(): string
@@ -770,16 +883,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
     {
-        unset($TimeStamp, $Data);
+        unset($TimeStamp);
         if ($SenderID === 0) {
-            if ($Message === self::IPS_KERNEL_READY_MESSAGE) {
-                $this->onIpsKernelReady();
-                return;
-            }
-            if ($Message === self::IPS_KERNEL_STARTED_MESSAGE) {
-                $this->onIpsKernelStarted();
-                return;
-            }
+            $this->handleKernelMessage($Message, $Data);
+
+            return;
         }
         if ($Message !== self::VM_UPDATE_MESSAGE) {
             return;
@@ -913,6 +1021,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active')) {
             return;
         }
+        $this->bootstrapRuntimeIfNeeded();
         try {
             $this->runUpdateCycle(false);
         } catch (\Throwable $e) {
