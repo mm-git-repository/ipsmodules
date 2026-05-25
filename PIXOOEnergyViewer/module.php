@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 22;
+    private const MODULE_BUILD = 23;
 
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
@@ -176,6 +176,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterTimer('HourlyReinit', 0, 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);');
         $this->RegisterTimer('SmardFetch', 0, 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);');
         $this->RegisterTimer('HealthWatchdog', 0, 'SMAPX_HealthWatchdog($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('StartupGuard', 0, 'SMAPX_StartupGuardRecovery($_IPS[\'TARGET\']);');
         $this->ensureKernelLifecycleMessages();
     }
 
@@ -314,9 +315,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     {
         $creating = (IPS_GetInstance($this->InstanceID)['InstanceStatus'] ?? 0) === 100;
         parent::ApplyChanges();
-        if (!$creating) {
-            $this->ensureTimerDefinitions();
-        }
+        $this->ensureTimerDefinitions();
         $this->ensureModuleVersionVariable();
         $this->applyModuleVersionInfo();
         $this->ensureKernelLifecycleMessages();
@@ -595,7 +594,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $missing = false;
         set_error_handler(static function (int $errno, string $errstr) use (&$missing): bool {
             unset($errno);
-            if (stripos($errstr, 'not registered') !== false) {
+            if (stripos($errstr, 'not registered') !== false
+                || stripos($errstr, 'does not exist') !== false) {
                 $missing = true;
 
                 return true;
@@ -615,21 +615,29 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     private function stopAllTimers(): void
     {
-        $this->SetTimerInterval('Update', 0);
-        $this->SetTimerInterval('PixooSync', 0);
-        $this->SetTimerInterval('HourlyReinit', 0);
-        $this->SetTimerInterval('SmardFetch', 0);
-        $this->SetTimerInterval('HealthWatchdog', 0);
-        $this->SetTimerInterval('StartupGuard', 0);
+        $this->setTimerIntervalSafe('Update', 0);
+        $this->setTimerIntervalSafe('PixooSync', 0);
+        $this->setTimerIntervalSafe('HourlyReinit', 0);
+        $this->setTimerIntervalSafe('SmardFetch', 0);
+        $this->setTimerIntervalSafe('HealthWatchdog', 0);
+        $this->setTimerIntervalSafe('StartupGuard', 0);
+    }
+
+    private function setTimerIntervalSafe(string $ident, int $intervalMs): void
+    {
+        if (!$this->timerIdentExists($ident)) {
+            return;
+        }
+        $this->SetTimerInterval($ident, $intervalMs);
     }
 
     /** Timer-Intervalle gemäß Konfiguration setzen (auch vom Watchdog bei Ausfall). */
     private function startActiveTimers(): void
     {
         $sec = $this->getUpdateIntervalSec();
-        $this->SetTimerInterval('Update', $sec * 1000);
+        $this->setTimerIntervalSafe('Update', $sec * 1000);
         /* Pixoo läuft im selben Zyklus wie UpdateValues() — kein zweiter Timer (Worker-Stau) */
-        $this->SetTimerInterval('PixooSync', 0);
+        $this->setTimerIntervalSafe('PixooSync', 0);
         $pixooIp = trim($this->ReadPropertyString('PixooIp'));
         $this->SendDebug(
             'Timer',
@@ -639,17 +647,17 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             0
         );
         if ($this->ReadPropertyBoolean('PixooHourlyReinit')) {
-            $this->SetTimerInterval('HourlyReinit', self::ONE_HOUR_MS);
+            $this->setTimerIntervalSafe('HourlyReinit', self::ONE_HOUR_MS);
         } else {
-            $this->SetTimerInterval('HourlyReinit', 0);
+            $this->setTimerIntervalSafe('HourlyReinit', 0);
         }
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
-            $this->SetTimerInterval('SmardFetch', self::SMARD_FETCH_MS);
+            $this->setTimerIntervalSafe('SmardFetch', self::SMARD_FETCH_MS);
         } else {
-            $this->SetTimerInterval('SmardFetch', 0);
+            $this->setTimerIntervalSafe('SmardFetch', 0);
         }
-        $this->SetTimerInterval('HealthWatchdog', self::HEALTH_WATCHDOG_MS);
-        $this->SetTimerInterval('StartupGuard', self::STARTUP_GUARD_MS);
+        $this->setTimerIntervalSafe('HealthWatchdog', self::HEALTH_WATCHDOG_MS);
+        $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
     }
 
     /**
