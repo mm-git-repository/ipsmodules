@@ -35,7 +35,7 @@
         {
             "type": "CheckBox",
             "name": "PixooHourlyReinit",
-            "caption": "Display stündlich auffrischen (Helligkeit + Texte; leicht — gegen Zurückschalten auf Ziffernblatt, ohne schweres GIF-Init)"
+            "caption": "Display stündlich auffrischen (Cloud-Kanal + Texte; alle 6 h Hintergrund-GIF gegen Ziffernblatt)"
         },
         {
             "type": "ExpansionPanel",
