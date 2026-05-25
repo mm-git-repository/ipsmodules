@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.1';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 32;
+    private const MODULE_BUILD = 33;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -443,25 +443,37 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $configSnapshot = $this->takeSourceVariableConfigurationSnapshot();
             $this->ensureConfigurationDefaults();
             $creating = $this->getInstanceStatus() === self::IS_CREATING;
-            parent::ApplyChanges();
-            $restoredFromSnapshot = $this->restoreSourceVariableIdsFromSnapshot($configSnapshot);
-            $restoredFromBuffer = $this->restoreSourceVariableIdsFromBuffer();
-            if ($restoredFromSnapshot > 0 || $restoredFromBuffer > 0) {
+            $invokeParent = $this->shouldInvokeParentApplyChanges();
+            if ($invokeParent) {
                 parent::ApplyChanges();
+                $restoredFromSnapshot = $this->restoreSourceVariableIdsFromSnapshot($configSnapshot);
                 if ($restoredFromSnapshot > 0) {
+                    parent::ApplyChanges();
                     $this->SendDebug(
                         'Konfiguration',
-                        $restoredFromSnapshot . ' Quellvariablen-Property(s) aus gespeicherter Konfiguration wiederhergestellt.',
+                        $restoredFromSnapshot . ' Quellvariablen-Property(s) aus Konfigurations-Snapshot wiederhergestellt.',
                         0
                     );
                 }
-                if ($restoredFromBuffer > 0) {
-                    $this->SendDebug(
-                        'Konfiguration',
-                        $restoredFromBuffer . ' Quellvariablen-Property(s) aus Instanz-Puffer-Backup wiederhergestellt.',
-                        0
-                    );
-                }
+            } else {
+                $this->SendDebug(
+                    'Konfiguration',
+                    'parent::ApplyChanges() übersprungen (gespeichertes Quellvariablen-Backup, keine offenen Konfig-Änderungen).',
+                    0
+                );
+            }
+            $restoredFromBackup = $this->restoreSourceVariableIdsFromBackup();
+            if ($restoredFromBackup > 0 && $invokeParent) {
+                parent::ApplyChanges();
+                $this->SendDebug(
+                    'Konfiguration',
+                    $restoredFromBackup . ' Quellvariablen-Property(s) aus Backup-Datei/Puffer wiederhergestellt.',
+                    0
+                );
+            }
+            $captured = $this->captureSourceVariableIdsFromAllSources();
+            if (count($captured) === count($this->getVariableSlotDefinitions())) {
+                $this->writeSourceVariableIdBackup($captured);
             }
             $this->ensureTimerDefinitions();
             $this->ensureModuleVersionVariable();
@@ -513,7 +525,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 $this->triggerInstanceRuntimeFromKernel('ApplyChanges');
             }
             $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_FAST_MS);
-            $this->backupSourceVariableIdsToBuffer();
             $this->SendDebug('Start', 'ApplyChanges abgeschlossen, Status=' . $this->getInstanceStatus(), 0);
         } catch (\Throwable $e) {
             $this->SendDebug('Start', 'ApplyChanges: ' . $e->getMessage(), 0);
@@ -958,7 +969,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
             return;
         }
-        $this->restoreSourceVariableIdsFromBuffer();
+        $this->restoreSourceVariableIdsFromBackup();
         $this->recoverConfigStatusIfDeferred();
         $this->armStartupGuardTimer();
         $this->ensureKernelLifecycleMessages();
@@ -1853,6 +1864,42 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /** Formular-Button: Erfolg oder Fehlertext statt blindem OK. */
+    /**
+     * Formular-Button: sechs Quellvariablen-IDs in Datei + Puffer schreiben (überlebt IPS-Neustart).
+     */
+    public function PersistSourceVariableIdsFeedback(): string
+    {
+        $ids = $this->captureSourceVariableIdsFromAllSources();
+        $parts = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            $parts[] = $key . '=' . ($ids[$key] ?? 0);
+        }
+        $summary = implode(', ', $parts);
+        if (count($ids) < count($this->getVariableSlotDefinitions())) {
+            return 'Nur ' . count($ids) . '/6 IDs erkannt (' . $summary
+                . '). Im Formular alle sechs Variablen wählen, dann erneut klicken.';
+        }
+        $this->writeSourceVariableIdBackup($ids);
+        if (function_exists('IPS_SetProperty')) {
+            foreach ($ids as $key => $id) {
+                IPS_SetProperty($this->InstanceID, $key, $id);
+            }
+        }
+        if (function_exists('IPS_ApplyChanges') && (function_exists('IPS_HasChanges') && IPS_HasChanges($this->InstanceID))) {
+            IPS_ApplyChanges($this->InstanceID);
+        }
+        if ($this->ReadPropertyBoolean('Active') && !$this->hasBlockingConfigIssues()) {
+            $this->SetStatus(self::IS_ACTIVE);
+            $this->ensureTimerDefinitions();
+            $this->startActiveTimers();
+            $this->syncMessageSubscriptions();
+        }
+        $path = $this->getSourceVariableBackupFilePath();
+
+        return 'Gespeichert: ' . $summary . ($path !== '' ? ' — Backup: ' . $path : '');
+    }
+
     public function HeavyReinitDisplayFeedback(): string
     {
         if (!$this->ReadPropertyBoolean('Active')) {
@@ -2022,19 +2069,52 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private function getPersistedConfigurationValues(): ?array
     {
-        if (!function_exists('IPS_GetConfiguration')) {
-            return null;
-        }
-        $raw = IPS_GetConfiguration($this->InstanceID);
-        $data = json_decode($raw, true);
-        if (!is_array($data)) {
-            return null;
-        }
-        if (isset($data['configuration']) && is_array($data['configuration'])) {
-            return $data['configuration'];
+        if (function_exists('IPS_GetConfiguration')) {
+            $raw = IPS_GetConfiguration($this->InstanceID);
+            $data = json_decode($raw, true);
+            if (is_array($data)) {
+                if (isset($data['configuration']) && is_array($data['configuration'])) {
+                    return $data['configuration'];
+                }
+
+                return $data;
+            }
         }
 
-        return $data;
+        return $this->loadConfigurationFromInstanceStorageFile();
+    }
+
+    /** @return array<string, mixed>|null */
+    private function loadConfigurationFromInstanceStorageFile(): ?array
+    {
+        if (!function_exists('IPS_GetKernelDir')) {
+            return null;
+        }
+        $base = rtrim((string) IPS_GetKernelDir(), "\\/") . DIRECTORY_SEPARATOR . 'instances';
+        $candidates = [
+            $base . DIRECTORY_SEPARATOR . $this->InstanceID . '.ipson',
+            $base . DIRECTORY_SEPARATOR . $this->InstanceID . '.json',
+        ];
+        foreach ($candidates as $path) {
+            if (!is_readable($path)) {
+                continue;
+            }
+            $raw = @file_get_contents($path);
+            if (!is_string($raw) || $raw === '') {
+                continue;
+            }
+            $data = json_decode($raw, true);
+            if (!is_array($data)) {
+                continue;
+            }
+            if (isset($data['configuration']) && is_array($data['configuration'])) {
+                return $data['configuration'];
+            }
+
+            return $data;
+        }
+
+        return null;
     }
 
     /** @param mixed $stored */
@@ -2103,77 +2183,173 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return $restored;
     }
 
-    private function backupSourceVariableIdsToBuffer(): void
+    /**
+     * parent::ApplyChanges() nach IPS-Neustart setzt SelectVariable-Properties oft auf 0 — dann überspringen.
+     */
+    private function shouldInvokeParentApplyChanges(): bool
     {
-        $backup = [];
-        foreach ($this->getVariableSlotDefinitions() as $def) {
-            $key = $def['property'];
-            $id = $this->readConfiguredPropertyInteger($key);
-            if ($id > 0) {
-                $backup[$key] = $id;
-            }
+        $status = $this->getInstanceStatus();
+        if ($status === self::IS_CREATING || $status === self::IS_NOTCREATED) {
+            return true;
         }
-        if (count($backup) !== count($this->getVariableSlotDefinitions())) {
-            return;
+        if (function_exists('IPS_HasChanges') && IPS_HasChanges($this->InstanceID)) {
+            return true;
         }
-        $encoded = json_encode($backup, JSON_UNESCAPED_UNICODE);
-        if ($encoded !== false && $encoded !== '') {
-            $this->SetBuffer(self::SOURCE_VAR_ID_BACKUP_BUFFER, $encoded);
-        }
+
+        return !$this->hasCompleteSourceVariableIdBackup();
     }
 
-    private function restoreSourceVariableIdsFromBuffer(): int
+    private function hasCompleteSourceVariableIdBackup(): bool
     {
+        return count($this->loadSourceVariableIdBackup()) === count($this->getVariableSlotDefinitions());
+    }
+
+    private function getSourceVariableBackupFilePath(): string
+    {
+        if (!function_exists('IPS_GetKernelDir')) {
+            return '';
+        }
+        $dir = rtrim((string) IPS_GetKernelDir(), "\\/") . DIRECTORY_SEPARATOR . 'storage';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0777, true);
+        }
+
+        return $dir . DIRECTORY_SEPARATOR . 'SMAPX_' . $this->InstanceID . '_sourcevars.json';
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    private function loadSourceVariableIdBackup(): array
+    {
+        $path = $this->getSourceVariableBackupFilePath();
+        if ($path !== '' && is_readable($path)) {
+            $raw = @file_get_contents($path);
+            if (is_string($raw) && $raw !== '') {
+                $data = json_decode($raw, true);
+                if (is_array($data)) {
+                    $normalized = $this->normalizeSourceVariableIdBackup($data);
+                    if ($normalized !== []) {
+                        return $normalized;
+                    }
+                }
+            }
+        }
         $raw = $this->GetBuffer(self::SOURCE_VAR_ID_BACKUP_BUFFER);
         if ($raw === '' || $raw === '0') {
-            return 0;
+            return [];
         }
-        $backup = json_decode($raw, true);
-        if (!is_array($backup)) {
-            return 0;
-        }
+        $data = json_decode($raw, true);
+
+        return is_array($data) ? $this->normalizeSourceVariableIdBackup($data) : [];
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     *
+     * @return array<string, int>
+     */
+    private function normalizeSourceVariableIdBackup(array $data): array
+    {
         $normalized = [];
         foreach ($this->getVariableSlotDefinitions() as $def) {
             $key = $def['property'];
-            if (!isset($backup[$key])) {
-                return 0;
+            if (!array_key_exists($key, $data)) {
+                return [];
             }
-            $id = self::migrateCoerceInt($backup[$key]);
+            $id = self::migrateCoerceInt($data[$key]);
             if ($id <= 0) {
-                return 0;
+                return [];
             }
             $normalized[$key] = $id;
         }
 
-        return $this->restoreSourceVariableIdsFromSnapshot($normalized);
+        return $normalized;
     }
 
-    /** Property aus Instanz-JSON / Puffer, falls ReadProperty* nach Neustart noch 0 liefert. */
+    /**
+     * @param array<string, int> $ids
+     */
+    private function writeSourceVariableIdBackup(array $ids): void
+    {
+        if (count($ids) !== count($this->getVariableSlotDefinitions())) {
+            return;
+        }
+        $encoded = json_encode($ids, JSON_UNESCAPED_UNICODE);
+        if ($encoded === false || $encoded === '') {
+            return;
+        }
+        $this->SetBuffer(self::SOURCE_VAR_ID_BACKUP_BUFFER, $encoded);
+        $path = $this->getSourceVariableBackupFilePath();
+        if ($path !== '') {
+            @file_put_contents($path, $encoded);
+            $this->SendDebug('Konfiguration', 'Quellvariablen-Backup geschrieben: ' . $path, 0);
+        }
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    private function captureSourceVariableIdsFromAllSources(): array
+    {
+        $result = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            $id = 0;
+            if (function_exists('IPS_GetProperty')) {
+                $id = self::migrateCoerceInt(IPS_GetProperty($this->InstanceID, $key));
+            }
+            if ($id <= 0) {
+                $id = $this->ReadPropertyInteger($key);
+            }
+            $values = $this->getPersistedConfigurationValues();
+            if ($id <= 0 && $values !== null && array_key_exists($key, $values)) {
+                $id = $this->coerceVariableIdFromStoredValue($values[$key]);
+            }
+            if ($id > 0) {
+                $result[$key] = $id;
+            }
+        }
+
+        return $result;
+    }
+
+    private function restoreSourceVariableIdsFromBackup(): int
+    {
+        $backup = $this->loadSourceVariableIdBackup();
+        if ($backup === []) {
+            return 0;
+        }
+
+        return $this->restoreSourceVariableIdsFromSnapshot($backup);
+    }
+
+    /** Property: zuerst Backup-Datei (überlebt parent::ApplyChanges(0)), dann JSON/Puffer/ReadProperty. */
     private function readConfiguredPropertyInteger(string $key): int
     {
+        $backup = $this->loadSourceVariableIdBackup();
+        if (isset($backup[$key]) && $backup[$key] > 0) {
+            return $backup[$key];
+        }
         $fromProperty = $this->ReadPropertyInteger($key);
         if ($fromProperty > 0) {
             return $fromProperty;
         }
-        $values = $this->getPersistedConfigurationValues();
-        if ($values !== null && array_key_exists($key, $values)) {
-            $fromFile = $this->coerceVariableIdFromStoredValue($values[$key]);
-            if ($fromFile > 0) {
-                return $fromFile;
+        if (function_exists('IPS_GetProperty')) {
+            $fromIps = self::migrateCoerceInt(IPS_GetProperty($this->InstanceID, $key));
+            if ($fromIps > 0) {
+                return $fromIps;
             }
         }
-        $raw = $this->GetBuffer(self::SOURCE_VAR_ID_BACKUP_BUFFER);
-        if ($raw !== '' && $raw !== '0') {
-            $backup = json_decode($raw, true);
-            if (is_array($backup) && isset($backup[$key])) {
-                $fromBuffer = self::migrateCoerceInt($backup[$key]);
-                if ($fromBuffer > 0) {
-                    return $fromBuffer;
-                }
+        $values = $this->getPersistedConfigurationValues();
+        if ($values !== null && array_key_exists($key, $values)) {
+            $fromConfig = $this->coerceVariableIdFromStoredValue($values[$key]);
+            if ($fromConfig > 0) {
+                return $fromConfig;
             }
         }
 
-        return $fromProperty;
+        return 0;
     }
 
     private function logConfiguredSourceVariableIds(): void

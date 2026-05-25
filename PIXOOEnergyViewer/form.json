@@ -184,6 +184,15 @@
     ],
     "actions": [
         {
+            "type": "Label",
+            "caption": "Wichtig nach Modul-Update: alle sechs Quellvariablen setzen → Übernehmen → Button „Quellvariablen dauerhaft speichern“ (meldet sechs IDs > 0). Erst dann IPS-Neustart testen."
+        },
+        {
+            "type": "Button",
+            "caption": "Quellvariablen dauerhaft speichern",
+            "onClick": "echo SMAPX_PersistSourceVariableIdsFeedback($id);"
+        },
+        {
             "type": "Button",
             "caption": "SMARD-Preis laden",
             "onClick": "echo SMAPX_SmardLoadActionFeedback($id);"
