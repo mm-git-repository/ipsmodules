@@ -9,7 +9,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 2;
+    private const MODULE_BUILD = 3;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -186,20 +186,26 @@ class TuyaWaterQuality extends IPSModuleStrict
         $this->DisableAction('RawDps');
     }
 
+    private function variableExists(string $ident): bool
+    {
+        $vid = @IPS_GetVariableIDByName($ident, $this->InstanceID);
+
+        return is_int($vid) && $vid > 0;
+    }
+
     private function ensureModuleVersionVariable(): void
     {
-        if (@$this->GetIDByIdent('ModuleVersion') !== 0) {
+        if ($this->variableExists('ModuleVersion')) {
             return;
         }
 
-        $textPres = IPS_GetVariableProfile('~TextBox') ? '~TextBox' : '';
-        $this->RegisterVariableString('ModuleVersion', 'Modulversion', $textPres, 999);
+        $this->RegisterVariableString('ModuleVersion', 'Modulversion', '~TextBox', 999);
         $this->DisableAction('ModuleVersion');
     }
 
     private function syncModuleVersionVariable(): void
     {
-        if (@$this->GetIDByIdent('ModuleVersion') === 0) {
+        if (!$this->variableExists('ModuleVersion')) {
             return;
         }
 

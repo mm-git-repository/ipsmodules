@@ -9,7 +9,7 @@ class PoolControl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 3;
+    private const MODULE_BUILD = 4;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -235,10 +235,10 @@ class PoolControl extends IPSModuleStrict
         $rounded = round($ph, 2);
         $lastSyncTime = 0;
         $lastSyncValue = -1.0;
-        if (@$this->GetIDByIdent('LastPhSync') !== 0) {
+        if ($this->variableExists('LastPhSync')) {
             $lastSyncTime = (int) $this->GetValue('LastPhSync');
         }
-        if (@$this->GetIDByIdent('LastPhSyncValue') !== 0) {
+        if ($this->variableExists('LastPhSyncValue')) {
             $lastSyncValue = (float) $this->GetValue('LastPhSyncValue');
         }
 
@@ -365,9 +365,16 @@ class PoolControl extends IPSModuleStrict
         }
     }
 
+    private function variableExists(string $ident): bool
+    {
+        $vid = @IPS_GetVariableIDByName($ident, $this->InstanceID);
+
+        return is_int($vid) && $vid > 0;
+    }
+
     private function ensureModuleVersionVariable(): void
     {
-        if (@$this->GetIDByIdent('ModuleVersion') !== 0) {
+        if ($this->variableExists('ModuleVersion')) {
             return;
         }
 
@@ -377,7 +384,7 @@ class PoolControl extends IPSModuleStrict
 
     private function syncModuleVersionVariable(): void
     {
-        if (@$this->GetIDByIdent('ModuleVersion') === 0) {
+        if (!$this->variableExists('ModuleVersion')) {
             return;
         }
 
