@@ -9,7 +9,7 @@ class PoolControl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 4;
+    private const MODULE_BUILD = 5;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;

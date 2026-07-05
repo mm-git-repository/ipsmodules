@@ -11,16 +11,20 @@
             "caption": "Aktiv"
         },
         {
-            "type": "Instance",
+            "type": "SelectInstance",
             "name": "SensorInstanceId",
             "caption": "Sensor-Instanz (Yieryi Wasserqualität)",
-            "moduleID": "{E7C4A891-3D2F-4B6E-9A1C-5F8E2D0B4A71}"
+            "validModules": [
+                "{E7C4A891-3D2F-4B6E-9A1C-5F8E2D0B4A71}"
+            ]
         },
         {
-            "type": "Instance",
+            "type": "SelectInstance",
             "name": "WifiWhirlInstanceId",
             "caption": "WifiWhirl-Instanz (optional, für pH-Sync)",
-            "moduleID": "{D5E9B2F3-A048-5B6D-E7F8-901234567890}"
+            "validModules": [
+                "{D5E9B2F3-A048-5B6D-E7F8-901234567890}"
+            ]
         },
         {
             "type": "NumberSpinner",
