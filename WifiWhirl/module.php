@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 6;
+    private const MODULE_BUILD = 8;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -429,15 +429,9 @@ class WifiWhirl extends IPSModuleStrict
 
     private function handleAutomationEditorRequest(mixed $value): void
     {
-        if (is_string($value)) {
-            $payload = json_decode($value, true);
-        } elseif (is_array($value)) {
-            $payload = $value;
-        } else {
-            $payload = null;
-        }
+        $payload = $this->decodeAutomationEditorPayload($value);
 
-        if (!is_array($payload)) {
+        if ($payload === null) {
             $this->pushEditorVisualization([
                 'message' => 'Ungültige Anfrage',
                 'messageOk' => false,
@@ -458,18 +452,73 @@ class WifiWhirl extends IPSModuleStrict
         };
     }
 
-    /** @return array<string, mixed> */
-    private function buildEditorPayload(?string $message = null, bool $messageOk = true): array
+    /** @return array<string, mixed>|null */
+    private function decodeAutomationEditorPayload(mixed $value): ?array
     {
+        if (is_string($value)) {
+            $payload = json_decode($value, true);
+        } elseif (is_array($value)) {
+            $payload = $value;
+        } elseif (is_object($value)) {
+            $payload = json_decode(json_encode($value), true);
+        } else {
+            $payload = null;
+        }
+
+        if (!is_array($payload)) {
+            return null;
+        }
+
+        foreach (['pump', 'heater'] as $key) {
+            if (!isset($payload[$key])) {
+                continue;
+            }
+            if (is_string($payload[$key])) {
+                $decoded = json_decode($payload[$key], true);
+                $payload[$key] = is_array($decoded) ? $decoded : [];
+            } elseif (is_object($payload[$key])) {
+                $payload[$key] = json_decode(json_encode($payload[$key]), true) ?? [];
+            }
+            if (!is_array($payload[$key])) {
+                $payload[$key] = [];
+                continue;
+            }
+            $payload[$key] = array_values(array_map(static function (mixed $row): array {
+                if (is_array($row)) {
+                    return $row;
+                }
+                if (is_object($row)) {
+                    return json_decode(json_encode($row), true) ?? [];
+                }
+
+                return [];
+            }, $payload[$key]));
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @param list<array<string, mixed>>|null $pumpPropertyRows
+     * @param list<array<string, mixed>>|null $heaterPropertyRows
+     * @return array<string, mixed>
+     */
+    private function buildEditorPayload(
+        ?string $message = null,
+        bool $messageOk = true,
+        ?bool $enabled = null,
+        ?array $pumpPropertyRows = null,
+        ?array $heaterPropertyRows = null,
+    ): array {
         return [
-            'enabled' => $this->ReadPropertyBoolean('AutomationEnabled'),
+            'enabled' => $enabled ?? $this->ReadPropertyBoolean('AutomationEnabled'),
             'status' => $this->getAutomationStatusSafe(),
             'pumpRules' => WifiWhirlRuleEditor::editorRowsFromProperty(
-                $this->ReadPropertyString('AutomationPumpRules'),
+                $pumpPropertyRows ?? $this->ReadPropertyString('AutomationPumpRules'),
                 false,
             ),
             'heaterRules' => WifiWhirlRuleEditor::editorRowsFromProperty(
-                $this->ReadPropertyString('AutomationHeaterRules'),
+                $heaterPropertyRows ?? $this->ReadPropertyString('AutomationHeaterRules'),
                 true,
             ),
             'message' => $message ?? '',
@@ -494,8 +543,9 @@ class WifiWhirl extends IPSModuleStrict
 
         $pumpRows = $this->validatedPropertyRowsFromEditor($pumpEditor, false);
         $heaterRows = $this->validatedPropertyRowsFromEditor($heaterEditor, true);
+        $enabled = WifiWhirlAutomation::toBool($payload['enabled'] ?? false);
 
-        IPS_SetProperty($this->InstanceID, 'AutomationEnabled', WifiWhirlAutomation::toBool($payload['enabled'] ?? false));
+        IPS_SetProperty($this->InstanceID, 'AutomationEnabled', $enabled);
         IPS_SetProperty(
             $this->InstanceID,
             'AutomationPumpRules',
@@ -507,10 +557,19 @@ class WifiWhirl extends IPSModuleStrict
             json_encode($heaterRows, JSON_UNESCAPED_UNICODE),
         );
 
+        // IPS_SetProperty schreibt nur in die DB — Property-Cache für ReadProperty aktualisieren.
+        parent::ApplyChanges();
+
         $this->configureAutomationTimer();
         $this->RunAutomation();
 
-        $this->pushEditorVisualization($this->buildEditorPayload('Gespeichert', true));
+        $this->pushEditorVisualization($this->buildEditorPayload(
+            'Gespeichert',
+            true,
+            $enabled,
+            $pumpRows,
+            $heaterRows,
+        ));
     }
 
     /** @param array<string, mixed> $payload */
@@ -521,6 +580,7 @@ class WifiWhirl extends IPSModuleStrict
         }
 
         IPS_SetProperty($this->InstanceID, 'AutomationEnabled', WifiWhirlAutomation::toBool($payload['enabled'] ?? false));
+        parent::ApplyChanges();
         $this->configureAutomationTimer();
         $this->RunAutomation();
         $this->pushEditorVisualization($this->buildEditorPayload());

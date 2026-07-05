@@ -41,32 +41,77 @@
     font-size: 15px;
 }
 
-.wwhl-auto-table-wrap {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+.wwhl-auto-rules {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
 }
 
-.wwhl-auto table {
-    width: 100%;
-    min-width: 520px;
-    border-collapse: collapse;
+@media (min-width: 560px) {
+    .wwhl-auto-rules {
+        grid-template-columns: 1fr 1fr;
+    }
 }
 
-.wwhl-auto th,
-.wwhl-auto td {
-    padding: 6px 4px;
-    border-bottom: 1px solid rgba(128, 128, 128, 0.25);
-    vertical-align: middle;
+.wwhl-auto-rule {
+    border: 1px solid rgba(128, 128, 128, 0.35);
+    border-radius: 8px;
+    padding: 10px;
+    background: rgba(128, 128, 128, 0.06);
 }
 
-.wwhl-auto th {
+.wwhl-auto-rule-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 12px;
+}
+
+.wwhl-auto-rule-col {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.wwhl-auto-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.wwhl-auto-field-active {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+}
+
+.wwhl-auto-label,
+.wwhl-auto-label-block {
     font-size: 12px;
     font-weight: 600;
-    text-align: left;
+    opacity: 0.85;
+}
+
+.wwhl-auto-label-block {
+    margin-bottom: 2px;
+}
+
+.wwhl-auto-days-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 8px;
+}
+
+.wwhl-auto-day {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    cursor: pointer;
 }
 
 .wwhl-auto input[type="text"],
-.wwhl-auto input[type="number"],
 .wwhl-auto select {
     width: 100%;
     min-width: 0;
@@ -74,9 +119,19 @@
     font-size: 14px;
 }
 
+.wwhl-auto-select-temp {
+    max-width: 100%;
+}
+
 .wwhl-auto input[type="checkbox"] {
     width: 18px;
     height: 18px;
+    flex-shrink: 0;
+}
+
+.wwhl-auto-rule .wwhl-auto-btn-danger {
+    margin-top: 10px;
+    width: 100%;
 }
 
 .wwhl-auto-actions {
@@ -110,7 +165,7 @@
 .wwhl-auto-btn-danger {
     background: transparent;
     color: #dc2626;
-    padding: 4px 8px;
+    padding: 6px 8px;
     min-width: auto;
     font-size: 12px;
 }
@@ -129,12 +184,16 @@
     color: #dc2626;
 }
 
-@media (max-width: 480px) {
+@media (max-width: 400px) {
     .wwhl-auto {
         padding: 4px;
     }
 
-    .wwhl-auto table {
-        min-width: 480px;
+    .wwhl-auto-rule-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .wwhl-auto-rules {
+        grid-template-columns: 1fr;
     }
 }

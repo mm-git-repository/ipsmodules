@@ -3,22 +3,15 @@
 declare(strict_types=1);
 
 /**
- * Konvertierung zwischen Property-Regelzeilen (mo–so) und Editor-Zeilen (Wochentags-Preset).
+ * Konvertierung zwischen Property-Regelzeilen (mo–so) und Editor-Zeilen (HTML-Kachel).
  */
 final class WifiWhirlRuleEditor
 {
-    public const PRESET_MO_FR = 0;
-    public const PRESET_MO_SO = 1;
-    public const PRESET_SA_SO = 2;
-    public const PRESET_MO_SA = 3;
+    private const TARGET_TEMP_MIN = 7;
+    private const TARGET_TEMP_MAX = 40;
 
-    /** @var array<int, array{mo: bool, tu: bool, we: bool, th: bool, fr: bool, sa: bool, so: bool}> */
-    private const PRESET_WEEKDAYS = [
-        self::PRESET_MO_FR => ['mo' => true, 'tu' => true, 'we' => true, 'th' => true, 'fr' => true, 'sa' => false, 'so' => false],
-        self::PRESET_MO_SO => ['mo' => true, 'tu' => true, 'we' => true, 'th' => true, 'fr' => true, 'sa' => true, 'so' => true],
-        self::PRESET_SA_SO => ['mo' => false, 'tu' => false, 'we' => false, 'th' => false, 'fr' => false, 'sa' => true, 'so' => true],
-        self::PRESET_MO_SA => ['mo' => true, 'tu' => true, 'we' => true, 'th' => true, 'fr' => true, 'sa' => true, 'so' => false],
-    ];
+    /** @var list<string> */
+    private const DAY_KEYS = ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'so'];
 
     /** @return list<array<string, mixed>> */
     public static function editorRowsFromProperty(mixed $raw, bool $heater): array
@@ -69,58 +62,21 @@ final class WifiWhirlRuleEditor
         return $rows;
     }
 
-    /** @return array<string, mixed> */
-    public static function presetToWeekdays(int $preset): array
-    {
-        return self::PRESET_WEEKDAYS[self::clampPreset($preset)] ?? self::PRESET_WEEKDAYS[self::PRESET_MO_FR];
-    }
-
-    public static function weekdaysToPreset(
-        bool $mo,
-        bool $tu,
-        bool $we,
-        bool $th,
-        bool $fr,
-        bool $sa,
-        bool $so,
-    ): int {
-        foreach (self::PRESET_WEEKDAYS as $preset => $days) {
-            if (
-                $days['mo'] === $mo
-                && $days['tu'] === $tu
-                && $days['we'] === $we
-                && $days['th'] === $th
-                && $days['fr'] === $fr
-                && $days['sa'] === $sa
-                && $days['so'] === $so
-            ) {
-                return $preset;
-            }
-        }
-
-        return self::PRESET_MO_SO;
-    }
-
     /** @param array<string, mixed> $row */
     private static function propertyRowToEditorRow(array $row, bool $heater): ?array
     {
-        $mo = WifiWhirlAutomation::toBool($row['mo'] ?? false);
-        $tu = WifiWhirlAutomation::toBool($row['tu'] ?? false);
-        $we = WifiWhirlAutomation::toBool($row['we'] ?? false);
-        $th = WifiWhirlAutomation::toBool($row['th'] ?? false);
-        $fr = WifiWhirlAutomation::toBool($row['fr'] ?? false);
-        $sa = WifiWhirlAutomation::toBool($row['sa'] ?? false);
-        $so = WifiWhirlAutomation::toBool($row['so'] ?? false);
-
         $editor = [
             'active' => WifiWhirlAutomation::toBool($row['active'] ?? false),
-            'weekdays' => self::weekdaysToPreset($mo, $tu, $we, $th, $fr, $sa, $so),
             'start' => trim((string) ($row['start'] ?? '08:00')),
             'end' => trim((string) ($row['end'] ?? '20:00')),
         ];
 
+        foreach (self::DAY_KEYS as $day) {
+            $editor[$day] = WifiWhirlAutomation::toBool($row[$day] ?? false);
+        }
+
         if ($heater) {
-            $editor['targetTemp'] = max(20, min(40, (int) ($row['targetTemp'] ?? 38)));
+            $editor['targetTemp'] = self::clampTargetTemp((int) ($row['targetTemp'] ?? 38));
             $editor['pvGated'] = WifiWhirlAutomation::toBool($row['pvGated'] ?? false);
         }
 
@@ -130,27 +86,26 @@ final class WifiWhirlRuleEditor
     /** @param array<string, mixed> $row */
     private static function editorRowToPropertyRow(array $row, bool $heater): ?array
     {
-        if (!WifiWhirlAutomation::toBool($row['active'] ?? false)) {
-            return null;
-        }
-
-        $days = self::presetToWeekdays((int) ($row['weekdays'] ?? self::PRESET_MO_FR));
-        $property = array_merge([
-            'active' => true,
+        $property = [
+            'active' => WifiWhirlAutomation::toBool($row['active'] ?? false),
             'start' => trim((string) ($row['start'] ?? '08:00')),
             'end' => trim((string) ($row['end'] ?? '20:00')),
-        ], $days);
+        ];
+
+        foreach (self::DAY_KEYS as $day) {
+            $property[$day] = WifiWhirlAutomation::toBool($row[$day] ?? false);
+        }
 
         if ($heater) {
-            $property['targetTemp'] = max(20, min(40, (int) ($row['targetTemp'] ?? 38)));
+            $property['targetTemp'] = self::clampTargetTemp((int) ($row['targetTemp'] ?? 38));
             $property['pvGated'] = WifiWhirlAutomation::toBool($row['pvGated'] ?? false);
         }
 
         return $property;
     }
 
-    private static function clampPreset(int $preset): int
+    private static function clampTargetTemp(int $value): int
     {
-        return max(self::PRESET_MO_FR, min(self::PRESET_MO_SA, $preset));
+        return max(self::TARGET_TEMP_MIN, min(self::TARGET_TEMP_MAX, $value));
     }
 }

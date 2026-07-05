@@ -95,7 +95,7 @@ final class WifiWhirlAutomation
         }
 
         $targetTemp = (int) ($row['targetTemp'] ?? 30);
-        $targetTemp = max(20, min(40, $targetTemp));
+        $targetTemp = max(7, min(40, $targetTemp));
 
         return [
             'active' => self::toBool($row['active'] ?? false),

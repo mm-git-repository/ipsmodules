@@ -10,12 +10,18 @@
         messageOk: true,
     };
 
-    var weekdayOptions = [
-        { v: 0, label: 'Mo–Fr' },
-        { v: 1, label: 'Mo–So' },
-        { v: 2, label: 'Sa–So' },
-        { v: 3, label: 'Mo–Sa' },
+    var dayFields = [
+        { key: 'mo', label: 'Mo' },
+        { key: 'tu', label: 'Di' },
+        { key: 'we', label: 'Mi' },
+        { key: 'th', label: 'Do' },
+        { key: 'fr', label: 'Fr' },
+        { key: 'sa', label: 'Sa' },
+        { key: 'so', label: 'So' },
     ];
+
+    var tempMin = 7;
+    var tempMax = 40;
 
     function t(key) {
         if (typeof translate === 'function') {
@@ -24,12 +30,19 @@
         return key;
     }
 
+    function defaultDays() {
+        return { mo: true, tu: true, we: true, th: true, fr: true, sa: false, so: false };
+    }
+
     function defaultPumpRow() {
-        return { active: true, weekdays: 0, start: '08:00', end: '20:00' };
+        return Object.assign({ active: true, start: '08:00', end: '20:00' }, defaultDays());
     }
 
     function defaultHeaterRow() {
-        return { active: true, weekdays: 0, start: '08:00', end: '20:00', targetTemp: 38, pvGated: false };
+        return Object.assign(
+            { active: true, start: '08:00', end: '20:00', targetTemp: 38, pvGated: false },
+            defaultDays(),
+        );
     }
 
     function esc(s) {
@@ -39,50 +52,114 @@
             .replace(/"/g, '&quot;');
     }
 
-    function weekdaySelect(name, value) {
-        var html = '<select data-field="' + name + '">';
-        weekdayOptions.forEach(function (opt) {
-            html += '<option value="' + opt.v + '"' + (Number(value) === opt.v ? ' selected' : '') + '>' + esc(t(opt.label)) + '</option>';
-        });
+    function clampTemp(value) {
+        var n = parseInt(value, 10);
+        if (isNaN(n)) {
+            return 38;
+        }
+        return Math.max(tempMin, Math.min(tempMax, n));
+    }
+
+    function normalizeRow(row, isHeater) {
+        var out = {
+            active: !!row.active,
+            start: String(row.start || '08:00').trim(),
+            end: String(row.end || '20:00').trim(),
+            mo: !!row.mo,
+            tu: !!row.tu,
+            we: !!row.we,
+            th: !!row.th,
+            fr: !!row.fr,
+            sa: !!row.sa,
+            so: !!row.so,
+        };
+        if (isHeater) {
+            out.targetTemp = clampTemp(row.targetTemp);
+            out.pvGated = !!row.pvGated;
+        }
+        return out;
+    }
+
+    function targetTempSelect(value) {
+        var selected = clampTemp(value);
+        var html = '<select data-field="targetTemp" class="wwhl-auto-select-temp">';
+        for (var temp = tempMin; temp <= tempMax; temp += 1) {
+            html += '<option value="' + temp + '"' + (selected === temp ? ' selected' : '') + '>' + temp + ' °C</option>';
+        }
         html += '</select>';
         return html;
     }
 
-    function renderRuleRows(type, rows) {
-        var isHeater = type === 'heater';
-        var html = '';
-        rows.forEach(function (row, idx) {
-            html += '<tr data-type="' + type + '" data-idx="' + idx + '">';
-            html += '<td><input type="checkbox" data-field="active"' + (row.active ? ' checked' : '') + '></td>';
-            html += '<td>' + weekdaySelect('weekdays', row.weekdays) + '</td>';
-            html += '<td><input type="text" data-field="start" value="' + esc(row.start || '08:00') + '" placeholder="08:00"></td>';
-            html += '<td><input type="text" data-field="end" value="' + esc(row.end || '20:00') + '" placeholder="20:00"></td>';
-            if (isHeater) {
-                html += '<td><input type="number" data-field="targetTemp" min="20" max="40" value="' + esc(row.targetTemp || 38) + '"></td>';
-                html += '<td><input type="checkbox" data-field="pvGated"' + (row.pvGated ? ' checked' : '') + '></td>';
-            }
-            html += '<td><button type="button" class="wwhl-auto-btn wwhl-auto-btn-danger" data-action="delete">' + esc(t('Zeile löschen')) + '</button></td>';
-            html += '</tr>';
+    function renderDayGrid(row) {
+        var html = '<div class="wwhl-auto-days-grid">';
+        dayFields.forEach(function (day) {
+            var checked = row[day.key] ? ' checked' : '';
+            html += '<label class="wwhl-auto-day">'
+                + '<input type="checkbox" data-field="' + day.key + '"' + checked + '>'
+                + '<span>' + esc(t(day.label)) + '</span>'
+                + '</label>';
         });
+        html += '</div>';
+        return html;
+    }
+
+    function renderRuleCards(type, rows) {
+        var isHeater = type === 'heater';
+        var html = '<div class="wwhl-auto-rules" data-rules="' + type + '">';
+        rows.forEach(function (row, idx) {
+            row = normalizeRow(row, isHeater);
+            html += '<article class="wwhl-auto-rule" data-type="' + type + '" data-idx="' + idx + '">';
+            html += '<div class="wwhl-auto-rule-grid">';
+            html += '<div class="wwhl-auto-rule-col">';
+            html += '<label class="wwhl-auto-field wwhl-auto-field-active">'
+                + '<input type="checkbox" data-field="active"' + (row.active ? ' checked' : '') + '>'
+                + '<span>' + esc(t('Aktiv')) + '</span>'
+                + '</label>';
+            html += '<label class="wwhl-auto-field">'
+                + '<span class="wwhl-auto-label">' + esc(t('Start')) + '</span>'
+                + '<input type="text" data-field="start" value="' + esc(row.start) + '" placeholder="08:00">'
+                + '</label>';
+            html += '<label class="wwhl-auto-field">'
+                + '<span class="wwhl-auto-label">' + esc(t('Ende')) + '</span>'
+                + '<input type="text" data-field="end" value="' + esc(row.end) + '" placeholder="20:00">'
+                + '</label>';
+            if (isHeater) {
+                html += '<label class="wwhl-auto-field">'
+                    + '<span class="wwhl-auto-label">' + esc(t('Ziel °C')) + '</span>'
+                    + targetTempSelect(row.targetTemp)
+                    + '</label>';
+                html += '<label class="wwhl-auto-field wwhl-auto-field-active">'
+                    + '<input type="checkbox" data-field="pvGated"' + (row.pvGated ? ' checked' : '') + '>'
+                    + '<span>' + esc(t('PV-Freigabe')) + '</span>'
+                    + '</label>';
+            }
+            html += '</div>';
+            html += '<div class="wwhl-auto-rule-col">';
+            html += '<div class="wwhl-auto-label-block">' + esc(t('Wochentage')) + '</div>';
+            html += renderDayGrid(row);
+            html += '</div>';
+            html += '</div>';
+            html += '<button type="button" class="wwhl-auto-btn wwhl-auto-btn-danger" data-action="delete">' + esc(t('Zeile löschen')) + '</button>';
+            html += '</article>';
+        });
+        html += '</div>';
         return html;
     }
 
     function readRowsFromDom(type) {
+        var root = document.getElementById('wwhl-auto-root');
         var rows = [];
-        document.querySelectorAll('tr[data-type="' + type + '"]').forEach(function (tr) {
-            var row = { active: false, weekdays: 0, start: '08:00', end: '20:00' };
-            if (type === 'heater') {
-                row.targetTemp = 38;
-                row.pvGated = false;
-            }
-            tr.querySelectorAll('[data-field]').forEach(function (el) {
+        if (!root) {
+            return rows;
+        }
+        root.querySelectorAll('.wwhl-auto-rule[data-type="' + type + '"]').forEach(function (card) {
+            var row = normalizeRow({}, type === 'heater');
+            card.querySelectorAll('[data-field]').forEach(function (el) {
                 var field = el.getAttribute('data-field');
                 if (el.type === 'checkbox') {
                     row[field] = el.checked;
-                } else if (el.type === 'number') {
-                    row[field] = parseInt(el.value, 10) || 38;
-                } else if (field === 'weekdays') {
-                    row[field] = parseInt(el.value, 10) || 0;
+                } else if (field === 'targetTemp') {
+                    row[field] = clampTemp(el.value);
                 } else {
                     row[field] = el.value.trim();
                 }
@@ -98,15 +175,6 @@
             return;
         }
 
-        var pumpHead = ''
-            + '<th>' + esc(t('Aktiv')) + '</th>'
-            + '<th>' + esc(t('Wochentage')) + '</th>'
-            + '<th>' + esc(t('Start')) + '</th>'
-            + '<th>' + esc(t('Ende')) + '</th>'
-            + '<th></th>';
-
-        var heaterHead = pumpHead.replace('</th><th></th>', '</th><th>' + esc(t('Ziel °C')) + '</th><th>' + esc(t('PV-Freigabe')) + '</th><th></th>');
-
         root.innerHTML = ''
             + '<div class="wwhl-auto-header">'
             + '  <label class="wwhl-auto-enabled"><input type="checkbox" id="wwhl-enabled"' + (state.enabled ? ' checked' : '') + '> ' + esc(t('Automatisierung aktiv')) + '</label>'
@@ -114,14 +182,12 @@
             + '</div>'
             + '<div class="wwhl-auto-section">'
             + '  <h3>' + esc(t('Pumpen-Zeitpläne')) + '</h3>'
-            + '  <div class="wwhl-auto-table-wrap"><table><thead><tr>' + pumpHead + '</tr></thead>'
-            + '  <tbody id="wwhl-pump-body">' + renderRuleRows('pump', state.pump) + '</tbody></table></div>'
+            + renderRuleCards('pump', state.pump)
             + '  <div class="wwhl-auto-actions"><button type="button" class="wwhl-auto-btn wwhl-auto-btn-secondary" data-add="pump">' + esc(t('Pumpe hinzufügen')) + '</button></div>'
             + '</div>'
             + '<div class="wwhl-auto-section">'
             + '  <h3>' + esc(t('Heizungs-Zeitpläne')) + '</h3>'
-            + '  <div class="wwhl-auto-table-wrap"><table><thead><tr>' + heaterHead + '</tr></thead>'
-            + '  <tbody id="wwhl-heater-body">' + renderRuleRows('heater', state.heater) + '</tbody></table></div>'
+            + renderRuleCards('heater', state.heater)
             + '  <div class="wwhl-auto-actions"><button type="button" class="wwhl-auto-btn wwhl-auto-btn-secondary" data-add="heater">' + esc(t('Heizung hinzufügen')) + '</button></div>'
             + '</div>'
             + '<div class="wwhl-auto-actions">'
@@ -153,12 +219,12 @@
 
         root.querySelectorAll('[data-action="delete"]').forEach(function (btn) {
             btn.addEventListener('click', function () {
-                var tr = btn.closest('tr');
-                if (!tr) {
+                var card = btn.closest('.wwhl-auto-rule');
+                if (!card) {
                     return;
                 }
-                var type = tr.getAttribute('data-type');
-                var idx = parseInt(tr.getAttribute('data-idx'), 10);
+                var type = card.getAttribute('data-type');
+                var idx = parseInt(card.getAttribute('data-idx'), 10);
                 if (type === 'pump') {
                     state.pump.splice(idx, 1);
                 } else {
@@ -209,10 +275,10 @@
             state.status = data.status;
         }
         if (Array.isArray(data.pumpRules)) {
-            state.pump = data.pumpRules;
+            state.pump = data.pumpRules.map(function (row) { return normalizeRow(row, false); });
         }
         if (Array.isArray(data.heaterRules)) {
-            state.heater = data.heaterRules;
+            state.heater = data.heaterRules.map(function (row) { return normalizeRow(row, true); });
         }
         if (typeof data.message === 'string') {
             state.message = data.message ? t(data.message) : '';
