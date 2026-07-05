@@ -1,0 +1,140 @@
+.wwhl-auto {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+    line-height: 1.4;
+    padding: 8px;
+    box-sizing: border-box;
+}
+
+.wwhl-auto * {
+    box-sizing: border-box;
+}
+
+.wwhl-auto-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.wwhl-auto-enabled {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+}
+
+.wwhl-auto-status {
+    flex: 1 1 100%;
+    font-size: 13px;
+    opacity: 0.85;
+    word-break: break-word;
+}
+
+.wwhl-auto-section {
+    margin-bottom: 16px;
+}
+
+.wwhl-auto-section h3 {
+    margin: 0 0 8px;
+    font-size: 15px;
+}
+
+.wwhl-auto-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.wwhl-auto table {
+    width: 100%;
+    min-width: 520px;
+    border-collapse: collapse;
+}
+
+.wwhl-auto th,
+.wwhl-auto td {
+    padding: 6px 4px;
+    border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+    vertical-align: middle;
+}
+
+.wwhl-auto th {
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+}
+
+.wwhl-auto input[type="text"],
+.wwhl-auto input[type="number"],
+.wwhl-auto select {
+    width: 100%;
+    min-width: 0;
+    padding: 6px 8px;
+    font-size: 14px;
+}
+
+.wwhl-auto input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+}
+
+.wwhl-auto-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.wwhl-auto-btn {
+    flex: 1 1 auto;
+    min-width: 120px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.wwhl-auto-btn-primary {
+    background: #2563eb;
+    color: #fff;
+}
+
+.wwhl-auto-btn-secondary {
+    background: rgba(128, 128, 128, 0.2);
+    color: inherit;
+}
+
+.wwhl-auto-btn-danger {
+    background: transparent;
+    color: #dc2626;
+    padding: 4px 8px;
+    min-width: auto;
+    font-size: 12px;
+}
+
+.wwhl-auto-msg {
+    margin-top: 8px;
+    font-size: 13px;
+    min-height: 1.2em;
+}
+
+.wwhl-auto-msg.ok {
+    color: #16a34a;
+}
+
+.wwhl-auto-msg.err {
+    color: #dc2626;
+}
+
+@media (max-width: 480px) {
+    .wwhl-auto {
+        padding: 4px;
+    }
+
+    .wwhl-auto table {
+        min-width: 480px;
+    }
+}
