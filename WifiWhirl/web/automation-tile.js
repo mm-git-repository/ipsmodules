@@ -90,8 +90,8 @@
         return html;
     }
 
-    function renderDayGrid(row) {
-        var html = '<div class="wwhl-auto-days-grid">';
+    function renderDayRow(row) {
+        var html = '<div class="wwhl-auto-row2">';
         dayFields.forEach(function (day) {
             var checked = row[day.key] ? ' checked' : '';
             html += '<label class="wwhl-auto-day">'
@@ -103,43 +103,46 @@
         return html;
     }
 
+    function renderInlineField(label, innerHtml, extraClass) {
+        return '<label class="wwhl-auto-inline' + (extraClass ? ' ' + extraClass : '') + '">'
+            + '<span class="wwhl-auto-inline-label">' + esc(t(label)) + '</span>'
+            + innerHtml
+            + '</label>';
+    }
+
     function renderRuleCards(type, rows) {
         var isHeater = type === 'heater';
         var html = '<div class="wwhl-auto-rules" data-rules="' + type + '">';
         rows.forEach(function (row, idx) {
             row = normalizeRow(row, isHeater);
             html += '<article class="wwhl-auto-rule" data-type="' + type + '" data-idx="' + idx + '">';
-            html += '<div class="wwhl-auto-rule-grid">';
-            html += '<div class="wwhl-auto-rule-col">';
-            html += '<label class="wwhl-auto-field wwhl-auto-field-active">'
-                + '<input type="checkbox" data-field="active"' + (row.active ? ' checked' : '') + '>'
-                + '<span>' + esc(t('Aktiv')) + '</span>'
-                + '</label>';
-            html += '<label class="wwhl-auto-field">'
-                + '<span class="wwhl-auto-label">' + esc(t('Start')) + '</span>'
-                + '<input type="text" data-field="start" value="' + esc(row.start) + '" placeholder="08:00">'
-                + '</label>';
-            html += '<label class="wwhl-auto-field">'
-                + '<span class="wwhl-auto-label">' + esc(t('Ende')) + '</span>'
-                + '<input type="text" data-field="end" value="' + esc(row.end) + '" placeholder="20:00">'
-                + '</label>';
+            html += '<div class="wwhl-auto-rule-main">';
+            html += '<div class="wwhl-auto-row1">';
+            html += renderInlineField(
+                'Aktiv',
+                '<input type="checkbox" data-field="active"' + (row.active ? ' checked' : '') + '>',
+                'wwhl-auto-inline-check',
+            );
+            html += renderInlineField(
+                'Start',
+                '<input type="text" data-field="start" value="' + esc(row.start) + '" placeholder="08:00">',
+            );
+            html += renderInlineField(
+                'Ende',
+                '<input type="text" data-field="end" value="' + esc(row.end) + '" placeholder="20:00">',
+            );
             if (isHeater) {
-                html += '<label class="wwhl-auto-field">'
-                    + '<span class="wwhl-auto-label">' + esc(t('Ziel °C')) + '</span>'
-                    + targetTempSelect(row.targetTemp)
-                    + '</label>';
-                html += '<label class="wwhl-auto-field wwhl-auto-field-active">'
-                    + '<input type="checkbox" data-field="pvGated"' + (row.pvGated ? ' checked' : '') + '>'
-                    + '<span>' + esc(t('PV-Freigabe')) + '</span>'
-                    + '</label>';
+                html += renderInlineField('Ziel °C', targetTempSelect(row.targetTemp));
+                html += renderInlineField(
+                    'PV-Freigabe',
+                    '<input type="checkbox" data-field="pvGated"' + (row.pvGated ? ' checked' : '') + '>',
+                    'wwhl-auto-inline-check',
+                );
             }
             html += '</div>';
-            html += '<div class="wwhl-auto-rule-col">';
-            html += '<div class="wwhl-auto-label-block">' + esc(t('Wochentage')) + '</div>';
-            html += renderDayGrid(row);
+            html += renderDayRow(row);
             html += '</div>';
-            html += '</div>';
-            html += '<button type="button" class="wwhl-auto-btn wwhl-auto-btn-danger" data-action="delete">' + esc(t('Zeile löschen')) + '</button>';
+            html += '<button type="button" class="wwhl-auto-delete" data-action="delete" title="' + esc(t('Zeile löschen')) + '" aria-label="' + esc(t('Zeile löschen')) + '">×</button>';
             html += '</article>';
         });
         html += '</div>';
