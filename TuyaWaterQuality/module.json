@@ -1,0 +1,15 @@
+{
+    "id": "{E7C4A891-3D2F-4B6E-9A1C-5F8E2D0B4A71}",
+    "name": "TuyaWaterQuality",
+    "type": 3,
+    "vendor": "MM-Modules",
+    "aliases": [
+        "Tuya Wasserqualität",
+        "Yieryi Wasserqualität"
+    ],
+    "url": "https://github.com/mm-git-repository/ipsmodule.git",
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "TWQT"
+}

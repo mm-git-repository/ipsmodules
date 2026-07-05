@@ -1,0 +1,29 @@
+{
+    "translations": {
+        "en": {
+            "Installierte Modulversion": "Installed module version",
+            "Installierte Modulversion: %s (Build %d)": "Installed module version: %s (Build %d)",
+            "Aktiv": "Active",
+            "Geräte-IP (LAN)": "Device IP (LAN)",
+            "Tuya Device ID": "Tuya device ID",
+            "Tuya Local Key": "Tuya local key",
+            "Tuya-Protokollversion": "Tuya protocol version",
+            "Aktualisierungsintervall (Sekunden, mindestens 15)": "Update interval (seconds, minimum 15)",
+            "DP-Mapping (JSON, Standard: PH-W218 / 8-in-1)": "DP mapping (JSON, default PH-W218 / 8-in-1)",
+            "Jetzt aktualisieren": "Update now",
+            "pH gemessen": "Measured pH",
+            "ORP gemessen": "Measured ORP",
+            "EC gemessen": "Measured EC",
+            "TDS gemessen": "Measured TDS",
+            "Wassertemperatur gemessen": "Measured water temperature",
+            "Erreichbar": "Reachable",
+            "Letzte Aktualisierung": "Last update",
+            "Letzter Fehler": "Last error",
+            "Roh-DPS (Debug)": "Raw DPS (debug)",
+            "Modulversion": "Module version",
+            "Inaktiv": "Inactive",
+            "Konfiguration unvollständig": "Configuration incomplete",
+            "Gerät nicht erreichbar": "Device unreachable"
+        }
+    }
+}

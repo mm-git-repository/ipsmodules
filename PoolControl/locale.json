@@ -1,0 +1,37 @@
+{
+    "translations": {
+        "en": {
+            "Installierte Modulversion": "Installed module version",
+            "Installierte Modulversion: %s (Build %d)": "Installed module version: %s (Build %d)",
+            "Aktiv": "Active",
+            "Sensor-Instanz (Tuya Wasserqualität)": "Sensor instance (Tuya water quality)",
+            "WifiWhirl-Instanz (optional, für pH-Sync)": "WifiWhirl instance (optional, for pH sync)",
+            "Auswertungsintervall (Sekunden, mindestens 30)": "Evaluation interval (seconds, minimum 30)",
+            "Sensor-Daten max. Alter (Sekunden)": "Sensor data max. age (seconds)",
+            "Becken (Bestway Miami Outdoor)": "Pool (Bestway Miami outdoor)",
+            "Volumen (Liter, Miami Standard 669)": "Volume (liters, Miami default 669)",
+            "Grenzwerte pH": "pH limits",
+            "Grenzwerte ORP (mV)": "ORP limits (mV)",
+            "Dosierungsempfehlungen": "Dosing recommendations",
+            "Chlor-Empfehlung": "Chlorine recommendation",
+            "Aktionen & Wartung (Outdoor)": "Actions & maintenance (outdoor)",
+            "Gemessenen pH an WifiWhirl übergeben": "Push measured pH to WifiWhirl",
+            "Alarm bei Grenzverletzung (IPS-Log)": "Alarm on limit breach (IPS log)",
+            "Jetzt auswerten": "Evaluate now",
+            "Status": "Status",
+            "Wasserqualität Zustand": "Water quality state",
+            "Wasserqualität Text": "Water quality label",
+            "pH im Soll": "pH in range",
+            "ORP im Soll": "ORP in range",
+            "Aktueller pH": "Current pH",
+            "Aktueller ORP": "Current ORP",
+            "Dosierungsempfehlung": "Dosing recommendation",
+            "Wartungshinweis": "Maintenance hint",
+            "Letzte Auswertung": "Last evaluation",
+            "Letzter pH-Sync": "Last pH sync",
+            "Modulversion": "Module version",
+            "Inaktiv": "Inactive",
+            "Konfiguration unvollständig": "Configuration incomplete"
+        }
+    }
+}

@@ -1,0 +1,285 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Minimaler Tuya-Lokalprotokoll-Client (3.3/3.4/3.5) für Yieryi & ähnliche Sensoren.
+ *
+ * Paketformat 0x55AA: Prefix, Seq, Cmd, Length, Payload, CRC32, Suffix 0xAA55
+ */
+final class TuyaLocalClient
+{
+    private const PREFIX_SEND = 0x000055AA;
+    private const PREFIX_RECV = 0x000055AA;
+    private const PREFIX_RECV_ALT = 0x000066AA;
+    private const SUFFIX = 0x0000AA55;
+    private const CMD_STATUS = 0x0000000A;
+    private const DEFAULT_PORT = 6668;
+    private const SOCKET_TIMEOUT_SEC = 5;
+
+    /** @var list<int> */
+    private static array $crcTable = [];
+
+    private string $deviceId;
+    private string $localKey;
+    private string $protocolVersion;
+    private int $seqNo = 0;
+
+    public function __construct(string $deviceId, string $localKey, string $protocolVersion = '3.3')
+    {
+        $this->deviceId = trim($deviceId);
+        $this->localKey = trim($localKey);
+        $this->protocolVersion = trim($protocolVersion) !== '' ? trim($protocolVersion) : '3.3';
+    }
+
+    /**
+     * @return array{ok: bool, dps: array<string|int, mixed>, error: string}
+     */
+    public function fetchStatus(string $host): array
+    {
+        if ($this->deviceId === '' || $this->localKey === '') {
+            return ['ok' => false, 'dps' => [], 'error' => 'Device ID oder Local Key fehlt'];
+        }
+
+        $host = trim($host);
+        if ($host === '') {
+            return ['ok' => false, 'dps' => [], 'error' => 'Host fehlt'];
+        }
+
+        if (!function_exists('socket_create')) {
+            return ['ok' => false, 'dps' => [], 'error' => 'PHP socket extension fehlt'];
+        }
+
+        $socket = @socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        if ($socket === false) {
+            return ['ok' => false, 'dps' => [], 'error' => 'Socket konnte nicht erstellt werden'];
+        }
+
+        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => self::SOCKET_TIMEOUT_SEC, 'usec' => 0]);
+        socket_set_option($socket, SOL_SOCKET, SO_SNDTIMEO, ['sec' => self::SOCKET_TIMEOUT_SEC, 'usec' => 0]);
+
+        $connected = @socket_connect($socket, $host, self::DEFAULT_PORT);
+        if (!$connected) {
+            socket_close($socket);
+
+            return ['ok' => false, 'dps' => [], 'error' => 'Verbindung zu ' . $host . ':' . self::DEFAULT_PORT . ' fehlgeschlagen'];
+        }
+
+        try {
+            $payload = $this->buildStatusPayload();
+            $encrypted = $this->encrypt($payload, $this->deriveKey());
+            $packet = $this->packMessage(self::CMD_STATUS, $encrypted);
+            $written = @socket_write($socket, $packet, strlen($packet));
+            if ($written === false || $written === 0) {
+                return ['ok' => false, 'dps' => [], 'error' => 'Senden fehlgeschlagen'];
+            }
+
+            $response = $this->readResponse($socket);
+            if ($response === null) {
+                return ['ok' => false, 'dps' => [], 'error' => 'Keine Antwort vom Gerät'];
+            }
+
+            $decoded = $this->decodeMessage($response);
+            if (!$decoded['ok']) {
+                return ['ok' => false, 'dps' => [], 'error' => $decoded['error']];
+            }
+
+            return ['ok' => true, 'dps' => $this->extractDps($decoded['payload']), 'error' => ''];
+        } finally {
+            socket_close($socket);
+        }
+    }
+
+    private function buildStatusPayload(): string
+    {
+        if (in_array($this->protocolVersion, ['3.4', '3.5'], true)) {
+            $json = [
+                'devId' => $this->deviceId,
+                'uid' => '',
+                't' => (string) time(),
+            ];
+        } else {
+            $json = [
+                'gwId' => $this->deviceId,
+                'devId' => $this->deviceId,
+            ];
+        }
+
+        $encoded = json_encode($json, JSON_UNESCAPED_UNICODE);
+
+        return is_string($encoded) ? $encoded : '{}';
+    }
+
+    private function packMessage(int $command, string $encryptedPayload): string
+    {
+        $this->seqNo = ($this->seqNo + 1) % 0xFFFFFFFF;
+        $payloadLen = strlen($encryptedPayload) + 8;
+
+        $header = pack('N', self::PREFIX_SEND)
+            . pack('N', $this->seqNo)
+            . pack('N', $command)
+            . pack('N', $payloadLen);
+
+        $dataForCrc = $header . $encryptedPayload;
+        $crc = self::crc32($dataForCrc);
+
+        return $dataForCrc . pack('N', $crc) . pack('N', self::SUFFIX);
+    }
+
+    /**
+     * @return array{ok: bool, payload: string, error: string}
+     */
+    private function decodeMessage(string $raw): array
+    {
+        if (strlen($raw) < 28) {
+            return ['ok' => false, 'payload' => '', 'error' => 'Antwort zu kurz'];
+        }
+
+        $prefix = unpack('N', substr($raw, 0, 4))[1] ?? 0;
+        if ($prefix !== self::PREFIX_RECV && $prefix !== self::PREFIX_RECV_ALT) {
+            return ['ok' => false, 'payload' => '', 'error' => 'Ungültiges Antwort-Präfix'];
+        }
+
+        $payloadLength = unpack('N', substr($raw, 12, 4))[1] ?? 0;
+        if ($payloadLength < 8) {
+            return ['ok' => false, 'payload' => '', 'error' => 'Ungültige Payload-Länge'];
+        }
+
+        $bodyLength = $payloadLength - 8;
+        $body = substr($raw, 16, $bodyLength);
+        if ($body === false || strlen($body) !== $bodyLength) {
+            return ['ok' => false, 'payload' => '', 'error' => 'Payload unvollständig'];
+        }
+
+        $encrypted = $body;
+        if ($bodyLength > 4 && $body[0] !== '{') {
+            $encrypted = substr($body, 4);
+        }
+
+        $decrypted = $this->decrypt($encrypted, $this->deriveKey());
+        if ($decrypted === null) {
+            return ['ok' => false, 'payload' => '', 'error' => 'Entschlüsselung fehlgeschlagen (Local Key?)'];
+        }
+
+        return ['ok' => true, 'payload' => $decrypted, 'error' => ''];
+    }
+
+    /**
+     * @return array<string|int, mixed>
+     */
+    private function extractDps(string $json): array
+    {
+        $data = json_decode($json, true);
+        if (!is_array($data)) {
+            return [];
+        }
+
+        if (isset($data['data']['dps']) && is_array($data['data']['dps'])) {
+            return $data['data']['dps'];
+        }
+
+        if (isset($data['dps']) && is_array($data['dps'])) {
+            return $data['dps'];
+        }
+
+        return [];
+    }
+
+    private function deriveKey(): string
+    {
+        $key = $this->localKey;
+        if (strlen($key) === 16) {
+            return $key;
+        }
+
+        return substr(md5($key, true), 0, 16);
+    }
+
+    private function encrypt(string $data, string $key): string
+    {
+        $padded = $this->pkcs7Pad($data, 16);
+
+        return openssl_encrypt($padded, 'AES-128-ECB', $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING) ?: '';
+    }
+
+    private function decrypt(string $data, string $key): ?string
+    {
+        $decrypted = openssl_decrypt($data, 'AES-128-ECB', $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING);
+        if (!is_string($decrypted)) {
+            return null;
+        }
+
+        return $this->pkcs7Unpad($decrypted);
+    }
+
+    private function pkcs7Pad(string $data, int $blockSize): string
+    {
+        $pad = $blockSize - (strlen($data) % $blockSize);
+
+        return $data . str_repeat(chr($pad), $pad);
+    }
+
+    private function pkcs7Unpad(string $data): ?string
+    {
+        $len = strlen($data);
+        if ($len === 0) {
+            return null;
+        }
+
+        $pad = ord($data[$len - 1]);
+        if ($pad < 1 || $pad > 16) {
+            return $data;
+        }
+
+        return substr($data, 0, $len - $pad);
+    }
+
+    private function readResponse($socket): ?string
+    {
+        $header = @socket_read($socket, 16, PHP_BINARY_READ);
+        if ($header === false || strlen($header) < 16) {
+            return null;
+        }
+
+        $payloadLength = unpack('N', substr($header, 12, 4))[1] ?? 0;
+        $remaining = max(0, $payloadLength);
+        $buffer = $header;
+        $read = 0;
+
+        while ($read < $remaining) {
+            $chunk = @socket_read($socket, $remaining - $read, PHP_BINARY_READ);
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+            $buffer .= $chunk;
+            $read += strlen($chunk);
+        }
+
+        return $buffer;
+    }
+
+    private static function crc32(string $data): int
+    {
+        if (self::$crcTable === []) {
+            for ($i = 0; $i < 256; $i++) {
+                $c = $i;
+                for ($j = 0; $j < 8; $j++) {
+                    if ($c & 1) {
+                        $c = 0xEDB88320 ^ ($c >> 1);
+                    } else {
+                        $c >>= 1;
+                    }
+                }
+                self::$crcTable[$i] = $c;
+            }
+        }
+
+        $crc = 0xFFFFFFFF;
+        $len = strlen($data);
+        for ($i = 0; $i < $len; $i++) {
+            $crc = self::$crcTable[($crc ^ ord($data[$i])) & 0xFF] ^ ($crc >> 8);
+        }
+
+        return ($crc ^ 0xFFFFFFFF) & 0xFFFFFFFF;
+    }
+}

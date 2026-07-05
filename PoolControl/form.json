@@ -1,0 +1,273 @@
+{
+    "elements": [
+        {
+            "type": "Label",
+            "name": "ModuleVersionInfo",
+            "caption": "Installierte Modulversion"
+        },
+        {
+            "type": "CheckBox",
+            "name": "Active",
+            "caption": "Aktiv"
+        },
+        {
+            "type": "Instance",
+            "name": "SensorInstanceId",
+            "caption": "Sensor-Instanz (Tuya Wasserqualität)",
+            "moduleID": "{E7C4A891-3D2F-4B6E-9A1C-5F8E2D0B4A71}"
+        },
+        {
+            "type": "Instance",
+            "name": "WifiWhirlInstanceId",
+            "caption": "WifiWhirl-Instanz (optional, für pH-Sync)",
+            "moduleID": "{D5E9B2F3-A048-5B6D-E7F8-901234567890}"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "EvaluationIntervalSec",
+            "caption": "Auswertungsintervall (Sekunden, mindestens 30)",
+            "digits": 0,
+            "minimum": 30
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "SensorMaxAgeSec",
+            "caption": "Sensor-Daten max. Alter (Sekunden)",
+            "digits": 0,
+            "minimum": 60
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Becken (Bestway Miami Outdoor)",
+            "items": [
+                {
+                    "type": "NumberSpinner",
+                    "name": "PoolVolumeLiters",
+                    "caption": "Volumen (Liter, Miami Standard 669)",
+                    "digits": 0,
+                    "minimum": 100
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Grenzwerte pH",
+            "items": [
+                {
+                    "type": "NumberSpinner",
+                    "name": "PhTargetMin",
+                    "caption": "pH Soll min",
+                    "digits": 2,
+                    "minimum": 0,
+                    "maximum": 14
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PhTargetMax",
+                    "caption": "pH Soll max",
+                    "digits": 2,
+                    "minimum": 0,
+                    "maximum": 14
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PhAlarmMin",
+                    "caption": "pH Alarm min",
+                    "digits": 2,
+                    "minimum": 0,
+                    "maximum": 14
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PhAlarmMax",
+                    "caption": "pH Alarm max",
+                    "digits": 2,
+                    "minimum": 0,
+                    "maximum": 14
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PhHysteresis",
+                    "caption": "pH Hysterese",
+                    "digits": 2,
+                    "minimum": 0,
+                    "maximum": 1
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Grenzwerte ORP (mV)",
+            "items": [
+                {
+                    "type": "NumberSpinner",
+                    "name": "OrpTargetMin",
+                    "caption": "ORP Soll min",
+                    "digits": 0
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "OrpTargetMax",
+                    "caption": "ORP Soll max",
+                    "digits": 0
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "OrpAlarmMin",
+                    "caption": "ORP Alarm min",
+                    "digits": 0
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "OrpAlarmMax",
+                    "caption": "ORP Alarm max",
+                    "digits": 0
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "OrpHysteresis",
+                    "caption": "ORP Hysterese",
+                    "digits": 0,
+                    "minimum": 0
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Dosierungsempfehlungen",
+            "items": [
+                {
+                    "type": "Select",
+                    "name": "ChlorRecommendationMode",
+                    "caption": "Chlor-Empfehlung",
+                    "options": [
+                        {
+                            "label": "Bayrol Multi-Tab (20g 5in1)",
+                            "value": "multi_tab"
+                        },
+                        {
+                            "label": "Flüssigchlor (ml-Empfehlung)",
+                            "value": "liquid_chlorine"
+                        }
+                    ]
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "LiquidChlorinePercent",
+                    "caption": "Flüssigchlor: aktiver Chlor-Gehalt (%)",
+                    "digits": 1,
+                    "minimum": 0.1
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "LiquidChlorMlFactor",
+                    "caption": "Flüssigchlor: ml-Faktor (Kalibrierung)",
+                    "digits": 1,
+                    "minimum": 0.1
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PhPowderGramsPer01Per1000L",
+                    "caption": "Bayrol pH-Pulver: g pro 0,1 pH pro 1000 l",
+                    "digits": 1,
+                    "minimum": 1
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "MaxTabsPerWeek",
+                    "caption": "Multi-Tab: max. Empfehlung pro Woche",
+                    "digits": 0,
+                    "minimum": 1
+                },
+                {
+                    "type": "ValidationTextBox",
+                    "name": "DisclaimerText",
+                    "caption": "Disclaimer (Empfehlungstext)"
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Aktionen & Wartung (Outdoor)",
+            "items": [
+                {
+                    "type": "CheckBox",
+                    "name": "PhSyncEnabled",
+                    "caption": "Gemessenen pH an WifiWhirl übergeben"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "AlarmEnabled",
+                    "caption": "Alarm bei Grenzverletzung (IPS-Log)"
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "ManualAlkalinity",
+                    "caption": "Alkalität manuell (mg/l, 0 = unbekannt)",
+                    "digits": 0,
+                    "minimum": 0
+                },
+                {
+                    "type": "Timestamp",
+                    "name": "ManualAlkalinityDate",
+                    "caption": "Alkalität: letzte Messung"
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "AlkalinityReminderDays",
+                    "caption": "Alkalität: Erinnerung nach (Tage)",
+                    "digits": 0,
+                    "minimum": 1
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "ManualCyanuricAcid",
+                    "caption": "Cyanursäure manuell (mg/l, 0 = unbekannt)",
+                    "digits": 0,
+                    "minimum": 0
+                },
+                {
+                    "type": "Timestamp",
+                    "name": "ManualCyanuricAcidDate",
+                    "caption": "Cyanursäure: letzte Messung"
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "CyanuricAcidReminderDays",
+                    "caption": "Cyanursäure: Erinnerung nach (Tage)",
+                    "digits": 0,
+                    "minimum": 1
+                }
+            ]
+        },
+        {
+            "type": "Button",
+            "name": "EvaluateNow",
+            "caption": "Jetzt auswerten",
+            "onClick": "POOL_RequestAction($_IPS['TARGET'], 'EvaluateNow', true);"
+        }
+    ],
+    "actions": [
+        {
+            "type": "Label",
+            "caption": "Hinweis: Heizung wird nicht durch Wasserqualität blockiert. Zeitsteuerung folgt in einer späteren Version."
+        }
+    ],
+    "status": [
+        {
+            "code": 102,
+            "icon": "active",
+            "caption": "Aktiv"
+        },
+        {
+            "code": 104,
+            "icon": "inactive",
+            "caption": "Inaktiv"
+        },
+        {
+            "code": 201,
+            "icon": "error",
+            "caption": "Konfiguration unvollständig"
+        }
+    ]
+}

@@ -1,0 +1,15 @@
+{
+    "id": "{F8D5B902-4E30-5C7F-AB2D-6A9F3E1C5B82}",
+    "name": "PoolControl",
+    "type": 3,
+    "vendor": "MM-Modules",
+    "aliases": [
+        "Pool Steuerung",
+        "Poolsteuerung"
+    ],
+    "url": "https://github.com/mm-git-repository/ipsmodule.git",
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "POOL"
+}
