@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 10;
+    private const MODULE_BUILD = 11;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -140,8 +140,8 @@ class WifiWhirl extends IPSModuleStrict
         }
 
         $ok = IPS_SetProperty($this->InstanceID, 'AutomationEnabled', $enabled)
-            && $this->writeRulesPropertyValue('AutomationPumpRules', $pumpRows, $pumpJson)
-            && $this->writeRulesPropertyValue('AutomationHeaterRules', $heaterRows, $heaterJson);
+            && $this->writeRulesPropertyValue('AutomationPumpRules', $pumpJson)
+            && $this->writeRulesPropertyValue('AutomationHeaterRules', $heaterJson);
 
         if (!$ok) {
             return false;
@@ -156,13 +156,8 @@ class WifiWhirl extends IPSModuleStrict
         return true;
     }
 
-    /** @param list<array<string, mixed>> $rows */
-    private function writeRulesPropertyValue(string $name, array $rows, string $json): bool
+    private function writeRulesPropertyValue(string $name, string $json): bool
     {
-        if (IPS_SetProperty($this->InstanceID, $name, $rows)) {
-            return true;
-        }
-
         return (bool) IPS_SetProperty($this->InstanceID, $name, $json);
     }
 

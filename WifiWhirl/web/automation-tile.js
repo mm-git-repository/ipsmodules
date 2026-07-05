@@ -116,13 +116,12 @@
         rows.forEach(function (row, idx) {
             row = normalizeRow(row, isHeater);
             html += '<article class="wwhl-auto-rule" data-type="' + type + '" data-idx="' + idx + '">';
-            html += '<div class="wwhl-auto-rule-main">';
+            html += '<label class="wwhl-auto-active-toggle" title="' + esc(t('Aktiv')) + '">'
+                + '<input type="checkbox" data-field="active"' + (row.active ? ' checked' : '') + '>'
+                + '<span class="wwhl-auto-active-label">' + esc(t('Aktiv')) + '</span>'
+                + '</label>';
+            html += '<div class="wwhl-auto-rule-body">';
             html += '<div class="wwhl-auto-row1">';
-            html += renderInlineField(
-                'Aktiv',
-                '<input type="checkbox" data-field="active"' + (row.active ? ' checked' : '') + '>',
-                'wwhl-auto-inline-check',
-            );
             html += renderInlineField(
                 'Start',
                 '<input type="text" data-field="start" value="' + esc(row.start) + '" placeholder="08:00">',
