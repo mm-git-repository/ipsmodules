@@ -9,7 +9,7 @@ class PoolControl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 2;
+    private const MODULE_BUILD = 3;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -326,14 +326,12 @@ class PoolControl extends IPSModuleStrict
         }
         if (!IPS_VariableProfileExists('POOL.state')) {
             IPS_CreateVariableProfile('POOL.state', 3);
-            IPS_SetVariableProfileValues('POOL.state', [
-                ['Value' => 'ok', 'Name' => 'OK'],
-                ['Value' => 'ph_low', 'Name' => 'pH zu niedrig'],
-                ['Value' => 'ph_high', 'Name' => 'pH zu hoch'],
-                ['Value' => 'orp_low', 'Name' => 'ORP zu niedrig'],
-                ['Value' => 'orp_high', 'Name' => 'ORP zu hoch'],
-                ['Value' => 'sensor_offline', 'Name' => 'Sensor offline'],
-            ]);
+            IPS_SetVariableProfileAssociation('POOL.state', 'ok', 'OK', 'Information', 0x00FF00);
+            IPS_SetVariableProfileAssociation('POOL.state', 'ph_low', 'pH zu niedrig', 'Warning', 0xFF8000);
+            IPS_SetVariableProfileAssociation('POOL.state', 'ph_high', 'pH zu hoch', 'Warning', 0xFF8000);
+            IPS_SetVariableProfileAssociation('POOL.state', 'orp_low', 'ORP zu niedrig', 'Warning', 0xFF8000);
+            IPS_SetVariableProfileAssociation('POOL.state', 'orp_high', 'ORP zu hoch', 'Warning', 0xFF8000);
+            IPS_SetVariableProfileAssociation('POOL.state', 'sensor_offline', 'Sensor offline', 'Alert', 0xFF0000);
         }
     }
 
