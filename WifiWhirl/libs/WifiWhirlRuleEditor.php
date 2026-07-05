@@ -86,10 +86,16 @@ final class WifiWhirlRuleEditor
     /** @param array<string, mixed> $row */
     private static function editorRowToPropertyRow(array $row, bool $heater): ?array
     {
+        $start = WifiWhirlAutomation::normalizeTimeString(trim((string) ($row['start'] ?? '08:00')));
+        $end = WifiWhirlAutomation::normalizeTimeString(trim((string) ($row['end'] ?? '20:00')));
+        if ($start === null || $end === null || $start >= $end) {
+            return null;
+        }
+
         $property = [
             'active' => WifiWhirlAutomation::toBool($row['active'] ?? false),
-            'start' => trim((string) ($row['start'] ?? '08:00')),
-            'end' => trim((string) ($row['end'] ?? '20:00')),
+            'start' => $start,
+            'end' => $end,
         ];
 
         foreach (self::DAY_KEYS as $day) {

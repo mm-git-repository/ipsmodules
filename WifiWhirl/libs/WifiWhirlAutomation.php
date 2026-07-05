@@ -392,6 +392,11 @@ final class WifiWhirlAutomation
 
     private static function normalizeTime(string $value): ?string
     {
+        return self::normalizeTimeString($value);
+    }
+
+    public static function normalizeTimeString(string $value): ?string
+    {
         $value = trim($value);
         if (preg_match('/^(\d{1,2}):(\d{2})$/', $value, $m) !== 1) {
             return null;

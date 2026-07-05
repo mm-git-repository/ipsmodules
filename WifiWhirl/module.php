@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 9;
+    private const MODULE_BUILD = 10;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -105,10 +105,65 @@ class WifiWhirl extends IPSModuleStrict
     /** @return list<array<string, mixed>> */
     private function loadAutomationRules(): array
     {
-        $pump = WifiWhirlAutomation::parsePumpRules($this->ReadPropertyString('AutomationPumpRules'));
-        $heater = WifiWhirlAutomation::parseHeaterRules($this->ReadPropertyString('AutomationHeaterRules'));
+        $pump = WifiWhirlAutomation::parsePumpRules($this->readRulesPropertyRaw('AutomationPumpRules'));
+        $heater = WifiWhirlAutomation::parseHeaterRules($this->readRulesPropertyRaw('AutomationHeaterRules'));
 
         return WifiWhirlAutomation::mergeRuleLists($pump, $heater);
+    }
+
+    private function readRulesPropertyRaw(string $name): mixed
+    {
+        if (function_exists('IPS_GetProperty')) {
+            $value = IPS_GetProperty($this->InstanceID, $name);
+            if ($value !== false && $value !== null && $value !== '') {
+                return $value;
+            }
+        }
+
+        return $this->ReadPropertyString($name);
+    }
+
+    /**
+     * @param list<array<string, mixed>> $pumpRows
+     * @param list<array<string, mixed>> $heaterRows
+     */
+    private function persistAutomationConfiguration(bool $enabled, array $pumpRows, array $heaterRows): bool
+    {
+        if (!function_exists('IPS_SetProperty')) {
+            return false;
+        }
+
+        $pumpJson = json_encode($pumpRows, JSON_UNESCAPED_UNICODE);
+        $heaterJson = json_encode($heaterRows, JSON_UNESCAPED_UNICODE);
+        if (!is_string($pumpJson) || !is_string($heaterJson)) {
+            return false;
+        }
+
+        $ok = IPS_SetProperty($this->InstanceID, 'AutomationEnabled', $enabled)
+            && $this->writeRulesPropertyValue('AutomationPumpRules', $pumpRows, $pumpJson)
+            && $this->writeRulesPropertyValue('AutomationHeaterRules', $heaterRows, $heaterJson);
+
+        if (!$ok) {
+            return false;
+        }
+
+        if (function_exists('IPS_ApplyChanges')) {
+            return IPS_ApplyChanges($this->InstanceID);
+        }
+
+        $this->ApplyChanges();
+
+        return true;
+    }
+
+    /** @param list<array<string, mixed>> $rows */
+    private function writeRulesPropertyValue(string $name, array $rows, string $json): bool
+    {
+        if (IPS_SetProperty($this->InstanceID, $name, $rows)) {
+            return true;
+        }
+
+        return (bool) IPS_SetProperty($this->InstanceID, $name, $json);
     }
 
     /** @param array<string, mixed> $configuration */
@@ -514,11 +569,11 @@ class WifiWhirl extends IPSModuleStrict
             'enabled' => $enabled ?? $this->ReadPropertyBoolean('AutomationEnabled'),
             'status' => $this->getAutomationStatusSafe(),
             'pumpRules' => WifiWhirlRuleEditor::editorRowsFromProperty(
-                $pumpPropertyRows ?? $this->ReadPropertyString('AutomationPumpRules'),
+                $pumpPropertyRows ?? $this->readRulesPropertyRaw('AutomationPumpRules'),
                 false,
             ),
             'heaterRules' => WifiWhirlRuleEditor::editorRowsFromProperty(
-                $heaterPropertyRows ?? $this->ReadPropertyString('AutomationHeaterRules'),
+                $heaterPropertyRows ?? $this->readRulesPropertyRaw('AutomationHeaterRules'),
                 true,
             ),
             'message' => $message ?? '',
@@ -545,20 +600,18 @@ class WifiWhirl extends IPSModuleStrict
         $heaterRows = $this->validatedPropertyRowsFromEditor($heaterEditor, true);
         $enabled = WifiWhirlAutomation::toBool($payload['enabled'] ?? false);
 
-        IPS_SetProperty($this->InstanceID, 'AutomationEnabled', $enabled);
-        IPS_SetProperty(
-            $this->InstanceID,
-            'AutomationPumpRules',
-            json_encode($pumpRows, JSON_UNESCAPED_UNICODE),
-        );
-        IPS_SetProperty(
-            $this->InstanceID,
-            'AutomationHeaterRules',
-            json_encode($heaterRows, JSON_UNESCAPED_UNICODE),
-        );
+        if (!$this->persistAutomationConfiguration($enabled, $pumpRows, $heaterRows)) {
+            $this->pushEditorVisualization([
+                'enabled' => $enabled,
+                'status' => $this->getAutomationStatusSafe(),
+                'pumpRules' => WifiWhirlRuleEditor::editorRowsFromProperty($pumpRows, false),
+                'heaterRules' => WifiWhirlRuleEditor::editorRowsFromProperty($heaterRows, true),
+                'message' => 'Speichern fehlgeschlagen',
+                'messageOk' => false,
+            ]);
 
-        // IPS_SetProperty schreibt nur in die DB — Property-Cache für ReadProperty aktualisieren.
-        parent::ApplyChanges();
+            return;
+        }
 
         $this->configureAutomationTimer();
         $this->RunAutomation();
@@ -580,7 +633,11 @@ class WifiWhirl extends IPSModuleStrict
         }
 
         IPS_SetProperty($this->InstanceID, 'AutomationEnabled', WifiWhirlAutomation::toBool($payload['enabled'] ?? false));
-        parent::ApplyChanges();
+        if (function_exists('IPS_ApplyChanges')) {
+            IPS_ApplyChanges($this->InstanceID);
+        } else {
+            $this->ApplyChanges();
+        }
         $this->configureAutomationTimer();
         $this->RunAutomation();
         $this->pushEditorVisualization($this->buildEditorPayload());
@@ -599,12 +656,6 @@ class WifiWhirl extends IPSModuleStrict
             }
             $propertyRows = WifiWhirlRuleEditor::propertyRowsFromEditor([$row], $heater);
             if ($propertyRows === []) {
-                continue;
-            }
-            $parsed = $heater
-                ? WifiWhirlAutomation::parseHeaterRules($propertyRows)
-                : WifiWhirlAutomation::parsePumpRules($propertyRows);
-            if ($parsed === []) {
                 continue;
             }
             $valid[] = $propertyRows[0];

@@ -126,13 +126,15 @@
             html += renderInlineField(
                 'Start',
                 '<input type="text" data-field="start" value="' + esc(row.start) + '" placeholder="08:00">',
+                'wwhl-auto-inline-time',
             );
             html += renderInlineField(
                 'Ende',
                 '<input type="text" data-field="end" value="' + esc(row.end) + '" placeholder="20:00">',
+                'wwhl-auto-inline-time',
             );
             if (isHeater) {
-                html += renderInlineField('Ziel °C', targetTempSelect(row.targetTemp));
+                html += renderInlineField('Ziel °C', targetTempSelect(row.targetTemp), 'wwhl-auto-inline-temp');
                 html += renderInlineField(
                     'PV-Freigabe',
                     '<input type="checkbox" data-field="pvGated"' + (row.pvGated ? ' checked' : '') + '>',

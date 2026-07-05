@@ -101,7 +101,8 @@
             "Gespeichert": "Saved",
             "Ungültige Anfrage": "Invalid request",
             "Unbekannter Befehl": "Unknown command",
-            "Speichern nicht verfügbar": "Save not available"
+            "Speichern nicht verfügbar": "Save not available",
+            "Speichern fehlgeschlagen": "Save failed"
         },
         "en_GB": {
             "Installierte Modulversion": "Installed module version",
@@ -204,7 +205,8 @@
             "Gespeichert": "Saved",
             "Ungültige Anfrage": "Invalid request",
             "Unbekannter Befehl": "Unknown command",
-            "Speichern nicht verfügbar": "Save not available"
+            "Speichern nicht verfügbar": "Save not available",
+            "Speichern fehlgeschlagen": "Save failed"
         },
         "de": {
             "Installierte Modulversion": "Installierte Modulversion",
@@ -307,7 +309,8 @@
             "Gespeichert": "Gespeichert",
             "Ungültige Anfrage": "Ungültige Anfrage",
             "Unbekannter Befehl": "Unbekannter Befehl",
-            "Speichern nicht verfügbar": "Speichern nicht verfügbar"
+            "Speichern nicht verfügbar": "Speichern nicht verfügbar",
+            "Speichern fehlgeschlagen": "Speichern fehlgeschlagen"
         },
         "de_DE": {
             "Installierte Modulversion": "Installierte Modulversion",
@@ -410,7 +413,8 @@
             "Gespeichert": "Gespeichert",
             "Ungültige Anfrage": "Ungültige Anfrage",
             "Unbekannter Befehl": "Unbekannter Befehl",
-            "Speichern nicht verfügbar": "Speichern nicht verfügbar"
+            "Speichern nicht verfügbar": "Speichern nicht verfügbar",
+            "Speichern fehlgeschlagen": "Speichern fehlgeschlagen"
         }
     }
 }
