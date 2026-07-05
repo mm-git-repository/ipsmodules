@@ -9,7 +9,7 @@ class PoolControl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 5;
+    private const MODULE_BUILD = 6;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -109,7 +109,50 @@ class PoolControl extends IPSModuleStrict
             }
         }
 
+        $this->injectMaintenanceDateLabels($form);
+
         return json_encode($form, JSON_UNESCAPED_UNICODE);
+    }
+
+    /** @param array<string, mixed> $form */
+    private function injectMaintenanceDateLabels(array &$form): void
+    {
+        $this->injectMaintenanceDateLabel(
+            $form,
+            'ManualAlkalinityDateInfo',
+            'Alkalität zuletzt gemessen',
+            (int) $this->ReadPropertyInteger('ManualAlkalinityDate')
+        );
+        $this->injectMaintenanceDateLabel(
+            $form,
+            'ManualCyanuricAcidDateInfo',
+            'Cyanursäure zuletzt gemessen',
+            (int) $this->ReadPropertyInteger('ManualCyanuricAcidDate')
+        );
+    }
+
+    /** @param array<string, mixed> $form */
+    private function injectMaintenanceDateLabel(array &$form, string $name, string $prefix, int $unix): void
+    {
+        foreach ($form['elements'] ?? [] as $idx => $element) {
+            if (($element['type'] ?? '') !== 'ExpansionPanel') {
+                continue;
+            }
+            foreach ($element['items'] ?? [] as $itemIdx => $item) {
+                if (($item['name'] ?? '') === $name) {
+                    $form['elements'][$idx]['items'][$itemIdx]['caption'] = $prefix . ': ' . $this->formatPropertyDate($unix);
+                }
+            }
+        }
+    }
+
+    private function formatPropertyDate(int $unix): string
+    {
+        if ($unix <= 0) {
+            return 'noch nicht erfasst';
+        }
+
+        return date('d.m.Y H:i', $unix);
     }
 
     public function RequestAction(string $Ident, mixed $Value): void
@@ -120,7 +163,30 @@ class PoolControl extends IPSModuleStrict
             return;
         }
 
+        if ($Ident === 'MarkAlkalinityMeasured') {
+            $this->markMaintenanceDate('ManualAlkalinityDate');
+
+            return;
+        }
+
+        if ($Ident === 'MarkCyanuricAcidMeasured') {
+            $this->markMaintenanceDate('ManualCyanuricAcidDate');
+
+            return;
+        }
+
         parent::RequestAction($Ident, $Value);
+    }
+
+    private function markMaintenanceDate(string $property): void
+    {
+        IPS_SetProperty($this->InstanceID, $property, time());
+        if (function_exists('IPS_ApplyChanges')) {
+            IPS_ApplyChanges($this->InstanceID);
+        } else {
+            $this->ApplyChanges();
+        }
+        $this->RunEvaluation();
     }
 
     public function RunEvaluation(): void

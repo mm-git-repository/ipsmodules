@@ -212,9 +212,15 @@
                     "minimum": 0
                 },
                 {
-                    "type": "Timestamp",
-                    "name": "ManualAlkalinityDate",
-                    "caption": "Alkalität: letzte Messung"
+                    "type": "Label",
+                    "name": "ManualAlkalinityDateInfo",
+                    "caption": "Alkalität zuletzt gemessen: noch nicht erfasst"
+                },
+                {
+                    "type": "Button",
+                    "name": "MarkAlkalinityMeasured",
+                    "caption": "Alkalität: Messung jetzt erfassen",
+                    "onClick": "POOL_RequestAction($_IPS['TARGET'], 'MarkAlkalinityMeasured', true);"
                 },
                 {
                     "type": "NumberSpinner",
@@ -231,9 +237,15 @@
                     "minimum": 0
                 },
                 {
-                    "type": "Timestamp",
-                    "name": "ManualCyanuricAcidDate",
-                    "caption": "Cyanursäure: letzte Messung"
+                    "type": "Label",
+                    "name": "ManualCyanuricAcidDateInfo",
+                    "caption": "Cyanursäure zuletzt gemessen: noch nicht erfasst"
+                },
+                {
+                    "type": "Button",
+                    "name": "MarkCyanuricAcidMeasured",
+                    "caption": "Cyanursäure: Messung jetzt erfassen",
+                    "onClick": "POOL_RequestAction($_IPS['TARGET'], 'MarkCyanuricAcidMeasured', true);"
                 },
                 {
                     "type": "NumberSpinner",
