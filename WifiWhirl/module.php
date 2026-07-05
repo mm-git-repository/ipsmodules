@@ -5,12 +5,13 @@ declare(strict_types=1);
 require_once __DIR__ . '/WifiWhirlEntities.php';
 require_once __DIR__ . '/libs/WifiWhirlHttpClient.php';
 require_once __DIR__ . '/libs/WifiWhirlAutomation.php';
+require_once __DIR__ . '/libs/WifiWhirlRuleSlots.php';
 
 class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 4;
+    private const MODULE_BUILD = 5;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -32,6 +33,8 @@ class WifiWhirl extends IPSModuleStrict
 
     /** @var array<string, array<string, mixed>>|null */
     private ?array $entityMapCache = null;
+
+    private bool $ruleSlotSyncActive = false;
 
     public function Create(): void
     {
@@ -167,6 +170,7 @@ class WifiWhirl extends IPSModuleStrict
         $this->syncModuleVersionVariable();
         $this->configureTimer();
         $this->configureAutomationTimer();
+        $this->syncRuleSlotsFromProperties();
         $this->updateInstanceStatus();
         $this->SetSummary($this->buildSummary());
     }
@@ -194,6 +198,25 @@ class WifiWhirl extends IPSModuleStrict
     public function RequestAction(string $Ident, mixed $Value): void
     {
         if ($Ident === 'Reachable') {
+            return;
+        }
+
+        if ($Ident === 'AutoEnabled') {
+            $enabled = WifiWhirlAutomation::toBool($Value);
+            $this->SetValue('AutoEnabled', $enabled);
+            if (function_exists('IPS_SetProperty')) {
+                IPS_SetProperty($this->InstanceID, 'AutomationEnabled', $enabled);
+            }
+            $this->configureAutomationTimer();
+            $this->RunAutomation();
+
+            return;
+        }
+
+        if (WifiWhirlRuleSlots::isSlotIdent($Ident)) {
+            $this->setSlotVariableValue($Ident, $Value);
+            $this->persistRuleSlotsToProperties();
+
             return;
         }
 
@@ -393,6 +416,11 @@ class WifiWhirl extends IPSModuleStrict
         return 'Manuelle Pause aufgehoben';
     }
 
+    public function ReloadRuleSlotsFromProperties(): void
+    {
+        $this->syncRuleSlotsFromProperties();
+    }
+
     private function runButtonCommand(array $payload, string $okMessage): string
     {
         if (!$this->sendCommandPayload($payload)) {
@@ -483,6 +511,216 @@ class WifiWhirl extends IPSModuleStrict
         $this->DisableAction('AutomationPvGateOpen');
         $this->DisableAction('AutomationPumpDesired');
         $this->DisableAction('AutomationHeaterDesired');
+
+        $this->registerRuleSlotVariables($pos, $pres);
+    }
+
+    private function registerRuleSlotVariables(int &$pos, array $pres): void
+    {
+        $switchPres = $pres['~Switch'] ?? '~Switch';
+        $weekdayPres = $pres['WWHL.WeekdayPreset'] ?? 'WWHL.WeekdayPreset';
+        $textPres = $pres['WWHL.Text'] ?? 'WWHL.Text';
+
+        $this->RegisterVariableBoolean('AutoEnabled', 'Automatisierung aktiv (WebFront)', $switchPres, $pos);
+        $this->EnableAction('AutoEnabled');
+        ++$pos;
+
+        for ($n = 1; $n <= WifiWhirlRuleSlots::MAX_RULE_SLOTS; ++$n) {
+            $this->RegisterVariableBoolean("AutoPump{$n}Active", "Pumpe Regel {$n} aktiv", $switchPres, $pos);
+            $this->EnableAction("AutoPump{$n}Active");
+            ++$pos;
+            $this->RegisterVariableInteger("AutoPump{$n}Weekdays", "Pumpe Regel {$n} Wochentage", $weekdayPres, $pos);
+            $this->EnableAction("AutoPump{$n}Weekdays");
+            ++$pos;
+            $this->RegisterVariableString("AutoPump{$n}Start", "Pumpe Regel {$n} Start", $textPres, $pos);
+            $this->EnableAction("AutoPump{$n}Start");
+            ++$pos;
+            $this->RegisterVariableString("AutoPump{$n}End", "Pumpe Regel {$n} Ende", $textPres, $pos);
+            $this->EnableAction("AutoPump{$n}End");
+            ++$pos;
+        }
+
+        for ($n = 1; $n <= WifiWhirlRuleSlots::MAX_RULE_SLOTS; ++$n) {
+            $this->RegisterVariableBoolean("AutoHeater{$n}Active", "Heizung Regel {$n} aktiv", $switchPres, $pos);
+            $this->EnableAction("AutoHeater{$n}Active");
+            ++$pos;
+            $this->RegisterVariableInteger("AutoHeater{$n}Weekdays", "Heizung Regel {$n} Wochentage", $weekdayPres, $pos);
+            $this->EnableAction("AutoHeater{$n}Weekdays");
+            ++$pos;
+            $this->RegisterVariableString("AutoHeater{$n}Start", "Heizung Regel {$n} Start", $textPres, $pos);
+            $this->EnableAction("AutoHeater{$n}Start");
+            ++$pos;
+            $this->RegisterVariableString("AutoHeater{$n}End", "Heizung Regel {$n} Ende", $textPres, $pos);
+            $this->EnableAction("AutoHeater{$n}End");
+            ++$pos;
+            $this->RegisterVariableInteger("AutoHeater{$n}TargetTemp", "Heizung Regel {$n} Ziel °C", $pres['~Temperature'] ?? '~Temperature', $pos);
+            $this->EnableAction("AutoHeater{$n}TargetTemp");
+            ++$pos;
+            $this->RegisterVariableBoolean("AutoHeater{$n}PvGated", "Heizung Regel {$n} PV-Freigabe", $switchPres, $pos);
+            $this->EnableAction("AutoHeater{$n}PvGated");
+            ++$pos;
+        }
+    }
+
+    private function syncRuleSlotsFromProperties(): void
+    {
+        $this->ruleSlotSyncActive = true;
+
+        try {
+            $this->SetValue('AutoEnabled', $this->ReadPropertyBoolean('AutomationEnabled'));
+
+            $pumpRaw = json_decode($this->ReadPropertyString('AutomationPumpRules'), true);
+            $heaterRaw = json_decode($this->ReadPropertyString('AutomationHeaterRules'), true);
+            if (!is_array($pumpRaw)) {
+                $pumpRaw = [];
+            }
+            if (!is_array($heaterRaw)) {
+                $heaterRaw = [];
+            }
+
+            $this->warnIfRulesExceedSlots('Pumpen', count($pumpRaw));
+            $this->warnIfRulesExceedSlots('Heizung', count($heaterRaw));
+
+            $pumpSlots = WifiWhirlRuleSlots::rulesToPumpSlots(WifiWhirlAutomation::parsePumpRules($pumpRaw));
+            $heaterSlots = WifiWhirlRuleSlots::rulesToHeaterSlots(WifiWhirlAutomation::parseHeaterRules($heaterRaw));
+
+            for ($n = 1; $n <= WifiWhirlRuleSlots::MAX_RULE_SLOTS; ++$n) {
+                $this->applyPumpSlotToVariables($n, $pumpSlots[$n - 1]);
+                $this->applyHeaterSlotToVariables($n, $heaterSlots[$n - 1]);
+            }
+
+            foreach (array_slice($pumpRaw, 0, WifiWhirlRuleSlots::MAX_RULE_SLOTS) as $idx => $row) {
+                if (is_array($row) && !$this->rowWeekdaysMatchPreset($row)) {
+                    $this->SendDebug(__FUNCTION__, 'Pumpe Regel ' . ($idx + 1) . ': individuelle Wochentage — Preset-Fallback', 0);
+                }
+            }
+            foreach (array_slice($heaterRaw, 0, WifiWhirlRuleSlots::MAX_RULE_SLOTS) as $idx => $row) {
+                if (is_array($row) && !$this->rowWeekdaysMatchPreset($row)) {
+                    $this->SendDebug(__FUNCTION__, 'Heizung Regel ' . ($idx + 1) . ': individuelle Wochentage — Preset-Fallback', 0);
+                }
+            }
+        } finally {
+            $this->ruleSlotSyncActive = false;
+        }
+    }
+
+    private function persistRuleSlotsToProperties(): void
+    {
+        if ($this->ruleSlotSyncActive || !function_exists('IPS_SetProperty')) {
+            return;
+        }
+
+        $pumpSlots = [];
+        $heaterSlots = [];
+        for ($n = 1; $n <= WifiWhirlRuleSlots::MAX_RULE_SLOTS; ++$n) {
+            $pumpSlots[] = $this->readPumpSlotFromVariables($n);
+            $heaterSlots[] = $this->readHeaterSlotFromVariables($n);
+        }
+
+        $pumpRows = WifiWhirlRuleSlots::pumpSlotsToPropertyRows($pumpSlots);
+        $heaterRows = WifiWhirlRuleSlots::heaterSlotsToPropertyRows($heaterSlots);
+
+        IPS_SetProperty(
+            $this->InstanceID,
+            'AutomationPumpRules',
+            json_encode($pumpRows, JSON_UNESCAPED_UNICODE),
+        );
+        IPS_SetProperty(
+            $this->InstanceID,
+            'AutomationHeaterRules',
+            json_encode($heaterRows, JSON_UNESCAPED_UNICODE),
+        );
+
+        $this->configureAutomationTimer();
+        $this->RunAutomation();
+    }
+
+    private function setSlotVariableValue(string $ident, mixed $value): void
+    {
+        $parsed = WifiWhirlRuleSlots::parseSlotIdent($ident);
+        if ($parsed === null) {
+            return;
+        }
+
+        match ($parsed['field']) {
+            'active', 'pvGated' => $this->SetValue($ident, WifiWhirlAutomation::toBool($value)),
+            'weekdays', 'targetTemp' => $this->SetValue($ident, (int) $value),
+            default => $this->SetValue($ident, trim((string) $value)),
+        };
+    }
+
+    /** @param array<string, mixed> $slot */
+    private function applyPumpSlotToVariables(int $n, array $slot): void
+    {
+        $this->SetValue("AutoPump{$n}Active", (bool) ($slot['active'] ?? false));
+        $this->SetValue("AutoPump{$n}Weekdays", (int) ($slot['weekdays'] ?? WifiWhirlRuleSlots::PRESET_MO_FR));
+        $this->SetValue("AutoPump{$n}Start", (string) ($slot['start'] ?? '08:00'));
+        $this->SetValue("AutoPump{$n}End", (string) ($slot['end'] ?? '20:00'));
+    }
+
+    /** @param array<string, mixed> $slot */
+    private function applyHeaterSlotToVariables(int $n, array $slot): void
+    {
+        $this->SetValue("AutoHeater{$n}Active", (bool) ($slot['active'] ?? false));
+        $this->SetValue("AutoHeater{$n}Weekdays", (int) ($slot['weekdays'] ?? WifiWhirlRuleSlots::PRESET_MO_FR));
+        $this->SetValue("AutoHeater{$n}Start", (string) ($slot['start'] ?? '08:00'));
+        $this->SetValue("AutoHeater{$n}End", (string) ($slot['end'] ?? '20:00'));
+        $this->SetValue("AutoHeater{$n}TargetTemp", (int) ($slot['targetTemp'] ?? 38));
+        $this->SetValue("AutoHeater{$n}PvGated", (bool) ($slot['pvGated'] ?? false));
+    }
+
+    /** @return array<string, mixed> */
+    private function readPumpSlotFromVariables(int $n): array
+    {
+        return [
+            'active' => (bool) $this->GetValue("AutoPump{$n}Active"),
+            'weekdays' => (int) $this->GetValue("AutoPump{$n}Weekdays"),
+            'start' => (string) $this->GetValue("AutoPump{$n}Start"),
+            'end' => (string) $this->GetValue("AutoPump{$n}End"),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function readHeaterSlotFromVariables(int $n): array
+    {
+        return [
+            'active' => (bool) $this->GetValue("AutoHeater{$n}Active"),
+            'weekdays' => (int) $this->GetValue("AutoHeater{$n}Weekdays"),
+            'start' => (string) $this->GetValue("AutoHeater{$n}Start"),
+            'end' => (string) $this->GetValue("AutoHeater{$n}End"),
+            'targetTemp' => (int) $this->GetValue("AutoHeater{$n}TargetTemp"),
+            'pvGated' => (bool) $this->GetValue("AutoHeater{$n}PvGated"),
+        ];
+    }
+
+    /** @param array<string, mixed> $row */
+    private function rowWeekdaysMatchPreset(array $row): bool
+    {
+        return WifiWhirlRuleSlots::weekdaysExactlyMatchPreset(
+            WifiWhirlAutomation::toBool($row['mo'] ?? false),
+            WifiWhirlAutomation::toBool($row['tu'] ?? false),
+            WifiWhirlAutomation::toBool($row['we'] ?? false),
+            WifiWhirlAutomation::toBool($row['th'] ?? false),
+            WifiWhirlAutomation::toBool($row['fr'] ?? false),
+            WifiWhirlAutomation::toBool($row['sa'] ?? false),
+            WifiWhirlAutomation::toBool($row['so'] ?? false),
+        );
+    }
+
+    private function warnIfRulesExceedSlots(string $label, int $count): void
+    {
+        if ($count > WifiWhirlRuleSlots::MAX_RULE_SLOTS) {
+            $this->LogMessage(
+                sprintf(
+                    '%s-Regeln: %d definiert, WebFront unterstützt maximal %d (nur die ersten %d werden synchronisiert)',
+                    $label,
+                    $count,
+                    WifiWhirlRuleSlots::MAX_RULE_SLOTS,
+                    WifiWhirlRuleSlots::MAX_RULE_SLOTS,
+                ),
+                KL_WARNING,
+            );
+        }
     }
 
     private function ensureModuleVersionVariable(): void
@@ -763,6 +1001,14 @@ class WifiWhirl extends IPSModuleStrict
         if (!IPS_VariableProfileExists('WWHL.Text')) {
             IPS_CreateVariableProfile('WWHL.Text', 3);
         }
+        if (!IPS_VariableProfileExists('WWHL.WeekdayPreset')) {
+            IPS_CreateVariableProfile('WWHL.WeekdayPreset', 1);
+            IPS_SetVariableProfileValues('WWHL.WeekdayPreset', 0, 3, 1);
+            IPS_SetVariableProfileAssociation('WWHL.WeekdayPreset', 0, 'Mo–Fr', '', -1);
+            IPS_SetVariableProfileAssociation('WWHL.WeekdayPreset', 1, 'Mo–So', '', -1);
+            IPS_SetVariableProfileAssociation('WWHL.WeekdayPreset', 2, 'Sa–So', '', -1);
+            IPS_SetVariableProfileAssociation('WWHL.WeekdayPreset', 3, 'Mo–Sa', '', -1);
+        }
     }
 
     /** @return array<string, string|array<string, string>> */
@@ -788,6 +1034,7 @@ class WifiWhirl extends IPSModuleStrict
                 'WWHL.mgL' => ['PROFILE' => 'WWHL.mgL'],
                 'WWHL.Brightness' => ['PROFILE' => 'WWHL.Brightness'],
                 'WWHL.Text' => ['PROFILE' => 'WWHL.Text'],
+                'WWHL.WeekdayPreset' => ['PROFILE' => 'WWHL.WeekdayPreset'],
             ];
         }
 
@@ -804,6 +1051,7 @@ class WifiWhirl extends IPSModuleStrict
             'WWHL.mgL' => 'WWHL.mgL',
             'WWHL.Brightness' => 'WWHL.Brightness',
             'WWHL.Text' => 'WWHL.Text',
+            'WWHL.WeekdayPreset' => 'WWHL.WeekdayPreset',
         ];
     }
 }
