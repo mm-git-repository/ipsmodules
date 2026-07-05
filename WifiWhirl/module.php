@@ -556,9 +556,16 @@ class WifiWhirl extends IPSModuleStrict
     /** @param array<string, mixed> $data */
     private function pushEditorVisualization(array $data): void
     {
-        if (method_exists($this, 'UpdateVisualizationValue')) {
-            $this->UpdateVisualizationValue($data);
+        if (!method_exists($this, 'UpdateVisualizationValue')) {
+            return;
         }
+
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE);
+        if (!is_string($json)) {
+            return;
+        }
+
+        $this->UpdateVisualizationValue($json);
     }
 
     private function getAutomationStatusSafe(): string

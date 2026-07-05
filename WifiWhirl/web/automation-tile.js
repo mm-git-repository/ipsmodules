@@ -224,6 +224,13 @@
     }
 
     window.handleMessage = function (data) {
+        if (typeof data === 'string') {
+            try {
+                data = JSON.parse(data);
+            } catch (e) {
+                return;
+            }
+        }
         applyPayload(data);
     };
 
