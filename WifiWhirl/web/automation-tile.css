@@ -150,7 +150,9 @@
 }
 
 .wwhl-auto-inline input[type="text"],
-.wwhl-auto-inline select {
+.wwhl-auto-inline select,
+.wwhl-auto-select-time,
+.wwhl-auto-select-temp {
     width: 100%;
 }
 

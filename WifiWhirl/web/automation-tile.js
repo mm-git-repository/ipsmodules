@@ -22,6 +22,58 @@
 
     var tempMin = 7;
     var tempMax = 40;
+    var timeStepMinutes = 15;
+    var timeOptions = null;
+
+    function pad2(n) {
+        return (n < 10 ? '0' : '') + String(n);
+    }
+
+    function buildTimeOptions() {
+        if (timeOptions) {
+            return timeOptions;
+        }
+        timeOptions = [];
+        for (var hour = 0; hour < 24; hour += 1) {
+            for (var minute = 0; minute < 60; minute += timeStepMinutes) {
+                timeOptions.push(pad2(hour) + ':' + pad2(minute));
+            }
+        }
+        return timeOptions;
+    }
+
+    function parseTimeValue(value) {
+        var match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+        if (!match) {
+            return null;
+        }
+        var hour = parseInt(match[1], 10);
+        var minute = parseInt(match[2], 10);
+        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+            return null;
+        }
+        return pad2(hour) + ':' + pad2(minute);
+    }
+
+    function normalizeTimeValue(value, fallback) {
+        var parsed = parseTimeValue(value);
+        return parsed || fallback;
+    }
+
+    function timeSelect(field, value) {
+        var selected = normalizeTimeValue(value, field === 'end' ? '20:00' : '08:00');
+        var options = buildTimeOptions();
+        var inList = options.indexOf(selected) >= 0;
+        var html = '<select data-field="' + field + '" class="wwhl-auto-select-time">';
+        if (!inList) {
+            html += '<option value="' + esc(selected) + '" selected>' + esc(selected) + '</option>';
+        }
+        options.forEach(function (opt) {
+            html += '<option value="' + opt + '"' + (opt === selected ? ' selected' : '') + '>' + opt + '</option>';
+        });
+        html += '</select>';
+        return html;
+    }
 
     function t(key) {
         if (typeof translate === 'function') {
@@ -63,8 +115,8 @@
     function normalizeRow(row, isHeater) {
         var out = {
             active: !!row.active,
-            start: String(row.start || '08:00').trim(),
-            end: String(row.end || '20:00').trim(),
+            start: normalizeTimeValue(row.start, '08:00'),
+            end: normalizeTimeValue(row.end, '20:00'),
             mo: !!row.mo,
             tu: !!row.tu,
             we: !!row.we,
@@ -124,12 +176,12 @@
             html += '<div class="wwhl-auto-row1">';
             html += renderInlineField(
                 'Start',
-                '<input type="text" data-field="start" value="' + esc(row.start) + '" placeholder="08:00">',
+                timeSelect('start', row.start),
                 'wwhl-auto-inline-time',
             );
             html += renderInlineField(
                 'Ende',
-                '<input type="text" data-field="end" value="' + esc(row.end) + '" placeholder="20:00">',
+                timeSelect('end', row.end),
                 'wwhl-auto-inline-time',
             );
             if (isHeater) {
@@ -164,6 +216,8 @@
                     row[field] = el.checked;
                 } else if (field === 'targetTemp') {
                     row[field] = clampTemp(el.value);
+                } else if (field === 'start' || field === 'end') {
+                    row[field] = normalizeTimeValue(el.value, field === 'end' ? '20:00' : '08:00');
                 } else {
                     row[field] = el.value.trim();
                 }
