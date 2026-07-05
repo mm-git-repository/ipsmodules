@@ -1,0 +1,3066 @@
+<?php
+
+declare(strict_types=1);
+
+class PIXOOEnergyViewer extends IPSModuleStrict
+{
+    private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
+    /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
+    private const MODULE_VERSION = '1.1';
+    /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
+    private const MODULE_BUILD = 34;
+
+    /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
+    private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
+
+    /** Symcon Instanz-Status (IS_SBASE 100 + Offset) */
+    private const IS_CREATING = 101;
+    private const IS_ACTIVE = 102;
+    private const IS_INACTIVE = 104;
+    private const IS_NOTCREATED = 105;
+
+    /** Nach IPS-Start: Objektbaum lädt — „existiert nicht“ kurz ignorieren wenn alle IDs gesetzt */
+    private const CONFIG_VALIDATION_GRACE_SEC = 180;
+
+    /** Verhindert Rekursion ensureInstanceOperational → ApplyChanges */
+    private bool $applyChangesInProgress = false;
+
+    private const PIXEL_SIZE = 64;
+    private const LEFT_PAD = 2;
+    private const FONT_LABEL = 26;
+    private const FONT_VALUE = 2;
+    /**
+     * Divoom ItemList: Font 0 / sehr kleine Höhen werden oft gar nicht gezeichnet.
+     * Font 26 = gleiche kleine Label-Schrift wie „VERBRAUCH“ (standalone/sma_pixoo_display.py).
+     */
+    /** Textfeld ab X; SMARD-Eck mit align=3 und voller Breite rechtsbündig */
+    private const DATETIME_X = 0;
+
+    /** SMARD-Zeitstempel auf dem Pixoo: PHP date()-Format (fest, kein Formularfeld mehr) */
+    private const SMARD_TIME_PHP_FORMAT = 'H:i';
+
+    /** 1 = links, 2 = mitte, 3 = rechts — fest für SMARD-Eck */
+    private const SMARD_CORNER_TEXT_ALIGN = 3;
+
+    /** Zeile des Labels „NETZ“ (und optional SMARD-Uhrzeit rechts in derselben Zeile) */
+    private const NETZ_LABEL_Y = 46;
+
+    /** |Netz| unter diesem Wert (W) gilt auf dem Pixoo als „0“ → gelb */
+    private const NET_ZERO_EPSILON_W = 0.5;
+
+    /** Display-Refresh-Timer: Mindestintervall und Standard (Minuten) */
+    private const DISPLAY_REFRESH_MIN_MINUTES = 15;
+    private const DISPLAY_REFRESH_DEFAULT_MINUTES = 60;
+    private const SMARD_FETCH_MS = 900000;
+
+    /** Kurz-Debounce: identischer Pixoo-Inhalt nicht zweimal innerhalb 1 s (z. B. SMARD direkt nach Update-Timer) */
+    private const PIXOO_SYNC_DEBOUNCE_SEC = 1.0;
+
+    /**
+     * Prüft, ob die Instanz noch lebt (Werte-Timer, Puffer). Symcon-Modul-Timer laufen im selben Worker —
+     * blockiert ein HTTP-Aufruf den Worker, feuern keine anderen Timer mehr (wirkt nach ~24 h wie „Totstellung“).
+     */
+    private const HEALTH_WATCHDOG_MS = 180000;
+
+    /** HTTP-Timeout Pixoo (Sekunden); zu hoch → Timer-Zyklen stapeln sich bei Ausfall */
+    private const PIXOO_HTTP_TIMEOUT_SEC = 4.0;
+
+    /** SendHttpGif (großes Payload) — längeres Timeout nach langer Laufzeit */
+    private const PIXOO_GIF_HTTP_TIMEOUT_SEC = 10.0;
+
+    /** Divoom: 0 = Faces/Uhr, 1 = Cloud, 2 = Visualizer, 3 = Custom (HTTP-Draw) */
+    private const PIXOO_CHANNEL_CUSTOM = 3;
+
+    /** Custom-Seite 1–3 auf dem Pixoo (HTTP-Anzeige) */
+    private const PIXOO_CUSTOM_PAGE = 1;
+
+    /** Nach IPS-Neustart: RegisterMessage fehlt — Update-Timer per Guard nachziehen (ms) */
+    private const STARTUP_GUARD_MS = 30000;
+
+    /** Erstes StartupGuard-Intervall nach Übernehmen/Aktivieren (schneller erster Check) */
+    private const STARTUP_GUARD_FAST_MS = 10000;
+
+    /** Doppelstart durch KR_READY + KERNELSTARTED vermeiden (Sekunden) */
+    private const KERNEL_RUNTIME_START_DEBOUNCE_SEC = 3.0;
+
+    /** Watchdog: Display-Recovery wenn kein erfolgreicher Pixoo-Sync mindestens so lange */
+    private const PIXOO_DISPLAY_STALE_MIN_SEC = 600;
+
+    /** TCP-Verbindungsaufbau Pixoo (Sekunden); verhindert endloses Hängen bei „schwarzem Loch“-Sockets */
+    private const PIXOO_HTTP_CONNECT_TIMEOUT_SEC = 2.0;
+
+    /** HTTP-Timeout SMARD (Sekunden); mehrere Requests hintereinander → Gesamtblockade begrenzen */
+    private const SMARD_HTTP_TIMEOUT_SEC = 8.0;
+
+    /** TCP-Verbindungsaufbau SMARD (Sekunden) */
+    private const SMARD_HTTP_CONNECT_TIMEOUT_SEC = 4.0;
+
+    /** Max. SMARD-Chunk-GETs pro Lauf (jeder blockiert den Modul-Worker); zu wenig → kein Preis in der Ecke */
+    private const SMARD_MAX_CHUNK_REQUESTS = 5;
+
+    /** Nach so vielen Pixoo-Fehlern schweres Init (GIF) pausieren; leichter PixooSync läuft weiter */
+    private const PIXOO_MAX_CONSECUTIVE_FAILS = 3;
+    private const PIXOO_HEAVY_HTTP_COOLDOWN_SEC = 300;
+    /** Kurze Pause nur für schwere Init-Pfade nach Fehlserie */
+    private const PIXOO_LIGHT_HTTP_COOLDOWN_SEC = 60;
+
+    /** cURL: Transfer abbrechen, wenn zu lange keine Bytes ankommen (hängende Leseposition trotz CONNECT) */
+    private const HTTP_LOW_SPEED_BYTES_PER_SEC = 1;
+    private const HTTP_LOW_SPEED_TIME_SEC = 5;
+
+    /** SMARD Marktpreis Day-Ahead DE/LU, EUR/MWh → Anzeige als Zahl in € (= Wert / 1000) */
+    private const SMARD_FILTER_ID = 4169;
+    private const SMARD_REGION = 'DE';
+    private const SMARD_TIME_TEXT_ID = 18;
+    private const SMARD_TEXT_ID = 20;
+
+    /** Pro Wechselrichter (Summe seiner Strings): Leistung strikt darüber → Anteil dieses WR = 0 (Messfehler) */
+    private const GENERATION_INVALID_ABOVE_W = 12000.0;
+
+    /** IPS_VARIABLEMESSAGE + VM_UPDATE — Variable geändert (Symcon Messages-Doku) */
+    private const VM_UPDATE_MESSAGE = 10603;
+
+    /** IPS_KERNELMESSAGE — Kernel-Status (Symcon: RegisterMessage(0, 10100)) */
+    private const IPS_KERNEL_MESSAGE = 10100;
+
+    /** KR_INIT — Runlevel in MessageSink $Data[0] (Module werden geladen) */
+    private const KR_INIT_RUNLEVEL = 10102;
+
+    /** KR_READY — Runlevel in MessageSink $Data[0] bzw. IPS_GetKernelRunlevel() */
+    private const KR_READY_RUNLEVEL = 10103;
+
+    /** IPS_KERNELSTARTED — nach KR_READY, synchron verarbeitet (ab 4.2) */
+    private const IPS_KERNEL_STARTED_MESSAGE = 10001;
+
+    /** Mindest-Timerintervall Werte + Pixoo (Sekunden) */
+    private const UPDATE_INTERVAL_MIN_SEC = 5;
+
+    public function Create(): void
+    {
+        parent::Create();
+
+        $this->RegisterPropertyBoolean('Active', true);
+        $this->RegisterPropertyString('PixooIp', '172.18.1.167');
+        $this->RegisterPropertyInteger('UpdateIntervalSeconds', self::UPDATE_INTERVAL_MIN_SEC);
+        $this->RegisterPropertyInteger('DefaultBrightness', 80);
+        $this->RegisterPropertyBoolean('PixooNightBrightnessUse', false);
+        $this->RegisterPropertyInteger('PixooNightBrightness', 25);
+        $this->RegisterPropertyInteger('PixooNightHourFrom', 22);
+        $this->RegisterPropertyInteger('PixooNightHourTo', 6);
+        $this->RegisterPropertyBoolean('PixooHourlyReinit', true);
+        $this->RegisterPropertyInteger('PixooDisplayRefreshMinutes', self::DISPLAY_REFRESH_DEFAULT_MINUTES);
+
+        $this->RegisterPropertyInteger('HmRealPowerPlusVar', 0);
+        $this->RegisterPropertyInteger('HmRealPowerMinusVar', 0);
+
+        $this->RegisterPropertyInteger('Wr1String1Var', 0);
+        $this->RegisterPropertyInteger('Wr1String2Var', 0);
+        $this->RegisterPropertyInteger('Wr2String1Var', 0);
+        $this->RegisterPropertyInteger('Wr2String2Var', 0);
+
+        $this->RegisterPropertyBoolean('PixooShowSmardPrice', true);
+        $this->RegisterPropertyBoolean('PixooSmardShowUnit', true);
+        $this->RegisterPropertyBoolean('PixooSmardShowTime', false);
+
+        if (!IPS_VariableProfileExists('SMAPX.Watt')) {
+            IPS_CreateVariableProfile('SMAPX.Watt', 2);
+            IPS_SetVariableProfileText('SMAPX.Watt', '', ' W');
+        }
+        if (!IPS_VariableProfileExists('SMAPX.EurKWh')) {
+            IPS_CreateVariableProfile('SMAPX.EurKWh', 2);
+            IPS_SetVariableProfileText('SMAPX.EurKWh', '', ' €');
+        }
+        if (!IPS_VariableProfileExists('SMAPX.Text')) {
+            IPS_CreateVariableProfile('SMAPX.Text', 3);
+        }
+
+        $usePresArray = false;
+        if (function_exists('IPS_GetKernelVersion')) {
+            $kv = IPS_GetKernelVersion();
+            $usePresArray = is_string($kv) && $kv !== '' && version_compare($kv, '8.0', '>=');
+        }
+        if ($usePresArray) {
+            $wattPres = ['PROFILE' => 'SMAPX.Watt'];
+            $eurPres = ['PROFILE' => 'SMAPX.EurKWh'];
+            $textPres = ['PROFILE' => 'SMAPX.Text'];
+        } else {
+            $wattPres = 'SMAPX.Watt';
+            $eurPres = 'SMAPX.EurKWh';
+            $textPres = 'SMAPX.Text';
+        }
+        $this->RegisterVariableFloat('Consumption', 'Verbrauch', $wattPres, 0);
+        $this->RegisterVariableFloat('Generation', 'Erzeugung', $wattPres, 1);
+        $this->RegisterVariableFloat('Net', 'Netz', $wattPres, 2);
+        $this->RegisterVariableFloat('SmardSpotCt', 'SMARD Spot (€)', $eurPres, 3);
+        $this->RegisterVariableString('ModuleVersion', 'Modulversion', $textPres, 4);
+
+        // SMAPX_*: Symcon erzeugt globale Funktionen aus public-Methoden (scripts/__generated.inc.php).
+        $this->RegisterTimer('Update', 0, 'SMAPX_UpdateValues($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('PixooSync', 0, 'SMAPX_SyncPixoo($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('HourlyReinit', 0, 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('SmardFetch', 0, 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('HealthWatchdog', 0, 'SMAPX_HealthWatchdog($_IPS[\'TARGET\']);');
+        $this->RegisterTimer('StartupGuard', self::STARTUP_GUARD_FAST_MS, 'SMAPX_StartupGuardRecovery($_IPS[\'TARGET\']);');
+        $this->ensureKernelLifecycleMessages();
+    }
+
+    /** @return list<string> */
+    private static function obsoleteConfigurationKeys(): array
+    {
+        return [
+            'PixooShowDateTime',
+            'PixooDateTimeTwoLines',
+            'PixooDateTimeFormatDate',
+            'PixooDateTimeFormatTime',
+            'PixooDateTimeFormatCombined',
+            'PixooDateTimeFont',
+            'PixooDateTimeTextHeight',
+            'PixooDateTimeAlign',
+        ];
+    }
+
+    /**
+     * Alte Instanzen: fehlende Keys in der persistierten Konfiguration → IPSModuleStrict:
+     * ReadProperty* wirft „Property not found“, Instanz / Konfigurationsformular lädt nicht.
+     * Alle RegisterProperty-*-Defaults aus Create() hier spiegeln (nur ergänzen, nie überschreiben).
+     *
+     * @return array<string, bool|int|string>
+     */
+    private function migrateDefaultConfiguration(): array
+    {
+        return [
+            'Active' => true,
+            'PixooIp' => '172.18.1.167',
+            'UpdateIntervalSeconds' => self::UPDATE_INTERVAL_MIN_SEC,
+            'DefaultBrightness' => 80,
+            'PixooNightBrightnessUse' => false,
+            'PixooNightBrightness' => 25,
+            'PixooNightHourFrom' => 22,
+            'PixooNightHourTo' => 6,
+            'PixooHourlyReinit' => true,
+            'PixooDisplayRefreshMinutes' => self::DISPLAY_REFRESH_DEFAULT_MINUTES,
+            'HmRealPowerPlusVar' => 0,
+            'HmRealPowerMinusVar' => 0,
+            'Wr1String1Var' => 0,
+            'Wr1String2Var' => 0,
+            'Wr2String1Var' => 0,
+            'Wr2String2Var' => 0,
+            'PixooShowSmardPrice' => true,
+            'PixooSmardShowUnit' => true,
+            'PixooSmardShowTime' => false,
+        ];
+    }
+
+    public function Migrate(string $JSONData): string
+    {
+        parent::Migrate($JSONData);
+
+        $data = json_decode($JSONData, true);
+        if (!is_array($data)) {
+            return $JSONData;
+        }
+        if (!isset($data['configuration']) || !is_array($data['configuration'])) {
+            $data['configuration'] = [];
+        }
+        foreach ($this->migrateDefaultConfiguration() as $key => $default) {
+            if (!array_key_exists($key, $data['configuration'])) {
+                $data['configuration'][$key] = $default;
+                continue;
+            }
+            $v = $data['configuration'][$key];
+            if ($v === null) {
+                $data['configuration'][$key] = $default;
+                continue;
+            }
+            if (is_bool($default)) {
+                $data['configuration'][$key] = self::migrateCoerceBool($v);
+            } elseif (is_int($default)) {
+                $data['configuration'][$key] = self::migrateCoerceInt($v);
+            } else {
+                $data['configuration'][$key] = is_string($v) ? $v : (string) $v;
+            }
+        }
+        if (array_key_exists('UpdateIntervalSeconds', $data['configuration'])) {
+            $u = self::migrateCoerceInt($data['configuration']['UpdateIntervalSeconds']);
+            $data['configuration']['UpdateIntervalSeconds'] = max(self::UPDATE_INTERVAL_MIN_SEC, $u);
+        }
+        foreach (self::obsoleteConfigurationKeys() as $k) {
+            unset($data['configuration'][$k]);
+        }
+
+        $out = json_encode($data, JSON_UNESCAPED_UNICODE);
+        if ($out === false || $out === '') {
+            return $JSONData;
+        }
+
+        return $out;
+    }
+
+    /** @param mixed $v */
+    private static function migrateCoerceBool($v): bool
+    {
+        if (is_bool($v)) {
+            return $v;
+        }
+        if (is_int($v)) {
+            return $v !== 0;
+        }
+        if (is_float($v)) {
+            return ((int) $v) !== 0;
+        }
+        if (is_string($v)) {
+            $s = strtolower(trim($v));
+
+            return in_array($s, ['1', 'true', 'yes', 'on'], true);
+        }
+
+        return false;
+    }
+
+    /** @param mixed $v */
+    private static function migrateCoerceInt($v): int
+    {
+        if (is_int($v)) {
+            return $v;
+        }
+        if (is_float($v)) {
+            return (int) round($v);
+        }
+        if (is_string($v) && is_numeric(trim($v))) {
+            return (int) round((float) $v);
+        }
+        if (is_bool($v)) {
+            return $v ? 1 : 0;
+        }
+
+        return 0;
+    }
+
+    private function getInstanceStatus(): int
+    {
+        if (!function_exists('IPS_GetInstance')) {
+            return self::IS_ACTIVE;
+        }
+
+        return (int) (IPS_GetInstance($this->InstanceID)['InstanceStatus'] ?? 0);
+    }
+
+    /**
+     * Fehlende Properties aus migrateDefaultConfiguration() in der Instanz-Konfiguration ergänzen
+     * (verhindert ReadProperty-Exception bei Modul-Updates).
+     */
+    private function ensureConfigurationDefaults(): void
+    {
+        if (!function_exists('IPS_GetConfiguration') || !function_exists('IPS_SetProperty')) {
+            return;
+        }
+        $values = $this->getPersistedConfigurationValues();
+        if ($values === null) {
+            return;
+        }
+        foreach ($this->migrateDefaultConfiguration() as $key => $default) {
+            if (array_key_exists($key, $values)) {
+                continue;
+            }
+            IPS_SetProperty($this->InstanceID, $key, $default);
+        }
+    }
+
+    /**
+     * Instanz aus „creating“ (101) holen — sonst feuern Modul-Timer nicht.
+     *
+     * @return bool true wenn Laufzeit-Code ausgeführt werden darf
+     */
+    private function ensureInstanceOperational(): bool
+    {
+        $status = $this->getInstanceStatus();
+        if ($status !== self::IS_CREATING && $status !== self::IS_NOTCREATED) {
+            return true;
+        }
+        if ($this->applyChangesInProgress) {
+            return false;
+        }
+        $this->SendDebug(
+            'Start',
+            'Instanz-Status ' . $status . ' (creating) — ApplyChanges wird nachgezogen.',
+            0
+        );
+        $this->applyChangesInProgress = true;
+        try {
+            $this->ensureConfigurationDefaults();
+            $this->runApplyChangesBody();
+        } catch (\Throwable $e) {
+            $this->SendDebug('Start', 'ensureInstanceOperational: ' . $e->getMessage(), 0);
+
+            return false;
+        } finally {
+            $this->applyChangesInProgress = false;
+        }
+        $after = $this->getInstanceStatus();
+
+        return $after !== self::IS_CREATING && $after !== self::IS_NOTCREATED;
+    }
+
+    /**
+     * Standard-Einstieg für Timer: operational → Guard/Kernel → Post-Neustart.
+     *
+     * @return bool false wenn Zyklus nicht nötig (z. B. Post-Neustart hat alles erledigt)
+     */
+    private function prepareModuleTimerCycle(): bool
+    {
+        if (!$this->ensureInstanceOperational()) {
+            return false;
+        }
+        $this->recoverConfigStatusIfDeferred();
+        $this->armStartupGuardTimer();
+        $this->ensureKernelLifecycleMessages();
+        if ($this->handlePostKernelRestartIfNeeded()) {
+            return false;
+        }
+
+        return true;
+    }
+
+    public function ApplyChanges(): void
+    {
+        if ($this->applyChangesInProgress) {
+            return;
+        }
+        $this->applyChangesInProgress = true;
+        try {
+            $this->runApplyChangesBody();
+        } finally {
+            $this->applyChangesInProgress = false;
+        }
+    }
+
+    private function runApplyChangesBody(): void
+    {
+        try {
+            $configSnapshot = $this->takeSourceVariableConfigurationSnapshot();
+            $this->ensureConfigurationDefaults();
+            $creating = $this->getInstanceStatus() === self::IS_CREATING;
+            $invokeParent = $this->shouldInvokeParentApplyChanges();
+            if ($invokeParent) {
+                parent::ApplyChanges();
+                $restoredFromSnapshot = $this->restoreSourceVariableIdsFromSnapshot($configSnapshot);
+                if ($restoredFromSnapshot > 0) {
+                    parent::ApplyChanges();
+                    $this->SendDebug(
+                        'Konfiguration',
+                        $restoredFromSnapshot . ' Quellvariablen-Property(s) aus Konfigurations-Snapshot wiederhergestellt.',
+                        0
+                    );
+                }
+            } else {
+                $this->SendDebug(
+                    'Konfiguration',
+                    'parent::ApplyChanges() übersprungen (gespeichertes Quellvariablen-Backup, keine offenen Konfig-Änderungen).',
+                    0
+                );
+            }
+            $restoredFromBackup = $this->restoreSourceVariableIdsFromBackup();
+            if ($restoredFromBackup > 0 && $invokeParent) {
+                parent::ApplyChanges();
+                $this->SendDebug(
+                    'Konfiguration',
+                    $restoredFromBackup . ' Quellvariablen-Property(s) aus Backup-Datei/Puffer wiederhergestellt.',
+                    0
+                );
+            }
+            $captured = $this->captureSourceVariableIdsFromAllSources();
+            if (count($captured) === count($this->getVariableSlotDefinitions())) {
+                $this->writeSourceVariableIdBackup($captured);
+            }
+            $this->ensureTimerDefinitions();
+            $this->ensureModuleVersionVariable();
+            $this->applyModuleVersionInfo();
+            $this->ensureKernelLifecycleMessages();
+
+            if (!$this->ReadPropertyBoolean('Active')) {
+                $this->SetStatus(self::IS_INACTIVE);
+                $this->stopAllTimers();
+                $this->clearVariableMessageSubscriptions();
+                $this->SendDebug('Start', 'ApplyChanges abgeschlossen, Status=' . $this->getInstanceStatus(), 0);
+
+                return;
+            }
+
+            $this->logConfiguredSourceVariableIds();
+            $blockingIssues = $this->collectBlockingConfigIssues();
+            $configWarnings = $this->collectConfigWarnings();
+            if ($blockingIssues !== []) {
+                $this->SetStatus(201);
+                $this->stopRuntimeTimers();
+                $this->armStartupGuardTimer(true);
+                $this->clearVariableMessageSubscriptions();
+                foreach (array_merge($blockingIssues, $configWarnings) as $line) {
+                    $this->SendDebug('Konfiguration', $line, 0);
+                }
+                $this->logRawConfigurationSnapshot();
+                $this->logConfigValidationDiagnostic($blockingIssues, $configWarnings);
+                $this->SendDebug('Start', 'ApplyChanges abgeschlossen, Status=' . $this->getInstanceStatus(), 0);
+
+                return;
+            }
+            foreach ($configWarnings as $line) {
+                $this->SendDebug('Konfiguration', $line, 0);
+            }
+            if ($configWarnings !== []) {
+                $this->SendDebug(
+                    'Konfiguration',
+                    'Hinweise zur Quellkonfiguration (Status bleibt aktiv) — erneute Prüfung im StartupGuard.',
+                    0
+                );
+            }
+
+            $this->SetStatus(self::IS_ACTIVE);
+            $this->SetBuffer('PixooInited', '0');
+            $this->startInstanceRuntime(!$creating);
+            if (!function_exists('IPS_GetKernelRunlevel')
+                || IPS_GetKernelRunlevel() === $this->getKrReadyRunlevel()) {
+                $this->triggerInstanceRuntimeFromKernel('ApplyChanges');
+            }
+            $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_FAST_MS);
+            $this->SendDebug('Start', 'ApplyChanges abgeschlossen, Status=' . $this->getInstanceStatus(), 0);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Start', 'ApplyChanges: ' . $e->getMessage(), 0);
+        }
+    }
+
+    /**
+     * Timer und VM_UPDATE-Abos starten. Bei IPS-Neustart erst nach KR_READY, nicht nur bei Aktivieren.
+     *
+     * @param bool $runInitialCycle direkt einen Update-Zyklus (nach Neustart / Übernehmen)
+     */
+    private function startInstanceRuntime(bool $runInitialCycle = true): void
+    {
+        if (!$this->ReadPropertyBoolean('Active') || $this->hasBlockingConfigIssues()) {
+            return;
+        }
+        if (!$this->isIpsKernelReady()) {
+            $this->SendDebug(
+                'Start',
+                'IPS-Kernel noch nicht bereit (KR_READY) — Timer starten automatisch nach Dienst-Neustart.',
+                0
+            );
+            return;
+        }
+        $this->ensureTimerDefinitions();
+        $this->startActiveTimers();
+        $this->syncMessageSubscriptions();
+        if (!$runInitialCycle) {
+            return;
+        }
+        if ($this->needsSmardRefresh()) {
+            $this->fetchAndApplySmardIfEnabled(true);
+        }
+        try {
+            $this->runUpdateCycle(false);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Start', 'Erster Lauf: ' . $e->getMessage(), 0);
+        }
+    }
+
+    private function isIpsKernelReady(): bool
+    {
+        if (!function_exists('IPS_GetKernelRunlevel')) {
+            return true;
+        }
+        return IPS_GetKernelRunlevel() >= $this->getKrReadyRunlevel();
+    }
+
+    private function getIpsKernelMessageId(): int
+    {
+        return defined('IPS_KERNELMESSAGE') ? (int) IPS_KERNELMESSAGE : self::IPS_KERNEL_MESSAGE;
+    }
+
+    private function getKrReadyRunlevel(): int
+    {
+        return defined('KR_READY') ? (int) KR_READY : self::KR_READY_RUNLEVEL;
+    }
+
+    private function getKrInitRunlevel(): int
+    {
+        return defined('KR_INIT') ? (int) KR_INIT : self::KR_INIT_RUNLEVEL;
+    }
+
+    /**
+     * Kernel-Meldungen (nicht persistent über Neustart) + StartupGuard armen.
+     */
+    private function ensureKernelLifecycleMessages(): void
+    {
+        $this->registerKernelMessageIfMissing($this->getIpsKernelMessageId());
+        $this->armStartupGuardTimer();
+    }
+
+    private function getKernelStartTime(): int
+    {
+        if (!function_exists('IPS_GetKernelStartTime')) {
+            return 0;
+        }
+
+        return (int) IPS_GetKernelStartTime();
+    }
+
+    /**
+     * Einmaliger Lauf nach IPS-Dienst-Neustart: Timer, Heavy-Display-Init, SMARD, Werte.
+     *
+     * @return bool true wenn dieser Kernel-Start gerade behandelt wurde
+     */
+    private function handlePostKernelRestartIfNeeded(): bool
+    {
+        if (!$this->ReadPropertyBoolean('Active') || $this->hasBlockingConfigIssues()) {
+            return false;
+        }
+        if (!$this->isIpsKernelReady()) {
+            return false;
+        }
+        $this->markConfigValidationGrace();
+        $kernelStart = $this->getKernelStartTime();
+        if ($kernelStart <= 0) {
+            return false;
+        }
+        $handledRaw = $this->GetBuffer('HandledKernelStartAt');
+        $handled = is_numeric($handledRaw) ? (int) $handledRaw : 0;
+        if ($handled === $kernelStart) {
+            return false;
+        }
+
+        $this->SetStatus(self::IS_ACTIVE);
+        $this->registerKernelMessageIfMissing($this->getIpsKernelMessageId());
+        $this->ensureTimerDefinitions();
+        $this->startActiveTimers();
+        $this->syncMessageSubscriptions();
+
+        $pixooIp = trim($this->ReadPropertyString('PixooIp'));
+        if ($pixooIp !== '') {
+            $this->SetBuffer('PixooInited', '0');
+            try {
+                $this->runHeavyReinitCore();
+            } catch (\Throwable $e) {
+                $this->SendDebug('Start', 'Display-Init nach Neustart: ' . $e->getMessage(), 0);
+            }
+        }
+
+        $this->fetchAndApplySmardIfEnabled(false);
+
+        try {
+            $this->runUpdateCycle(false);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Start', 'Werte nach Neustart: ' . $e->getMessage(), 0);
+        }
+
+        $this->SetBuffer('HandledKernelStartAt', (string) $kernelStart);
+        $this->SendDebug('Start', 'IPS-Neustart abgeschlossen (Timer, Display-Init, SMARD, Werte)', 0);
+
+        return true;
+    }
+
+    private function needsSmardRefresh(): bool
+    {
+        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            return false;
+        }
+        $lastRaw = $this->GetBuffer('LastSmardFetchAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        if ($last <= 0) {
+            return true;
+        }
+        $kernelStart = $this->getKernelStartTime();
+        if ($kernelStart > 0 && $last < $kernelStart) {
+            return true;
+        }
+
+        return (time() - $last) > (int) (self::SMARD_FETCH_MS / 1000);
+    }
+
+    private function fetchAndApplySmardIfEnabled(bool $syncPixooAfter = true): void
+    {
+        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            return;
+        }
+        if (!$this->requireCurlExtension('SMARD')) {
+            return;
+        }
+        try {
+            $row = $this->fetchSmardSpotRow();
+            if ($row === null) {
+                $this->SendDebug('SMARD', 'Kein gültiger Preis (API/Zeitreihe) — letzter Wert bleibt.', 0);
+
+                return;
+            }
+            $this->applySmardSpotRow($row);
+            if ($syncPixooAfter && trim($this->ReadPropertyString('PixooIp')) !== '') {
+                $this->syncPixooDisplay($this->getCachedEnergyValuesForPixoo(), true, false);
+            }
+        } catch (\Throwable $e) {
+            $this->SendDebug('SMARD', 'fetchAndApplySmardIfEnabled: ' . $e->getMessage(), 0);
+        }
+    }
+
+    /**
+     * StartupGuard mit Intervall > 0 — auch bei Status 201, damit Konfiguration/Neustart-Recovery läuft.
+     *
+     * @param bool $forceFast nach Konfig-Fehler oder KR_INIT schneller erneut prüfen
+     */
+    private function armStartupGuardTimer(bool $forceFast = false): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        $this->ensureTimerDefinitions();
+        $ms = $forceFast ? self::STARTUP_GUARD_FAST_MS : self::STARTUP_GUARD_MS;
+        if ($forceFast || $this->GetTimerInterval('StartupGuard') <= 0) {
+            $this->setTimerIntervalSafe('StartupGuard', $ms);
+        }
+    }
+
+    /**
+     * Letzte Werteaktualisierung liegt vor dem letzten IPS-Dienststart → Laufzeit nach Neustart nicht gestartet.
+     */
+    private function needsRecoveryAfterKernelRestart(): bool
+    {
+        if (!function_exists('IPS_GetKernelStartTime')) {
+            return false;
+        }
+        $kernelStart = (int) IPS_GetKernelStartTime();
+        if ($kernelStart <= 0) {
+            return false;
+        }
+        $lastRaw = $this->GetBuffer('LastValuesAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+
+        return $last > 0 && $last < $kernelStart;
+    }
+
+    private function describeKernelRestartRecoveryReason(): string
+    {
+        if (!function_exists('IPS_GetKernelStartTime')) {
+            return 'Kernel-Neustart';
+        }
+        $kernelStart = (int) IPS_GetKernelStartTime();
+        $lastRaw = $this->GetBuffer('LastValuesAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        $lastTs = $last > 0 ? date('Y-m-d H:i:s', $last) : '?';
+        $startTs = $kernelStart > 0 ? date('Y-m-d H:i:s', $kernelStart) : '?';
+
+        return 'Kernel-Neustart, letzte Werte vor ' . $lastTs . ' (IPS-Start ' . $startTs . ')';
+    }
+
+    private function kernelRunlevelFromMessageData(array $data): ?int
+    {
+        if ($data === [] || !isset($data[0]) || !is_numeric($data[0])) {
+            return null;
+        }
+
+        return (int) $data[0];
+    }
+
+    private function isKernelReadyMessage(int $message, array $data): bool
+    {
+        if ($message === $this->getKrReadyRunlevel()) {
+            return true;
+        }
+        if ($message !== $this->getIpsKernelMessageId()) {
+            return false;
+        }
+        $runlevel = $this->kernelRunlevelFromMessageData($data);
+        if ($runlevel === null) {
+            return $this->isIpsKernelReady();
+        }
+
+        return $runlevel === $this->getKrReadyRunlevel();
+    }
+
+    private function isKernelInitMessage(int $message, array $data): bool
+    {
+        if ($message !== $this->getIpsKernelMessageId()) {
+            return false;
+        }
+
+        return $this->kernelRunlevelFromMessageData($data) === $this->getKrInitRunlevel();
+    }
+
+    private function isKernelStartedMessage(int $message, array $data): bool
+    {
+        if ($message === self::IPS_KERNEL_STARTED_MESSAGE) {
+            return true;
+        }
+        if ($message !== $this->getIpsKernelMessageId()) {
+            return false;
+        }
+
+        return $this->kernelRunlevelFromMessageData($data) === self::IPS_KERNEL_STARTED_MESSAGE;
+    }
+
+    private function handleKernelMessage(int $message, array $data): void
+    {
+        $this->ensureInstanceOperational();
+        if ($this->isKernelInitMessage($message, $data)) {
+            $this->markConfigValidationGrace();
+            $this->registerKernelMessageIfMissing($this->getIpsKernelMessageId());
+            $this->armStartupGuardTimer(true);
+
+            return;
+        }
+        if ($this->isKernelReadyMessage($message, $data)) {
+            $this->recoverConfigStatusIfDeferred();
+            $this->onIpsKernelReady();
+
+            return;
+        }
+        if ($this->isKernelStartedMessage($message, $data)) {
+            $this->onIpsKernelStarted();
+        }
+    }
+
+    private function registerKernelMessageIfMissing(int $messageId): void
+    {
+        $list = $this->GetMessageList();
+        if (is_array($list) && isset($list[0]) && is_array($list[0])) {
+            if (in_array($messageId, $list[0], true)) {
+                return;
+            }
+        }
+        $this->RegisterMessage(0, $messageId);
+    }
+
+    private function shouldSkipRuntimeStartDebounce(string $source): bool
+    {
+        if ($source === 'KR_READY' || $source === 'Bootstrap') {
+            return true;
+        }
+        if (strncmp($source, 'StartupGuard', strlen('StartupGuard')) === 0) {
+            return true;
+        }
+        if (strncmp($source, 'Kernel-Neustart', strlen('Kernel-Neustart')) === 0) {
+            return true;
+        }
+        if (strncmp($source, 'IPS-Neustart', strlen('IPS-Neustart')) === 0) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function triggerInstanceRuntimeFromKernel(string $source): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        if ($this->hasBlockingConfigIssues()) {
+            return;
+        }
+        if (!$this->shouldSkipRuntimeStartDebounce($source)) {
+            $lastRaw = $this->GetBuffer('LastRuntimeStartAt');
+            $last = is_numeric($lastRaw) ? (float) $lastRaw : 0.0;
+            if ($last > 0.0 && (microtime(true) - $last) < self::KERNEL_RUNTIME_START_DEBOUNCE_SEC) {
+                return;
+            }
+        }
+        $this->SetBuffer('LastRuntimeStartAt', (string) microtime(true));
+        $this->SetStatus(self::IS_ACTIVE);
+        $this->SendDebug('Start', 'Laufzeit gestartet (Grund: ' . $source . ')', 0);
+        $this->startInstanceRuntime(true);
+    }
+
+    /** KR_READY — ApplyChanges() läuft nach Neustart oft nicht. */
+    private function onIpsKernelReady(): void
+    {
+        if ($this->handlePostKernelRestartIfNeeded()) {
+            return;
+        }
+        $this->triggerInstanceRuntimeFromKernel('KR_READY');
+    }
+
+    /** IPS_KERNELSTARTED — synchron nach KR_READY. */
+    private function onIpsKernelStarted(): void
+    {
+        $this->triggerInstanceRuntimeFromKernel('KERNELSTARTED');
+    }
+
+    /**
+     * Update-Timer aus oder Werte veraltet — typisch nach IPS-Dienst-Neustart ohne ApplyChanges.
+     */
+    private function instanceNeedsRuntimeRecovery(): bool
+    {
+        if (!$this->ReadPropertyBoolean('Active') || $this->hasBlockingConfigIssues()) {
+            return false;
+        }
+        if ($this->needsRecoveryAfterKernelRestart()) {
+            return true;
+        }
+        if ($this->needsSmardRefresh()) {
+            return true;
+        }
+        if ($this->GetTimerInterval('Update') <= 0) {
+            return true;
+        }
+        $intervalSec = $this->getUpdateIntervalSec();
+        $staleSec = max(60, $intervalSec * 2);
+        $lastRaw = $this->GetBuffer('LastValuesAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        $now = time();
+        if ($last <= 0 || $last > $now) {
+            return true;
+        }
+
+        return ($now - $last) > $staleSec;
+    }
+
+    private function describeRuntimeRecoveryReason(): string
+    {
+        if ($this->needsRecoveryAfterKernelRestart()) {
+            return $this->describeKernelRestartRecoveryReason();
+        }
+        if ($this->needsSmardRefresh()) {
+            return 'SMARD-Preis veraltet oder noch nicht geladen';
+        }
+        if ($this->GetTimerInterval('Update') <= 0) {
+            return 'Update-Timer aus';
+        }
+        $lastRaw = $this->GetBuffer('LastValuesAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        $age = $last > 0 ? (string) (time() - $last) : '?';
+
+        return 'Werte veraltet (letzte Aktualisierung vor ' . $age . ' s)';
+    }
+
+    /**
+     * Timer/Abos nachziehen wenn Laufzeit eingefroren wirkt (UpdateValues, StartupGuard).
+     */
+    private function bootstrapRuntimeIfNeeded(string $source = 'Bootstrap'): void
+    {
+        if (!$this->instanceNeedsRuntimeRecovery()) {
+            return;
+        }
+        if (!$this->isIpsKernelReady()) {
+            return;
+        }
+        if (!$this->ReadPropertyBoolean('Active') || $this->hasBlockingConfigIssues()) {
+            return;
+        }
+        if ($this->needsRecoveryAfterKernelRestart()) {
+            $source = $this->describeKernelRestartRecoveryReason();
+        }
+        $this->ensureKernelLifecycleMessages();
+        $this->triggerInstanceRuntimeFromKernel($source);
+    }
+
+    /**
+     * Unabhängig von RegisterMessage: eingefrorene Laufzeit nach IPS-Neustart erkennen und starten.
+     */
+    public function StartupGuardRecovery(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        if (!$this->isIpsKernelReady()) {
+            $this->armStartupGuardTimer(true);
+
+            return;
+        }
+        if (!$this->ensureInstanceOperational()) {
+            $this->armStartupGuardTimer(true);
+
+            return;
+        }
+        $this->restoreSourceVariableIdsFromBackup();
+        $this->recoverConfigStatusIfDeferred();
+        $this->armStartupGuardTimer();
+        $this->ensureKernelLifecycleMessages();
+        if ($this->hasBlockingConfigIssues()) {
+            $this->logConfigValidationDiagnostic(
+                $this->collectBlockingConfigIssues(),
+                $this->collectConfigWarnings()
+            );
+            $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_FAST_MS);
+
+            return;
+        }
+        if ($this->handlePostKernelRestartIfNeeded()) {
+            $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
+
+            return;
+        }
+        if (!$this->instanceNeedsRuntimeRecovery()) {
+            $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
+
+            return;
+        }
+        $this->bootstrapRuntimeIfNeeded('StartupGuard: ' . $this->describeRuntimeRecoveryReason());
+        $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
+    }
+
+    public function GetConfigurationForm(): string
+    {
+        $this->ensureInstanceOperational();
+        $path = __DIR__ . DIRECTORY_SEPARATOR . 'form.json';
+        $raw = @file_get_contents($path);
+        if ($raw === false || $raw === '') {
+            return parent::GetConfigurationForm();
+        }
+        $form = json_decode($raw, true);
+        if (!is_array($form)) {
+            return parent::GetConfigurationForm();
+        }
+        if (!isset($form['elements']) || !is_array($form['elements'])) {
+            $form['elements'] = [];
+        }
+        array_unshift($form['elements'], [
+            'type' => 'Label',
+            'caption' => 'Modulversion: ' . $this->formatModuleVersionLabel(),
+        ]);
+        $out = json_encode($form, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($out === false || $out === '') {
+            return parent::GetConfigurationForm();
+        }
+        return $out;
+    }
+
+    private function applyModuleVersionInfo(): void
+    {
+        $label = $this->formatModuleVersionLabel();
+        $prevLabel = $this->GetBuffer('LastAppliedModuleVersionLabel');
+        $this->SetValue('ModuleVersion', $label);
+        $this->lockModuleVersionVariable();
+        $build = $this->resolveModuleBuild();
+        $this->SetBuffer('LastAppliedModuleBuild', (string) $build);
+        if ($prevLabel !== $label) {
+            $this->SetBuffer('LastAppliedModuleVersionLabel', $label);
+            $this->SendDebug('Modul', 'Version ' . $label . ' angewendet', 0);
+            $this->ReloadForm();
+        }
+    }
+
+    private function formatModuleVersionLabel(): string
+    {
+        $version = self::MODULE_VERSION;
+        $build = self::MODULE_BUILD;
+        if (IPS_LibraryExists(self::LIBRARY_ID)) {
+            $lib = IPS_GetLibrary(self::LIBRARY_ID);
+            if (isset($lib['Build']) && is_numeric($lib['Build'])) {
+                $build = max($build, (int) $lib['Build']);
+            }
+            if (isset($lib['Version'])) {
+                if (is_string($lib['Version']) && $lib['Version'] !== '') {
+                    $version = $lib['Version'];
+                } elseif (is_int($lib['Version'])) {
+                    $major = ($lib['Version'] >> 8) & 0xFF;
+                    $minor = $lib['Version'] & 0xFF;
+                    $version = $major . '.' . $minor;
+                }
+            }
+        }
+        return $version . ' (Build ' . $build . ')';
+    }
+
+    private function resolveModuleBuild(): int
+    {
+        $build = self::MODULE_BUILD;
+        if (IPS_LibraryExists(self::LIBRARY_ID)) {
+            $lib = IPS_GetLibrary(self::LIBRARY_ID);
+            if (isset($lib['Build']) && is_numeric($lib['Build'])) {
+                $build = max($build, (int) $lib['Build']);
+            }
+        }
+        return $build;
+    }
+
+    /** Bestehende Instanzen: Variable nachziehen, wenn Modul aktualisiert wurde. */
+    private function ensureModuleVersionVariable(): void
+    {
+        $vid = @IPS_GetVariableIDByName('ModuleVersion', $this->InstanceID);
+        if (is_int($vid) && $vid > 0) {
+            return;
+        }
+        if (!IPS_VariableProfileExists('SMAPX.Text')) {
+            IPS_CreateVariableProfile('SMAPX.Text', 3);
+        }
+        $usePresArray = false;
+        if (function_exists('IPS_GetKernelVersion')) {
+            $kv = IPS_GetKernelVersion();
+            $usePresArray = is_string($kv) && $kv !== '' && version_compare($kv, '8.0', '>=');
+        }
+        $textPres = $usePresArray ? ['PROFILE' => 'SMAPX.Text'] : 'SMAPX.Text';
+        $this->RegisterVariableString('ModuleVersion', 'Modulversion', $textPres, 4);
+    }
+
+    /** Modulversion nur anzeigen, nicht manuell editierbar. */
+    private function lockModuleVersionVariable(): void
+    {
+        $vid = @IPS_GetVariableIDByName('ModuleVersion', $this->InstanceID);
+        if (!is_int($vid) || $vid <= 0) {
+            return;
+        }
+        if (function_exists('IPS_SetVariableAction')) {
+            IPS_SetVariableAction($vid, false);
+        }
+    }
+
+    /** Bestehende Instanzen: fehlende Timer nach Modul-Update registrieren (Create() legt sie bei Neuanlage an). */
+    private function ensureTimerDefinitions(): void
+    {
+        $timers = [
+            'Update' => 'SMAPX_UpdateValues($_IPS[\'TARGET\']);',
+            'PixooSync' => 'SMAPX_SyncPixoo($_IPS[\'TARGET\']);',
+            'HourlyReinit' => 'SMAPX_ReinitDisplay($_IPS[\'TARGET\']);',
+            'SmardFetch' => 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);',
+            'HealthWatchdog' => 'SMAPX_HealthWatchdog($_IPS[\'TARGET\']);',
+            'StartupGuard' => 'SMAPX_StartupGuardRecovery($_IPS[\'TARGET\']);',
+        ];
+        foreach ($timers as $name => $script) {
+            $this->registerTimerIfMissing($name, $script);
+        }
+    }
+
+    /** RegisterTimer nur wenn der Ident noch nicht existiert (kein „Timer already exists“). */
+    private function registerTimerIfMissing(string $ident, string $script): void
+    {
+        if ($this->timerIdentExists($ident)) {
+            return;
+        }
+        $this->RegisterTimer($ident, 0, $script);
+    }
+
+    private function timerIdentExists(string $ident): bool
+    {
+        $missing = false;
+        set_error_handler(static function (int $errno, string $errstr) use (&$missing): bool {
+            unset($errno);
+            if (stripos($errstr, 'not registered') !== false
+                || stripos($errstr, 'does not exist') !== false) {
+                $missing = true;
+
+                return true;
+            }
+
+            return false;
+        });
+        try {
+            $this->GetTimerInterval($ident);
+        } catch (\Throwable $e) {
+            $missing = true;
+        }
+        restore_error_handler();
+
+        return !$missing;
+    }
+
+    /** Laufzeit-Timer aus; StartupGuard bleibt für Recovery nach IPS-Neustart / Status 201. */
+    private function stopRuntimeTimers(): void
+    {
+        $this->setTimerIntervalSafe('Update', 0);
+        $this->setTimerIntervalSafe('PixooSync', 0);
+        $this->setTimerIntervalSafe('HourlyReinit', 0);
+        $this->setTimerIntervalSafe('SmardFetch', 0);
+        $this->setTimerIntervalSafe('HealthWatchdog', 0);
+    }
+
+    private function stopAllTimers(): void
+    {
+        $this->stopRuntimeTimers();
+        $this->setTimerIntervalSafe('StartupGuard', 0);
+    }
+
+    private function setTimerIntervalSafe(string $ident, int $intervalMs): void
+    {
+        if (!$this->timerIdentExists($ident)) {
+            return;
+        }
+        $this->SetTimerInterval($ident, $intervalMs);
+    }
+
+    /** Timer-Intervalle gemäß Konfiguration setzen (auch vom Watchdog bei Ausfall). */
+    private function startActiveTimers(): void
+    {
+        $sec = $this->getUpdateIntervalSec();
+        $this->setTimerIntervalSafe('Update', $sec * 1000);
+        /* Pixoo läuft im selben Zyklus wie UpdateValues() — kein zweiter Timer (Worker-Stau) */
+        $this->setTimerIntervalSafe('PixooSync', 0);
+        $pixooIp = trim($this->ReadPropertyString('PixooIp'));
+        $this->SendDebug(
+            'Timer',
+            'Aktualisierung alle ' . $sec . ' s (Werte'
+            . ($pixooIp !== '' ? ' + Pixoo im Update-Timer' : ', Pixoo aus')
+            . ', UpdateIntervalSeconds=' . $this->ReadPropertyInteger('UpdateIntervalSeconds') . ')',
+            0
+        );
+        if ($this->ReadPropertyBoolean('PixooHourlyReinit')) {
+            $refreshMin = $this->getDisplayRefreshIntervalMinutes();
+            $this->setTimerIntervalSafe('HourlyReinit', $refreshMin * 60000);
+        } else {
+            $this->setTimerIntervalSafe('HourlyReinit', 0);
+        }
+        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            $this->setTimerIntervalSafe('SmardFetch', self::SMARD_FETCH_MS);
+        } else {
+            $this->setTimerIntervalSafe('SmardFetch', 0);
+        }
+        $this->setTimerIntervalSafe('HealthWatchdog', self::HEALTH_WATCHDOG_MS);
+        $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
+    }
+
+    /**
+     * Erkennt „eingefrorene“ Instanzen: keine Werteaktualisierung oder Update-Timer aus.
+     * Setzt Timer neu und erzwingt einen Refresh-Zyklus (ohne Instanz-Neustart).
+     */
+    public function HealthWatchdog(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        if (!$this->ensureInstanceOperational()) {
+            return;
+        }
+        $this->armStartupGuardTimer();
+        $this->ensureKernelLifecycleMessages();
+        if ($this->hasBlockingConfigIssues()) {
+            return;
+        }
+        if ($this->handlePostKernelRestartIfNeeded()) {
+            return;
+        }
+
+        $intervalSec = $this->getUpdateIntervalSec();
+        $staleSec = $this->needsRecoveryAfterKernelRestart()
+            ? max(60, $intervalSec * 2)
+            : max(120, $intervalSec * 4);
+        $lastRaw = $this->GetBuffer('LastValuesAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        $now = time();
+        if ($this->needsRecoveryAfterKernelRestart()) {
+            $valuesStale = true;
+        } elseif ($last <= 0) {
+            $valuesStale = true;
+        } elseif ($last > $now) {
+            /* z. B. Uhrenkorrektur / Winterzeit: „LastValuesAt“ liegt in der Zukunft — nicht als frisch werten */
+            $valuesStale = true;
+        } else {
+            $valuesStale = ($now - $last) > $staleSec;
+        }
+        $updateMs = $this->GetTimerInterval('Update');
+        $timerOff = $updateMs <= 0;
+
+        $pixooIp = trim($this->ReadPropertyString('PixooIp'));
+        $pixooRecovery = $pixooIp !== '' ? $this->evaluatePixooDisplayRecovery($pixooIp, $intervalSec) : null;
+
+        if (!$valuesStale && !$timerOff && ($pixooRecovery === null || !$pixooRecovery['needs'])) {
+            return;
+        }
+
+        $reasons = [];
+        if ($timerOff) {
+            $reasons[] = 'Update-Timer aus (Intervall 0)';
+        }
+        if ($valuesStale) {
+            $reasons[] = 'keine Werte seit ' . ($last > 0 ? (string) ($now - $last) : '?')
+                . ' s (Schwelle ' . $staleSec . ' s)';
+        }
+        if ($pixooRecovery !== null && $pixooRecovery['needs']) {
+            $reasons[] = $pixooRecovery['reason'];
+        }
+        $this->SendDebug('Watchdog', 'Wiederherstellung: ' . implode('; ', $reasons), 0);
+
+        $this->SetBuffer('PixooFailCount', '0');
+        $this->SetBuffer('PixooHeavyPausedUntil', '');
+        $this->SetBuffer('PixooLightPausedUntil', '');
+        $this->ensureTimerDefinitions();
+        $this->ensureKernelLifecycleMessages();
+        $this->startActiveTimers();
+        $this->syncMessageSubscriptions();
+        try {
+            if ($pixooRecovery !== null && $pixooRecovery['needs']) {
+                $values = $this->updateEnergyValues();
+                if ($values === null) {
+                    $values = $this->getCachedEnergyValuesForPixoo();
+                }
+                $this->SetBuffer('PixooInited', '0');
+                $this->syncPixooDisplay($values, false, true, true);
+            }
+            $this->runUpdateCycle(false);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Watchdog', 'Recovery: ' . $e->getMessage(), 0);
+        }
+    }
+
+    /**
+     * @return array{needs: bool, reason: string}
+     */
+    private function evaluatePixooDisplayRecovery(string $pixooIp, int $intervalSec): array
+    {
+        $staleSec = max(self::PIXOO_DISPLAY_STALE_MIN_SEC, $intervalSec * 2);
+        $lastSyncRaw = $this->GetBuffer('LastPixooSyncAt');
+        $lastSync = is_numeric($lastSyncRaw) ? (float) $lastSyncRaw : 0.0;
+        $displayStale = $lastSync <= 0.0
+            || (microtime(true) - $lastSync) > (float) $staleSec;
+
+        $channel = $this->pixooGetChannelIndex($pixooIp);
+        if ($channel !== null) {
+            $this->SetBuffer('PixooChannelIndex', (string) $channel);
+        }
+        $wrongDrawChannel = $channel !== null && $channel !== self::PIXOO_CHANNEL_CUSTOM;
+
+        if ($wrongDrawChannel) {
+            return [
+                'needs' => true,
+                'reason' => 'Pixoo-Kanal ' . $channel . ' (nicht Custom/HTTP) — Draw-Kanal erzwingen',
+            ];
+        }
+        if ($displayStale) {
+            return [
+                'needs' => true,
+                'reason' => 'kein Pixoo-Sync seit > ' . $staleSec . ' s',
+            ];
+        }
+
+        return ['needs' => false, 'reason' => ''];
+    }
+
+    /**
+     * Symcon sendet VM_UPDATE bei Änderung der Quellvariablen — zweiter Pfad neben dem Update-Timer,
+     * falls der Timer-Worker durch HTTP blockiert war oder Uhren-/Timer-Effekte auftreten.
+     */
+    public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
+    {
+        unset($TimeStamp);
+        if ($SenderID === 0) {
+            $this->handleKernelMessage($Message, $Data);
+
+            return;
+        }
+        if ($Message !== self::VM_UPDATE_MESSAGE) {
+            return;
+        }
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        if ($this->hasBlockingConfigIssues()) {
+            return;
+        }
+        $watched = $this->getWatchedVariableIds();
+        if (!in_array($SenderID, $watched, true)) {
+            return;
+        }
+        try {
+            $this->runUpdateCycle(true);
+        } catch (\Throwable $e) {
+            $this->SendDebug('MessageSink', $e->getMessage(), 0);
+        }
+    }
+
+    /** @return list<int> */
+    private function getWatchedVariableIds(): array
+    {
+        $ids = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $id = $this->readConfiguredPropertyInteger($def['property']);
+            if ($id > 0 && IPS_VariableExists($id)) {
+                $ids[] = $id;
+            }
+        }
+        return $ids;
+    }
+
+    /** Nur Quellvariablen-Abos entfernen; Kernel-Meldungen (Sender 0) bleiben für IPS-Neustart. */
+    private function clearVariableMessageSubscriptions(): void
+    {
+        $list = $this->GetMessageList();
+        if (!is_array($list)) {
+            return;
+        }
+        foreach ($list as $senderID => $messages) {
+            if (!is_array($messages)) {
+                continue;
+            }
+            $sid = (int) $senderID;
+            if ($sid <= 0) {
+                continue;
+            }
+            foreach ($messages as $message) {
+                $this->UnregisterMessage($sid, (int) $message);
+            }
+        }
+    }
+
+    private function syncMessageSubscriptions(): void
+    {
+        $this->clearVariableMessageSubscriptions();
+        if (!$this->ReadPropertyBoolean('Active') || $this->hasBlockingConfigIssues()) {
+            return;
+        }
+        foreach ($this->getWatchedVariableIds() as $vid) {
+            $this->RegisterMessage($vid, self::VM_UPDATE_MESSAGE);
+        }
+    }
+
+    /** Viertelstunden-Day-Ahead-Preis (www.smard.de), für Pixoo-Anzeige */
+    public function UpdateSmardPrice(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        if (!$this->prepareModuleTimerCycle()) {
+            return;
+        }
+        $this->bootstrapRuntimeIfNeeded();
+        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            return;
+        }
+        $this->fetchAndApplySmardIfEnabled(true);
+    }
+
+    /**
+     * SMARD manuell laden, Pixoo aktualisieren, Kurzinfo für Formular-Popup (echo).
+     * @return string mehrsilig mit Preis, Datum und Uhrzeit der gelieferten Viertelstunde
+     */
+    public function SmardLoadActionFeedback(): string
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return 'Modul inaktiv.';
+        }
+        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            return 'SMARD-Preis auf Pixoo ist deaktiviert (Eigenschaft „SMARD-Preis auf Pixoo anzeigen“).';
+        }
+        if (!$this->requireCurlExtension('SMARD')) {
+            return 'SMARD-Abfrage nicht möglich: PHP-Erweiterung cURL fehlt auf dem Symcon-Server.';
+        }
+        $row = $this->fetchSmardSpotRow();
+        if ($row === null) {
+            $this->SendDebug('SMARD', 'Kein gültiger Preis (API/Zeitreihe).', 0);
+            $this->UpdateValues();
+            return "Kein gültiger SMARD-Preis (API/Zeitreihe).\nBitte später erneut versuchen.";
+        }
+        $this->applySmardSpotRow($row);
+        $this->Refresh();
+        $sec = intdiv($row['tsMs'], 1000);
+        $dateStr = date('d.m.Y', $sec);
+        $timeStr = date('H:i', $sec);
+        $eurKwh = $row['eurMwh'] / 1000.0;
+        $priceStr = number_format($eurKwh, 3, ',', '') . ' €';
+        return "SMARD Day-Ahead (Viertelstunde)\nPreis: {$priceStr}\nDatum: {$dateStr}\nUhrzeit: {$timeStr}\n(Ortszeit PHP-Server)";
+    }
+
+    /** @param array{eurMwh: float, tsMs: int} $row */
+    private function applySmardSpotRow(array $row): void
+    {
+        $this->SetBuffer('SmardEurPerMwh', (string) $row['eurMwh']);
+        $this->SetBuffer('SmardSpotTsMs', (string) $row['tsMs']);
+        $this->SetBuffer('LastSmardFetchAt', (string) time());
+        $this->SetValue('SmardSpotCt', $row['eurMwh'] / 1000.0);
+    }
+
+    /** Update-Timer: Werte + Pixoo in einem Worker-Lauf (Intervall = UpdateIntervalSeconds). */
+    public function UpdateValues(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        if (!$this->prepareModuleTimerCycle()) {
+            return;
+        }
+        $this->bootstrapRuntimeIfNeeded();
+        try {
+            $this->runUpdateCycle(false);
+        } catch (\Throwable $e) {
+            $this->SendDebug('UpdateValues', 'Ausnahme: ' . $e->getMessage(), 0);
+        }
+    }
+
+    /** Manuell / SMARD / Watchdog: nur Pixoo (Werte unverändert). */
+    public function SyncPixoo(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        try {
+            $this->syncPixooDisplay($this->getCachedEnergyValuesForPixoo(), true, false);
+        } catch (\Throwable $e) {
+            $this->SendDebug('SyncPixoo', 'Ausnahme: ' . $e->getMessage(), 0);
+        }
+    }
+
+    /**
+     * Manuell / Formular: Werte + Pixoo (ohne Intervall-Sperre).
+     * Update-Timer nutzt runUpdateCycle(); PixooSync-Timer ist deaktiviert (Build 18+).
+     */
+    public function Refresh(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        try {
+            $this->runUpdateCycle(false);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Refresh', 'Ausnahme: ' . $e->getMessage(), 0);
+        }
+    }
+
+    private function getUpdateIntervalSec(): int
+    {
+        return max(self::UPDATE_INTERVAL_MIN_SEC, $this->ReadPropertyInteger('UpdateIntervalSeconds'));
+    }
+
+    private function getDisplayRefreshIntervalMinutes(): int
+    {
+        return max(
+            self::DISPLAY_REFRESH_MIN_MINUTES,
+            $this->ReadPropertyInteger('PixooDisplayRefreshMinutes')
+        );
+    }
+
+    /** MessageSink: gleiches Intervall wie UpdateIntervalSeconds; Timer: immer ausführen. */
+    private function runUpdateCycle(bool $respectIntervalGate): void
+    {
+        if ($respectIntervalGate && $this->isUpdateCycleTooSoon()) {
+            return;
+        }
+        $this->markUpdateCycleNow();
+
+        $values = $this->updateEnergyValues();
+        if ($values === null) {
+            return;
+        }
+        if (trim($this->ReadPropertyString('PixooIp')) === '') {
+            return;
+        }
+        $this->syncPixooDisplay($values, true, false);
+    }
+
+    private function isUpdateCycleTooSoon(): bool
+    {
+        $lastRaw = $this->GetBuffer('LastUpdateCycleAt');
+        $last = is_numeric($lastRaw) ? (float) $lastRaw : 0.0;
+        if ($last <= 0.0) {
+            return false;
+        }
+
+        return (microtime(true) - $last) < (float) $this->getUpdateIntervalSec();
+    }
+
+    private function markUpdateCycleNow(): void
+    {
+        $this->SetBuffer('LastUpdateCycleAt', (string) microtime(true));
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function getPixooDisplayStateHash(array $values): string
+    {
+        $parts = [
+            (string) (int) round($values['consumption']),
+            (string) (int) round($values['generation']),
+            (string) (int) round($values['net']),
+            (string) $this->getEffectivePixooBrightness(),
+        ];
+        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            $smard = $this->getSmardEurPerMwhForDisplay();
+            $parts[] = $smard !== null ? (string) round($smard, 2) : '';
+        }
+        return sha1(implode('|', $parts));
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function shouldSkipDuplicatePixooSync(array $values): bool
+    {
+        if ($this->getPixooDisplayStateHash($values) !== $this->GetBuffer('LastPixooDisplayHash')) {
+            return false;
+        }
+        $lastRaw = $this->GetBuffer('LastPixooSyncAt');
+        $last = is_numeric($lastRaw) ? (float) $lastRaw : 0.0;
+
+        return $last > 0.0 && (microtime(true) - $last) < self::PIXOO_SYNC_DEBOUNCE_SEC;
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function markPixooSyncCompleted(array $values): void
+    {
+        $this->SetBuffer('LastPixooDisplayHash', $this->getPixooDisplayStateHash($values));
+        $this->SetBuffer('LastPixooSyncAt', (string) microtime(true));
+    }
+
+    /**
+     * @return array{consumption: float, generation: float, net: float}
+     */
+    private function getCachedEnergyValuesForPixoo(): array
+    {
+        return [
+            'consumption' => (float) $this->GetValue('Consumption'),
+            'generation' => (float) $this->GetValue('Generation'),
+            'net' => (float) $this->GetValue('Net'),
+        ];
+    }
+
+    /** EUR/MWh für Pixoo: Puffer, sonst Modulvariable SmardSpotCt (€/kWh). */
+    private function getSmardEurPerMwhForDisplay(): ?float
+    {
+        $buf = trim($this->GetBuffer('SmardEurPerMwh'));
+        if ($buf !== '' && is_numeric($buf)) {
+            return (float) $buf;
+        }
+        $ct = $this->GetValue('SmardSpotCt');
+        if (is_int($ct) || is_float($ct)) {
+            return (float) $ct * 1000.0;
+        }
+        if (is_string($ct) && is_numeric(trim(str_replace(',', '.', $ct)))) {
+            return (float) str_replace(',', '.', trim($ct)) * 1000.0;
+        }
+        return null;
+    }
+
+    /**
+     * Liest Quellvariablen und schreibt Modul-Variablen. Läuft ohne Netzwerk.
+     *
+     * @return array{consumption: float, generation: float, net: float}|null
+     */
+    private function updateEnergyValues(): ?array
+    {
+        if (!$this->ParseConfig()) {
+            return null;
+        }
+
+        $buyW = $this->readWattFromVariable($this->readConfiguredPropertyInteger('HmRealPowerPlusVar'));
+        $sellW = $this->readWattFromVariable($this->readConfiguredPropertyInteger('HmRealPowerMinusVar'));
+        if ($buyW === null || $sellW === null) {
+            $this->SendDebug('Netz', 'Real Power +/− kurz unlesbar — Netz-Leistung aus letztem Modulwert „Netz“.', 0);
+            $netW = (float) $this->GetValue('Net');
+        } else {
+            $netW = $buyW - $sellW;
+        }
+
+        $wr1Pairs = [
+            $this->readConfiguredPropertyInteger('Wr1String1Var'),
+            $this->readConfiguredPropertyInteger('Wr1String2Var'),
+        ];
+        $wr2Pairs = [
+            $this->readConfiguredPropertyInteger('Wr2String1Var'),
+            $this->readConfiguredPropertyInteger('Wr2String2Var'),
+        ];
+
+        $wr1W = 0.0;
+        foreach ($wr1Pairs as $vid) {
+            $p = $this->readWattFromVariable($vid);
+            if ($p === null) {
+                $this->SendDebug('WR', 'WR1 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
+                $p = 0.0;
+            }
+            $wr1W += max(0.0, $p);
+        }
+        if ($wr1W > self::GENERATION_INVALID_ABOVE_W) {
+            $wr1W = 0.0;
+        }
+
+        $wr2W = 0.0;
+        foreach ($wr2Pairs as $vid) {
+            $p = $this->readWattFromVariable($vid);
+            if ($p === null) {
+                $this->SendDebug('WR', 'WR2 Variable ID ' . $vid . ': kein Zahlwert — für diesen Zyklus 0 W.', 0);
+                $p = 0.0;
+            }
+            $wr2W += max(0.0, $p);
+        }
+        if ($wr2W > self::GENERATION_INVALID_ABOVE_W) {
+            $wr2W = 0.0;
+        }
+
+        $generation = $wr1W + $wr2W;
+        $consumption = $generation + $netW;
+
+        $this->SetValue('Consumption', $consumption);
+        $this->SetValue('Generation', $generation);
+        $this->SetValue('Net', $netW);
+        $this->SetBuffer('LastValuesAt', (string) time());
+
+        return [
+            'consumption' => $consumption,
+            'generation' => $generation,
+            'net' => $netW,
+        ];
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     * @param bool $lightSync leichter Pfad (PixooSync): ItemList ohne schweres GIF
+     * @param bool $heavyInit schweres Init mit Hintergrund-GIF (nur manuelles Reinit)
+     * @param bool $bypassCooldown manuelles/stündliches Reinit und Watchdog ignorieren HTTP-Pause
+     */
+    private function syncPixooDisplay(
+        array $values,
+        bool $lightSync = false,
+        bool $heavyInit = false,
+        bool $bypassCooldown = false
+    ): void {
+        $pixooIp = trim($this->ReadPropertyString('PixooIp'));
+        if ($pixooIp === '') {
+            return;
+        }
+        if ($lightSync && !$heavyInit && $this->shouldSkipDuplicatePixooSync($values)) {
+            return;
+        }
+        if (!$bypassCooldown && $this->shouldSkipPixooHttp($lightSync && !$heavyInit)) {
+            return;
+        }
+        if (!$this->requireCurlExtension('Pixoo')) {
+            return;
+        }
+
+        try {
+            if ($heavyInit) {
+                $this->initPixooDisplayHeavy($pixooIp, $values);
+                $this->recordPixooHttpSuccess(false);
+                $this->markPixooSyncCompleted($values);
+                return;
+            }
+
+            if ($this->GetBuffer('PixooInited') !== '1') {
+                $this->initPixooDisplayLight($pixooIp, $values);
+                $this->recordPixooHttpSuccess($lightSync);
+                $this->markPixooSyncCompleted($values);
+                return;
+            }
+
+            if (!$this->pixooIsOnDrawChannel($pixooIp)) {
+                $this->pixooEnsureDrawChannel($pixooIp);
+            }
+
+            $eff = $this->getEffectivePixooBrightness();
+            if ($this->GetBuffer('PixooLastBrightness') !== (string) $eff) {
+                $this->PixooSetBrightness($pixooIp, $eff);
+                $this->SetBuffer('PixooLastBrightness', (string) $eff);
+            }
+
+            $this->PixooSendItemList($pixooIp, $values['consumption'], $values['generation'], $values['net']);
+            $this->recordPixooHttpSuccess($lightSync);
+            $this->markPixooSyncCompleted($values);
+        } catch (\Throwable $e) {
+            $this->SetBuffer('PixooInited', '0');
+            $this->recordPixooHttpFailure($lightSync && !$heavyInit && !$bypassCooldown);
+            $this->SendDebug('Pixoo', 'syncPixooDisplay: ' . $e->getMessage(), 0);
+        }
+    }
+
+    private function shouldSkipPixooHeavyHttp(): bool
+    {
+        return $this->shouldSkipPixooHttpByBuffer('PixooHeavyPausedUntil');
+    }
+
+    private function shouldSkipPixooHttp(bool $lightSync): bool
+    {
+        if ($lightSync) {
+            return $this->shouldSkipPixooHttpByBuffer('PixooLightPausedUntil');
+        }
+        return $this->shouldSkipPixooHeavyHttp()
+            || $this->shouldSkipPixooHttpByBuffer('PixooLightPausedUntil');
+    }
+
+    private function shouldSkipPixooHttpByBuffer(string $bufferKey): bool
+    {
+        $untilRaw = $this->GetBuffer($bufferKey);
+        $until = is_numeric($untilRaw) ? (int) $untilRaw : 0;
+        if ($until > time()) {
+            return true;
+        }
+        if ($until > 0 && $until <= time()) {
+            $this->SetBuffer($bufferKey, '');
+        }
+        return false;
+    }
+
+    private function recordPixooHttpSuccess(bool $lightSync): void
+    {
+        $this->SetBuffer('PixooFailCount', '0');
+        if ($lightSync) {
+            $this->SetBuffer('PixooLightPausedUntil', '');
+        } else {
+            $this->SetBuffer('PixooHeavyPausedUntil', '');
+            $this->SetBuffer('PixooLightPausedUntil', '');
+        }
+    }
+
+    private function recordPixooHttpFailure(bool $lightSync): void
+    {
+        $n = (int) $this->GetBuffer('PixooFailCount') + 1;
+        $this->SetBuffer('PixooFailCount', (string) $n);
+        if ($n < self::PIXOO_MAX_CONSECUTIVE_FAILS) {
+            return;
+        }
+        $this->SetBuffer('PixooFailCount', '0');
+        $cooldown = $lightSync
+            ? self::PIXOO_LIGHT_HTTP_COOLDOWN_SEC
+            : self::PIXOO_HEAVY_HTTP_COOLDOWN_SEC;
+        $bufferKey = $lightSync ? 'PixooLightPausedUntil' : 'PixooHeavyPausedUntil';
+        $pauseUntil = time() + $cooldown;
+        $this->SetBuffer($bufferKey, (string) $pauseUntil);
+        $this->SendDebug(
+            'Pixoo',
+            ($lightSync ? 'Leichter' : 'Schwerer') . ' HTTP nach ' . self::PIXOO_MAX_CONSECUTIVE_FAILS
+            . ' Fehlern für ' . $cooldown . ' s pausiert (Werte laufen weiter).',
+            0
+        );
+    }
+
+    private function requireCurlExtension(string $context): bool
+    {
+        if (function_exists('curl_init')) {
+            return true;
+        }
+        static $warned = false;
+        if (!$warned) {
+            $warned = true;
+            $this->SendDebug(
+                $context,
+                'PHP-Erweiterung cURL fehlt — HTTP deaktiviert (kein file_get_contents-Fallback wegen Hänger-Risiko).',
+                0
+            );
+        }
+        return false;
+    }
+
+    /** Display-Refresh-Timer: gleiches schweres Init wie Button „Display neu initialisieren“. */
+    public function ReinitDisplay(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        $this->runHeavyReinitCore();
+    }
+
+    /** Manuell / Formular: schweres Init mit Hintergrund-GIF. */
+    public function HeavyReinitDisplay(): void
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        $this->runHeavyReinitCore();
+    }
+
+    /** Formular-Button: Erfolg oder Fehlertext statt blindem OK. */
+    /**
+     * Formular-Button: sechs Quellvariablen-IDs in Datei + Puffer schreiben (überlebt IPS-Neustart).
+     */
+    public function PersistSourceVariableIdsFeedback(): string
+    {
+        $ids = $this->captureSourceVariableIdsFromAllSources();
+        $parts = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            $parts[] = $key . '=' . ($ids[$key] ?? 0);
+        }
+        $summary = implode(', ', $parts);
+        if (count($ids) < count($this->getVariableSlotDefinitions())) {
+            return 'Nur ' . count($ids) . '/6 IDs erkannt (' . $summary
+                . '). Im Formular alle sechs Variablen wählen, dann erneut klicken.';
+        }
+        $this->writeSourceVariableIdBackup($ids);
+        if (function_exists('IPS_SetProperty')) {
+            foreach ($ids as $key => $id) {
+                IPS_SetProperty($this->InstanceID, $key, $id);
+            }
+        }
+        if (function_exists('IPS_ApplyChanges') && (function_exists('IPS_HasChanges') && IPS_HasChanges($this->InstanceID))) {
+            IPS_ApplyChanges($this->InstanceID);
+        }
+        if ($this->ReadPropertyBoolean('Active') && !$this->hasBlockingConfigIssues()) {
+            $this->SetStatus(self::IS_ACTIVE);
+            $this->ensureTimerDefinitions();
+            $this->startActiveTimers();
+            $this->syncMessageSubscriptions();
+        }
+        $path = $this->getSourceVariableBackupFilePath();
+
+        return 'Gespeichert: ' . $summary . ($path !== '' ? ' — Backup: ' . $path : '');
+    }
+
+    public function HeavyReinitDisplayFeedback(): string
+    {
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return 'Modul ist inaktiv.';
+        }
+        if (trim($this->ReadPropertyString('PixooIp')) === '') {
+            return 'Keine Pixoo-IP konfiguriert.';
+        }
+        if (!$this->requireCurlExtension('Pixoo')) {
+            return 'PHP-Erweiterung cURL fehlt.';
+        }
+        if ($this->hasBlockingConfigIssues()) {
+            return 'Konfiguration unvollständig (sechs Quellvariablen im Formular zuweisen).';
+        }
+        if ($this->runHeavyReinitCore()) {
+            return 'Display initialisiert (Kanal Custom, Seite ' . self::PIXOO_CUSTOM_PAGE . ').';
+        }
+        return 'Display-Init fehlgeschlagen — Meldungsarchiv Kategorie „Pixoo“ prüfen.';
+    }
+
+    private function runHeavyReinitCore(): bool
+    {
+        try {
+            $values = $this->updateEnergyValues();
+            if ($values === null) {
+                $values = $this->getCachedEnergyValuesForPixoo();
+            }
+            $this->SetBuffer('PixooInited', '0');
+            $this->SetBuffer('PixooHeavyPausedUntil', '');
+            $this->SetBuffer('PixooLightPausedUntil', '');
+            $this->syncPixooDisplay($values, false, true, true);
+            return $this->GetBuffer('PixooInited') === '1';
+        } catch (\Throwable $e) {
+            $this->SetBuffer('PixooInited', '0');
+            $this->SendDebug('Pixoo', 'HeavyReinitDisplay: ' . $e->getMessage(), 0);
+            return false;
+        }
+    }
+
+    private function ParseConfig(): bool
+    {
+        return !$this->hasBlockingConfigIssues();
+    }
+
+    private function smardHttpGet(string $url): ?string
+    {
+        return $this->httpGetWithTimeouts(
+            $url,
+            self::SMARD_HTTP_CONNECT_TIMEOUT_SEC,
+            self::SMARD_HTTP_TIMEOUT_SEC,
+            true,
+            false
+        );
+    }
+
+    /**
+     * Aktueller Viertelstunden-Day-Ahead-Preis DE/LU (SMARD) inkl. Beginn der Viertelstunde (Unix ms).
+     * @return array{eurMwh: float, tsMs: int}|null
+     */
+    private function fetchSmardSpotRow(): ?array
+    {
+        $base = 'https://www.smard.de/app/chart_data/' . self::SMARD_FILTER_ID . '/' . self::SMARD_REGION;
+        $indexRaw = $this->smardHttpGet($base . '/index_quarterhour.json');
+        if ($indexRaw === null) {
+            return null;
+        }
+        $index = json_decode($indexRaw, true);
+        if (!is_array($index) || !isset($index['timestamps']) || !is_array($index['timestamps'])) {
+            return null;
+        }
+        $timestamps = $index['timestamps'];
+        if ($timestamps === []) {
+            return null;
+        }
+        $nowMs = (int) round(microtime(true) * 1000);
+        /* Wenige sequentielle HTTP-Requests — jeder blockiert den Modul-Worker (Symcon: ein Worker pro Instanz) */
+        $try = array_slice($timestamps, -self::SMARD_MAX_CHUNK_REQUESTS);
+        for ($ti = count($try) - 1; $ti >= 0; $ti--) {
+            $chunkTs = (int) $try[$ti];
+            $url = $base . '/' . self::SMARD_FILTER_ID . '_' . self::SMARD_REGION . '_quarterhour_' . $chunkTs . '.json';
+            $seriesRaw = $this->smardHttpGet($url);
+            if ($seriesRaw === null) {
+                continue;
+            }
+            $data = json_decode($seriesRaw, true);
+            if (!is_array($data) || !isset($data['series']) || !is_array($data['series'])) {
+                continue;
+            }
+            $series = $data['series'];
+            $best = null;
+            $bestTsMs = 0;
+            for ($i = count($series) - 1; $i >= 0; $i--) {
+                $pair = $series[$i];
+                if (!is_array($pair) || count($pair) < 2) {
+                    continue;
+                }
+                $tMs = (int) $pair[0];
+                $val = $pair[1];
+                if ($tMs > $nowMs) {
+                    continue;
+                }
+                if ($val === null || !is_numeric($val)) {
+                    continue;
+                }
+                $best = (float) $val;
+                $bestTsMs = $tMs;
+                break;
+            }
+            if ($best !== null) {
+                return ['eurMwh' => $best, 'tsMs' => $bestTsMs];
+            }
+        }
+        return null;
+    }
+
+    private function smardPriceColorHex(float $eurPerMwh): string
+    {
+        if ($eurPerMwh > 0.0) {
+            return $this->RgbHex(50, 220, 50);
+        }
+        return $this->RgbHex(255, 50, 50);
+    }
+
+    /**
+     * @return list<array{property:string,label:string}>
+     */
+    private function getVariableSlotDefinitions(): array
+    {
+        return [
+            ['property' => 'HmRealPowerPlusVar', 'label' => 'HM Real Power + (Netzbezug)'],
+            ['property' => 'HmRealPowerMinusVar', 'label' => 'HM Real Power − (Einspeisung)'],
+            ['property' => 'Wr1String1Var', 'label' => 'Wechselrichter 1, Variable 1'],
+            ['property' => 'Wr1String2Var', 'label' => 'Wechselrichter 1, Variable 2'],
+            ['property' => 'Wr2String1Var', 'label' => 'Wechselrichter 2, Variable 1'],
+            ['property' => 'Wr2String2Var', 'label' => 'Wechselrichter 2, Variable 2'],
+        ];
+    }
+
+    /** Status 201 aufheben, sobald alle sechs Quellvariablen-IDs gesetzt sind (ObjectIDs können kurz fehlen). */
+    private function recoverConfigStatusIfDeferred(): void
+    {
+        if ($this->getInstanceStatus() !== 201) {
+            return;
+        }
+        if ($this->hasBlockingConfigIssues()) {
+            return;
+        }
+        $this->logConfiguredSourceVariableIds();
+        $this->SendDebug(
+            'Konfiguration',
+            'Fehlerstatus (201) aufgehoben — alle sechs Quellvariablen-IDs sind gesetzt.',
+            0
+        );
+        $this->SetStatus(self::IS_ACTIVE);
+        $this->ensureTimerDefinitions();
+        $this->startActiveTimers();
+        $this->syncMessageSubscriptions();
+        if ($this->isIpsKernelReady()) {
+            $this->startInstanceRuntime(true);
+        }
+    }
+
+    /**
+     * Symcon speichert Modul-Properties teils unter "configuration", teils flach im JSON-Root.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function getPersistedConfigurationValues(): ?array
+    {
+        if (function_exists('IPS_GetConfiguration')) {
+            $raw = IPS_GetConfiguration($this->InstanceID);
+            $data = json_decode($raw, true);
+            if (is_array($data)) {
+                if (isset($data['configuration']) && is_array($data['configuration'])) {
+                    return $data['configuration'];
+                }
+
+                return $data;
+            }
+        }
+
+        return $this->loadConfigurationFromInstanceStorageFile();
+    }
+
+    /** @return array<string, mixed>|null */
+    private function loadConfigurationFromInstanceStorageFile(): ?array
+    {
+        if (!function_exists('IPS_GetKernelDir')) {
+            return null;
+        }
+        $base = rtrim((string) IPS_GetKernelDir(), "\\/") . DIRECTORY_SEPARATOR . 'instances';
+        $candidates = [
+            $base . DIRECTORY_SEPARATOR . $this->InstanceID . '.ipson',
+            $base . DIRECTORY_SEPARATOR . $this->InstanceID . '.json',
+        ];
+        foreach ($candidates as $path) {
+            if (!is_readable($path)) {
+                continue;
+            }
+            $raw = @file_get_contents($path);
+            if (!is_string($raw) || $raw === '') {
+                continue;
+            }
+            $data = json_decode($raw, true);
+            if (!is_array($data)) {
+                continue;
+            }
+            if (isset($data['configuration']) && is_array($data['configuration'])) {
+                return $data['configuration'];
+            }
+
+            return $data;
+        }
+
+        return null;
+    }
+
+    /** @param mixed $stored */
+    private function coerceVariableIdFromStoredValue($stored): int
+    {
+        if (is_array($stored)) {
+            foreach (['variableID', 'VariableID', 'value', 'Value', 'id', 'ID'] as $subKey) {
+                if (isset($stored[$subKey])) {
+                    return self::migrateCoerceInt($stored[$subKey]);
+                }
+            }
+
+            return 0;
+        }
+
+        return self::migrateCoerceInt($stored);
+    }
+
+    /**
+     * @return array<string, int> Property-Name => Variable-ID
+     */
+    private function takeSourceVariableConfigurationSnapshot(): array
+    {
+        $snapshot = [];
+        $values = $this->getPersistedConfigurationValues();
+        if ($values === null) {
+            return $snapshot;
+        }
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            if (!array_key_exists($key, $values)) {
+                continue;
+            }
+            $id = $this->coerceVariableIdFromStoredValue($values[$key]);
+            if ($id > 0) {
+                $snapshot[$key] = $id;
+            }
+        }
+
+        return $snapshot;
+    }
+
+    /**
+     * parent::ApplyChanges() setzt SelectVariable-Properties nach IPS-Neustart oft auf 0 — aus Snapshot zurückschreiben.
+     *
+     * @param array<string, int> $snapshot
+     */
+    private function restoreSourceVariableIdsFromSnapshot(array $snapshot): int
+    {
+        if ($snapshot === [] || !function_exists('IPS_SetProperty')) {
+            return 0;
+        }
+        $restored = 0;
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            if (!isset($snapshot[$key]) || $snapshot[$key] <= 0) {
+                continue;
+            }
+            if ($this->ReadPropertyInteger($key) > 0) {
+                continue;
+            }
+            IPS_SetProperty($this->InstanceID, $key, $snapshot[$key]);
+            $restored++;
+        }
+
+        return $restored;
+    }
+
+    /**
+     * parent::ApplyChanges() nach IPS-Neustart setzt SelectVariable-Properties oft auf 0 — dann überspringen.
+     */
+    private function shouldInvokeParentApplyChanges(): bool
+    {
+        $status = $this->getInstanceStatus();
+        if ($status === self::IS_CREATING || $status === self::IS_NOTCREATED) {
+            return true;
+        }
+        if (function_exists('IPS_HasChanges') && IPS_HasChanges($this->InstanceID)) {
+            return true;
+        }
+
+        return !$this->hasCompleteSourceVariableIdBackup();
+    }
+
+    private function hasCompleteSourceVariableIdBackup(): bool
+    {
+        return count($this->loadSourceVariableIdBackup()) === count($this->getVariableSlotDefinitions());
+    }
+
+    private function getSourceVariableBackupFilePath(): string
+    {
+        if (!function_exists('IPS_GetKernelDir')) {
+            return '';
+        }
+        $dir = rtrim((string) IPS_GetKernelDir(), "\\/") . DIRECTORY_SEPARATOR . 'storage';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0777, true);
+        }
+
+        return $dir . DIRECTORY_SEPARATOR . 'SMAPX_' . $this->InstanceID . '_sourcevars.json';
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    private function loadSourceVariableIdBackup(): array
+    {
+        $path = $this->getSourceVariableBackupFilePath();
+        if ($path !== '' && is_readable($path)) {
+            $raw = @file_get_contents($path);
+            if (is_string($raw) && $raw !== '') {
+                $data = json_decode($raw, true);
+                if (is_array($data)) {
+                    $normalized = $this->normalizeSourceVariableIdBackup($data);
+                    if ($normalized !== []) {
+                        return $normalized;
+                    }
+                }
+            }
+        }
+        $raw = $this->GetBuffer(self::SOURCE_VAR_ID_BACKUP_BUFFER);
+        if ($raw === '' || $raw === '0') {
+            return [];
+        }
+        $data = json_decode($raw, true);
+
+        return is_array($data) ? $this->normalizeSourceVariableIdBackup($data) : [];
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     *
+     * @return array<string, int>
+     */
+    private function normalizeSourceVariableIdBackup(array $data): array
+    {
+        $normalized = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            if (!array_key_exists($key, $data)) {
+                return [];
+            }
+            $id = self::migrateCoerceInt($data[$key]);
+            if ($id <= 0) {
+                return [];
+            }
+            $normalized[$key] = $id;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param array<string, int> $ids
+     */
+    private function writeSourceVariableIdBackup(array $ids): void
+    {
+        if (count($ids) !== count($this->getVariableSlotDefinitions())) {
+            return;
+        }
+        $encoded = json_encode($ids, JSON_UNESCAPED_UNICODE);
+        if ($encoded === false || $encoded === '') {
+            return;
+        }
+        $this->SetBuffer(self::SOURCE_VAR_ID_BACKUP_BUFFER, $encoded);
+        $path = $this->getSourceVariableBackupFilePath();
+        if ($path !== '') {
+            @file_put_contents($path, $encoded);
+            $this->SendDebug('Konfiguration', 'Quellvariablen-Backup geschrieben: ' . $path, 0);
+        }
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    private function captureSourceVariableIdsFromAllSources(): array
+    {
+        $result = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            $id = 0;
+            if (function_exists('IPS_GetProperty')) {
+                $id = self::migrateCoerceInt(IPS_GetProperty($this->InstanceID, $key));
+            }
+            if ($id <= 0) {
+                $id = $this->ReadPropertyInteger($key);
+            }
+            $values = $this->getPersistedConfigurationValues();
+            if ($id <= 0 && $values !== null && array_key_exists($key, $values)) {
+                $id = $this->coerceVariableIdFromStoredValue($values[$key]);
+            }
+            if ($id > 0) {
+                $result[$key] = $id;
+            }
+        }
+
+        return $result;
+    }
+
+    private function restoreSourceVariableIdsFromBackup(): int
+    {
+        $backup = $this->loadSourceVariableIdBackup();
+        if ($backup === []) {
+            return 0;
+        }
+
+        return $this->restoreSourceVariableIdsFromSnapshot($backup);
+    }
+
+    /** Property: zuerst Backup-Datei (überlebt parent::ApplyChanges(0)), dann JSON/Puffer/ReadProperty. */
+    private function readConfiguredPropertyInteger(string $key): int
+    {
+        $backup = $this->loadSourceVariableIdBackup();
+        if (isset($backup[$key]) && $backup[$key] > 0) {
+            return $backup[$key];
+        }
+        $fromProperty = $this->ReadPropertyInteger($key);
+        if ($fromProperty > 0) {
+            return $fromProperty;
+        }
+        if (function_exists('IPS_GetProperty')) {
+            $fromIps = self::migrateCoerceInt(IPS_GetProperty($this->InstanceID, $key));
+            if ($fromIps > 0) {
+                return $fromIps;
+            }
+        }
+        $values = $this->getPersistedConfigurationValues();
+        if ($values !== null && array_key_exists($key, $values)) {
+            $fromConfig = $this->coerceVariableIdFromStoredValue($values[$key]);
+            if ($fromConfig > 0) {
+                return $fromConfig;
+            }
+        }
+
+        return 0;
+    }
+
+    private function logConfiguredSourceVariableIds(): void
+    {
+        $parts = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $parts[] = $def['property'] . '=' . $this->readConfiguredPropertyInteger($def['property']);
+        }
+        $this->SendDebug('Konfiguration', 'Quellvariablen-IDs: ' . implode(', ', $parts), 0);
+    }
+
+    private function logRawConfigurationSnapshot(): void
+    {
+        if (!function_exists('IPS_GetConfiguration')) {
+            return;
+        }
+        $values = $this->getPersistedConfigurationValues();
+        if ($values === null) {
+            $this->SendDebug('Konfiguration', 'IPS_GetConfiguration: nicht lesbar.', 0);
+
+            return;
+        }
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            $val = $values[$key] ?? null;
+            $encoded = json_encode($val, JSON_UNESCAPED_UNICODE);
+            $this->SendDebug(
+                'Konfiguration',
+                'Raw config[' . $key . ']=' . ($encoded === false ? '?' : $encoded),
+                0
+            );
+        }
+    }
+
+    private function markConfigValidationGrace(): void
+    {
+        $this->SetBuffer('ConfigGraceUntil', (string) (time() + self::CONFIG_VALIDATION_GRACE_SEC));
+    }
+
+    private function isInConfigValidationGrace(): bool
+    {
+        $untilRaw = $this->GetBuffer('ConfigGraceUntil');
+        if (is_numeric($untilRaw) && time() < (int) $untilRaw) {
+            return true;
+        }
+        $start = $this->getKernelStartTime();
+        if ($start > 0) {
+            return (time() - $start) <= self::CONFIG_VALIDATION_GRACE_SEC;
+        }
+
+        return $this->needsRecoveryAfterKernelRestart();
+    }
+
+    private function getKernelUptimeSec(): int
+    {
+        $start = $this->getKernelStartTime();
+        if ($start <= 0) {
+            return 0;
+        }
+
+        return max(0, time() - $start);
+    }
+
+    /**
+     * @param list<string> $blockingIssues
+     * @param list<string> $warnings
+     */
+    private function logConfigValidationDiagnostic(array $blockingIssues, array $warnings): void
+    {
+        $lastRaw = $this->GetBuffer('LastConfigDiagAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        if ($last > 0 && (time() - $last) < 60) {
+            return;
+        }
+        $this->SetBuffer('LastConfigDiagAt', (string) time());
+        $this->logConfiguredSourceVariableIds();
+        $this->SendDebug(
+            'Konfiguration',
+            'Diagnose: Status=' . $this->getInstanceStatus()
+            . ', blockierend=' . count($blockingIssues)
+            . ', Hinweise=' . count($warnings)
+            . ', KernelStart=' . $this->getKernelStartTime(),
+            0
+        );
+        foreach (array_slice(array_merge($blockingIssues, $warnings), 0, 6) as $line) {
+            $this->SendDebug('Konfiguration', $line, 0);
+        }
+    }
+
+    private function hasBlockingConfigIssues(): bool
+    {
+        return $this->collectBlockingConfigIssues() !== [];
+    }
+
+    /** @return list<string> nur fehlende Variablenauswahl (Property = 0) — löst Status 201 aus */
+    private function collectBlockingConfigIssues(): array
+    {
+        $issues = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $prop = $def['property'];
+            $label = $def['label'];
+            $id = $this->readConfiguredPropertyInteger($prop);
+            if ($id <= 0) {
+                $issues[] = "{$label}: keine Variable gewählt (Property \"{$prop}\" = 0).";
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Existenz/Typ der gewählten IDs — blockiert den Betrieb nicht (z. B. kurz nach IPS-Neustart).
+     *
+     * @return list<string>
+     */
+    private function collectConfigWarnings(): array
+    {
+        $issues = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $prop = $def['property'];
+            $label = $def['label'];
+            $id = $this->readConfiguredPropertyInteger($prop);
+            if ($id <= 0) {
+                continue;
+            }
+            try {
+                if (!IPS_ObjectExists($id)) {
+                    $issues[] = "{$label}: ObjectID {$id} existiert noch nicht (Objektbaum lädt?).";
+                    continue;
+                }
+                if (!IPS_VariableExists($id)) {
+                    $ot = -1;
+                    $obj = @IPS_GetObject($id);
+                    if (is_array($obj)) {
+                        $ot = (int) ($obj['ObjectType'] ?? -1);
+                    }
+                    $issues[] = "{$label}: ObjectID {$id} ist keine Variable (ObjectType {$ot}).";
+                    continue;
+                }
+                if (!$this->isAllowedWattVariable($id)) {
+                    $vt = $this->getVariableTypeCode($id);
+                    $issues[] = "{$label}: ObjectID {$id} hat ungültigen Typ "
+                        . ($vt === null ? '?' : (string) $vt) . ' (' . $this->variableTypeLabel($vt)
+                        . ') — erlaubt: Integer, Float oder String.';
+                }
+            } catch (\Throwable $e) {
+                $issues[] = "{$label}: Prüfung von ObjectID {$id} fehlgeschlagen: " . $e->getMessage();
+            }
+        }
+
+        return $issues;
+    }
+
+    /** @return list<string> */
+    private function collectConfigIssues(): array
+    {
+        return array_merge($this->collectBlockingConfigIssues(), $this->collectConfigWarnings());
+    }
+
+    private function getVariableTypeCode(int $variableId): ?int
+    {
+        $v = @IPS_GetVariable($variableId);
+        if (!is_array($v)) {
+            return null;
+        }
+        return (int) ($v['VariableType'] ?? -1);
+    }
+
+    private function variableTypeLabel(?int $variableType): string
+    {
+        return match ($variableType) {
+            0 => 'Boolean',
+            1 => 'Integer',
+            2 => 'Float',
+            3 => 'String',
+            default => 'unbekannt',
+        };
+    }
+
+    /** Integer, Float oder String (mit Zahl im Text) */
+    private function isAllowedWattVariable(int $variableId): bool
+    {
+        $t = $this->getVariableTypeCode($variableId);
+        return $t === 1 || $t === 2 || $t === 3;
+    }
+
+    private function readWattFromVariable(int $variableId): ?float
+    {
+        if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
+            return null;
+        }
+        $raw = GetValue($variableId);
+        if (is_int($raw) || is_float($raw)) {
+            return (float) $raw;
+        }
+        return $this->parseLocaleFloat((string) $raw);
+    }
+
+    private function parseLocaleFloat(string $s): ?float
+    {
+        $s = trim(str_replace(["\xc2\xa0", ' '], '', $s));
+        $s = str_replace(',', '.', $s);
+        if ($s === '' || $s === '-') {
+            return 0.0;
+        }
+        if (!is_numeric($s)) {
+            return null;
+        }
+        return (float) $s;
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function initPixooDisplayLight(string $ip, array $values): void
+    {
+        $this->pixooEnsureDrawChannel($ip);
+        $eff = $this->getEffectivePixooBrightness();
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Channel/SetBrightness',
+            'Brightness' => max(0, min(100, $eff)),
+        ]);
+        $this->SetBuffer('PixooLastBrightness', (string) $eff);
+        $this->PixooSendItemList($ip, $values['consumption'], $values['generation'], $values['net']);
+        $this->SetBuffer('PixooInited', '1');
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float} $values
+     */
+    private function initPixooDisplayHeavy(string $ip, array $values): void
+    {
+        $this->pixooEnsureDrawChannel($ip);
+        $this->pixooPrepareHeavyDraw($ip);
+        $eff = $this->getEffectivePixooBrightness();
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Channel/SetBrightness',
+            'Brightness' => max(0, min(100, $eff)),
+        ]);
+        $this->SetBuffer('PixooLastBrightness', (string) $eff);
+        $this->PixooSendBackground($ip);
+        $this->PixooSendItemList($ip, $values['consumption'], $values['generation'], $values['net']);
+        $this->SetBuffer('PixooInited', '1');
+        $this->SetBuffer('PixooLastHeavyGifAt', (string) time());
+    }
+
+    /** HTTP-Draw: Custom-Kanal (3) + Custom-Seite — nicht Cloud (1). */
+    private function pixooEnsureDrawChannel(string $ip): void
+    {
+        $page = self::PIXOO_CUSTOM_PAGE;
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Channel/SetCustomPageIndex',
+            'CustomPageIndex' => $page,
+        ]);
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Channel/SetIndex',
+            'SelectIndex' => self::PIXOO_CHANNEL_CUSTOM,
+        ]);
+        $ch = $this->pixooGetChannelIndex($ip);
+        if ($ch !== self::PIXOO_CHANNEL_CUSTOM) {
+            throw new \RuntimeException(
+                'Channel/GetIndex: erwartet Custom (' . self::PIXOO_CHANNEL_CUSTOM . '), ist '
+                . ($ch === null ? '?' : (string) $ch)
+            );
+        }
+        $this->SetBuffer('PixooChannelIndex', (string) self::PIXOO_CHANNEL_CUSTOM);
+    }
+
+    private function pixooIsOnDrawChannel(string $ip): bool
+    {
+        $buf = $this->GetBuffer('PixooChannelIndex');
+        if ($buf === (string) self::PIXOO_CHANNEL_CUSTOM) {
+            return true;
+        }
+        $ch = $this->pixooGetChannelIndex($ip);
+        if ($ch === null) {
+            return false;
+        }
+        $this->SetBuffer('PixooChannelIndex', (string) $ch);
+        return $ch === self::PIXOO_CHANNEL_CUSTOM;
+    }
+
+    private function pixooPrepareHeavyDraw(string $ip): void
+    {
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Channel/OnOffScreen',
+            'OnOff' => 1,
+        ]);
+        try {
+            $this->pixooPostCommand($ip, ['Command' => 'Draw/ResetHttpGifId']);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Pixoo', 'Draw/ResetHttpGifId: ' . $e->getMessage(), 0);
+        }
+    }
+
+    private function pixooGetChannelIndex(string $ip): ?int
+    {
+        if (!$this->requireCurlExtension('Pixoo')) {
+            return null;
+        }
+        try {
+            $j = $this->pixooPostCommand($ip, ['Command' => 'Channel/GetIndex']);
+            if (isset($j['SelectIndex'])) {
+                return (int) $j['SelectIndex'];
+            }
+        } catch (\Throwable $e) {
+            $this->SendDebug('Pixoo', 'Channel/GetIndex: ' . $e->getMessage(), 0);
+        }
+        return null;
+    }
+
+    private function PixooSetBrightness(string $ip, int $brightness): void
+    {
+        $b = max(0, min(100, $brightness));
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Channel/SetBrightness',
+            'Brightness' => $b,
+        ]);
+    }
+
+    /** Tageshelligkeit oder Nachthelligkeit je nach Uhrzeit (Symcon-Serverzeit). */
+    private function getEffectivePixooBrightness(): int
+    {
+        $day = max(0, min(100, $this->ReadPropertyInteger('DefaultBrightness')));
+        if (!$this->ReadPropertyBoolean('PixooNightBrightnessUse')) {
+            return $day;
+        }
+        $night = max(0, min(100, $this->ReadPropertyInteger('PixooNightBrightness')));
+        return $this->isPixooNightTime() ? $night : $day;
+    }
+
+    /**
+     * Nachtfenster: von PixooNightHourFrom (inkl.) bis PixooNightHourTo (exkl.).
+     * Über Mitternacht: z. B. 22–6 bedeutet 22,23,0,…,5.
+     * Gleiche Stunden = kein Nachtfenster (immer Tageshelligkeit).
+     */
+    private function isPixooNightTime(): bool
+    {
+        $from = max(0, min(23, $this->ReadPropertyInteger('PixooNightHourFrom')));
+        $to = max(0, min(23, $this->ReadPropertyInteger('PixooNightHourTo')));
+        if ($from === $to) {
+            return false;
+        }
+        $h = (int) date('G');
+        if ($from < $to) {
+            return $h >= $from && $h < $to;
+        }
+        return $h >= $from || $h < $to;
+    }
+
+    private function PixooSendItemList(string $ip, float $consumption, float $generation, float $netW): void
+    {
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Draw/SendHttpItemList',
+            'ItemList' => $this->BuildItems($consumption, $generation, $netW),
+        ]);
+    }
+
+    private function PixooSendBackground(string $ip): void
+    {
+        $picId = $this->PixooGetPicId($ip);
+        $frameLen = self::PIXEL_SIZE * self::PIXEL_SIZE * 3;
+        $frame = str_repeat("\x00", $frameLen);
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Draw/SendHttpGif',
+            'PicNum' => 1,
+            'PicWidth' => self::PIXEL_SIZE,
+            'PicOffset' => 0,
+            'PicID' => $picId,
+            'PicSpeed' => 1000,
+            'PicData' => base64_encode($frame),
+        ], self::PIXOO_GIF_HTTP_TIMEOUT_SEC);
+    }
+
+    private function PixooGetPicId(string $ip): int
+    {
+        try {
+            $j = $this->pixooPostCommand($ip, ['Command' => 'Draw/GetHttpGifId']);
+            if (isset($j['PicId'])) {
+                return (int) $j['PicId'];
+            }
+        } catch (\Throwable $e) {
+            $this->SendDebug('Pixoo', 'Draw/GetHttpGifId: ' . $e->getMessage(), 0);
+        }
+        return 1;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function makeTextItem(
+        int $textId,
+        string $text,
+        int $x,
+        int $y,
+        string $color,
+        int $font,
+        int $height,
+        int $textWidth = self::PIXEL_SIZE,
+        int $align = 1,
+        int $dir = 0,
+        int $speed = 100
+    ): array {
+        return [
+            'TextId' => $textId,
+            'type' => 22,
+            'x' => $x,
+            'y' => $y,
+            'dir' => $dir,
+            'font' => $font,
+            'TextWidth' => $textWidth,
+            'Textheight' => $height,
+            'TextString' => $text,
+            'speed' => $speed,
+            'color' => $color,
+            'update_time' => 0,
+            'align' => $align,
+        ];
+    }
+
+    private function safePhpDateFormat(string $format): string
+    {
+        $format = trim($format);
+        if ($format === '') {
+            return '--';
+        }
+        $out = @date($format);
+        if ($out === false || $out === '') {
+            return '--';
+        }
+        return $out;
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function BuildItems(float $consumption, float $generation, float $netW): array
+    {
+        $cLabel = $this->RgbHex(140, 140, 140);
+        $cWhite = $this->RgbHex(255, 255, 255);
+        $cNet = $this->NetGridColorHex($netW);
+
+        $items = [
+            $this->makeTextItem(1, 'VERBRAUCH', self::LEFT_PAD, 2, $cLabel, self::FONT_LABEL, 7),
+            $this->makeTextItem(2, sprintf('%.0f W', $consumption), self::LEFT_PAD, 8, $cWhite, self::FONT_VALUE, 16),
+            $this->makeTextItem(3, 'ERZEUGUNG', self::LEFT_PAD, 24, $cLabel, self::FONT_LABEL, 7),
+            $this->makeTextItem(4, sprintf('%.0f W', $generation), self::LEFT_PAD, 30, $cWhite, self::FONT_VALUE, 16),
+            $this->makeTextItem(5, 'NETZ', self::LEFT_PAD, self::NETZ_LABEL_Y, $cLabel, self::FONT_LABEL, 7),
+            $this->makeTextItem(6, sprintf('%.0f W', abs($netW)), self::LEFT_PAD, 52, $cNet, self::FONT_VALUE, 16),
+        ];
+
+        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            $tw = self::PIXEL_SIZE - self::DATETIME_X;
+            $ax = self::DATETIME_X;
+            $al = self::SMARD_CORNER_TEXT_ALIGN;
+            $dDir = 1;
+            $dSpeed = 0;
+
+            $priceFont = self::FONT_VALUE;
+            $priceH = 16;
+            $priceY = 52;
+
+            if ($this->ReadPropertyBoolean('PixooSmardShowTime')) {
+                $timeStr = $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
+                // Gleiche Font-ID wie Verbrauch/Erzeugung/Netz (FONT_VALUE), damit Ziffern (z. B. „0“) nicht wie bei FONT_LABEL 26 dicker wirken
+                $items[] = $this->makeTextItem(
+                    self::SMARD_TIME_TEXT_ID,
+                    $timeStr,
+                    $ax,
+                    self::NETZ_LABEL_Y,
+                    $cLabel,
+                    self::FONT_VALUE,
+                    10,
+                    $tw,
+                    $al,
+                    $dDir,
+                    $dSpeed
+                );
+            }
+
+            $eurMwh = $this->getSmardEurPerMwhForDisplay();
+            if ($eurMwh !== null) {
+                $num = number_format($eurMwh / 1000.0, 2, ',', '');
+                $txt = $this->ReadPropertyBoolean('PixooSmardShowUnit') ? ($num . '€') : $num;
+                $col = $this->smardPriceColorHex($eurMwh);
+            } else {
+                $txt = '--';
+                $col = $this->RgbHex(160, 160, 160);
+            }
+            $items[] = $this->makeTextItem(
+                self::SMARD_TEXT_ID,
+                $txt,
+                $ax,
+                $priceY,
+                $col,
+                $priceFont,
+                $priceH,
+                $tw,
+                $al,
+                $dDir,
+                $dSpeed
+            );
+        }
+
+        return $items;
+    }
+
+    /** Netzbezug → rot, Einspeisung → grün, nahe 0 → gelb */
+    private function NetGridColorHex(float $netW): string
+    {
+        if (abs($netW) < self::NET_ZERO_EPSILON_W) {
+            return $this->RgbHex(255, 220, 0);
+        }
+        if ($netW > 0.0) {
+            return $this->RgbHex(255, 50, 50);
+        }
+        return $this->RgbHex(50, 220, 50);
+    }
+
+    private function RgbHex(int $r, int $g, int $b): string
+    {
+        return sprintf('#%02x%02x%02x', $r, $g, $b);
+    }
+
+    /**
+     * Divoom POST mit error_code-Prüfung (wie standalone/pixoo_text.py).
+     *
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function pixooPostCommand(string $ip, array $payload, ?float $totalTimeoutSec = null): array
+    {
+        $cmd = isset($payload['Command']) && is_string($payload['Command']) ? $payload['Command'] : '?';
+        $raw = $this->PixooPostRaw($ip, $payload, $totalTimeoutSec);
+        if ($raw === null || $raw === '') {
+            throw new \RuntimeException($cmd . ': keine HTTP-Antwort');
+        }
+        $j = json_decode($raw, true);
+        if (!is_array($j)) {
+            throw new \RuntimeException($cmd . ': ungültige JSON-Antwort');
+        }
+        if (array_key_exists('error_code', $j) && (int) $j['error_code'] !== 0) {
+            throw new \RuntimeException($cmd . ': error_code ' . (string) (int) $j['error_code']);
+        }
+        return $j;
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function PixooPostRaw(string $ip, array $payload, ?float $totalTimeoutSec = null): ?string
+    {
+        if (!function_exists('curl_init')) {
+            return null;
+        }
+        $url = 'http://' . $ip . ':80/post';
+        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            return null;
+        }
+        $timeout = $totalTimeoutSec ?? self::PIXOO_HTTP_TIMEOUT_SEC;
+        $abortSlow = $totalTimeoutSec === null;
+
+        return $this->httpPostJsonWithTimeouts(
+            $url,
+            $json,
+            self::PIXOO_HTTP_CONNECT_TIMEOUT_SEC,
+            $timeout,
+            true,
+            $abortSlow
+        );
+    }
+
+    /**
+     * GET mit getrenntem Verbindungs- und Gesamt-Timeout (cURL), damit TCP nicht endlos blockiert.
+     *
+     * @param bool $abortSlowTransfer CURLOPT_LOW_SPEED_* (für große SMARD-JSON oft zu aggressiv → optional aus)
+     */
+    private function httpGetWithTimeouts(
+        string $url,
+        float $connectTimeoutSec,
+        float $totalTimeoutSec,
+        bool $verifySsl,
+        bool $abortSlowTransfer = true
+    ): ?string
+    {
+        if (!function_exists('curl_init')) {
+            return null;
+        }
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return null;
+        }
+        $connectInt = max(1, (int) ceil($connectTimeoutSec));
+        $totalInt = max($connectInt, (int) ceil($totalTimeoutSec));
+        $opts = [
+            CURLOPT_HTTPGET => true,
+            CURLOPT_HTTPHEADER => [
+                'User-Agent: PIXOOEnergyViewer/IP-Symcon',
+                'Accept: application/json',
+            ],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => $connectInt,
+            CURLOPT_TIMEOUT => $totalInt,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_SSL_VERIFYPEER => $verifySsl,
+            CURLOPT_SSL_VERIFYHOST => $verifySsl ? 2 : 0,
+        ];
+        $opts += $this->curlNoSignalOpts();
+        $opts += $this->curlTimeoutMsOpts($connectTimeoutSec, $totalTimeoutSec);
+        if ($abortSlowTransfer) {
+            $opts += $this->curlLowSpeedOpts();
+        }
+        if (\defined('CURLOPT_IPRESOLVE') && \defined('CURL_IPRESOLVE_V4')) {
+            $opts[CURLOPT_IPRESOLVE] = CURL_IPRESOLVE_V4;
+        }
+        curl_setopt_array($ch, $opts);
+        $raw = curl_exec($ch);
+        $err = curl_error($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($raw === false || $raw === '') {
+            if ($err !== '') {
+                $this->SendDebug('HTTP', 'GET ' . $url . ' — cURL: ' . $err, 0);
+            }
+            return null;
+        }
+        if ($code >= 400) {
+            $this->SendDebug('HTTP', 'GET ' . $url . ' — HTTP ' . $code, 0);
+            return null;
+        }
+        return $raw;
+    }
+
+    /**
+     * POST JSON mit getrenntem Verbindungs- und Gesamt-Timeout (cURL).
+     *
+     * @param bool $pixooPost frische TCP-Verbindung, kein Keep-Alive (Pixoo)
+     */
+    private function httpPostJsonWithTimeouts(
+        string $url,
+        string $json,
+        float $connectTimeoutSec,
+        float $totalTimeoutSec,
+        bool $pixooPost = false,
+        bool $abortSlowTransfer = true
+    ): ?string
+    {
+        if (!function_exists('curl_init')) {
+            return null;
+        }
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return null;
+        }
+        $connectInt = max(1, (int) ceil($connectTimeoutSec));
+        $totalInt = max($connectInt, (int) ceil($totalTimeoutSec));
+        $opts = [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $json,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => $connectInt,
+            CURLOPT_TIMEOUT => $totalInt,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP,
+        ];
+        $opts += $this->curlNoSignalOpts();
+        $opts += $this->curlTimeoutMsOpts($connectTimeoutSec, $totalTimeoutSec);
+        if ($abortSlowTransfer) {
+            $opts += $this->curlLowSpeedOpts();
+        }
+        if ($pixooPost) {
+            if (\defined('CURLOPT_FRESH_CONNECT')) {
+                $opts[CURLOPT_FRESH_CONNECT] = true;
+            }
+            if (\defined('CURLOPT_FORBID_REUSE')) {
+                $opts[CURLOPT_FORBID_REUSE] = true;
+            }
+            if (\defined('CURLOPT_IPRESOLVE') && \defined('CURL_IPRESOLVE_V4')) {
+                $opts[CURLOPT_IPRESOLVE] = CURL_IPRESOLVE_V4;
+            }
+        }
+        curl_setopt_array($ch, $opts);
+        $raw = curl_exec($ch);
+        $err = curl_error($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($raw === false) {
+            if ($err !== '') {
+                $this->SendDebug('Pixoo', 'POST ' . $url . ' — cURL: ' . $err, 0);
+            }
+            return null;
+        }
+        if ($code >= 400) {
+            $this->SendDebug('Pixoo', 'POST ' . $url . ' — HTTP ' . $code, 0);
+            return null;
+        }
+        return $raw;
+    }
+
+    /**
+     * @return array<int, mixed>
+     */
+    private function curlTimeoutMsOpts(float $connectTimeoutSec, float $totalTimeoutSec): array
+    {
+        $opts = [];
+        if (\defined('CURLOPT_CONNECTTIMEOUT_MS')) {
+            $opts[CURLOPT_CONNECTTIMEOUT_MS] = max(1, (int) round($connectTimeoutSec * 1000));
+        }
+        if (\defined('CURLOPT_TIMEOUT_MS')) {
+            $opts[CURLOPT_TIMEOUT_MS] = max(1, (int) round($totalTimeoutSec * 1000));
+        }
+        return $opts;
+    }
+
+    /**
+     * @return array<int, mixed>
+     */
+    private function curlNoSignalOpts(): array
+    {
+        $opts = [];
+        if (\defined('CURLOPT_NOSIGNAL')) {
+            $opts[CURLOPT_NOSIGNAL] = true;
+        }
+        return $opts;
+    }
+
+    /**
+     * @return array<int, mixed>
+     */
+    private function curlLowSpeedOpts(): array
+    {
+        return [
+            CURLOPT_LOW_SPEED_LIMIT => self::HTTP_LOW_SPEED_BYTES_PER_SEC,
+            CURLOPT_LOW_SPEED_TIME => self::HTTP_LOW_SPEED_TIME_SEC,
+        ];
+    }
+}

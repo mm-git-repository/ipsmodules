@@ -1,0 +1,15 @@
+.cursor/agent-transcripts/
+.cursor/agent-tools/
+.cursor/mcps/
+
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+*.user
+.DS_Store
+Thumbs.db
+
+mm/PIXOOEnergyViewer/_preview_b64.txt

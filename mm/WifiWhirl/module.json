@@ -1,0 +1,14 @@
+{
+    "id": "{D5E9B2F3-A048-5B6D-E7F8-901234567890}",
+    "name": "WifiWhirl",
+    "type": 3,
+    "vendor": "MM-Modules",
+    "aliases": [
+        "WifiWhirl Whirlpool"
+    ],
+    "url": "https://wifiwhirl.de/",
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "WWHL"
+}

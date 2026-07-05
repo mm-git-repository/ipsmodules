@@ -1,0 +1,339 @@
+{
+    "elements": [
+        {
+            "type": "Label",
+            "name": "ModuleVersionInfo",
+            "caption": "Installierte Modulversion"
+        },
+        {
+            "type": "Label",
+            "caption": "HTTP-Anbindung an das WifiWhirl-Modul im lokalen Netzwerk. Kein MQTT-Broker erforderlich. In der WifiWhirl-Web-UI muss der HTTP-Polling-Modus aktiv sein (Firmware ab v1.2.0), damit /getpolldata/ alle Werte liefert."
+        },
+        {
+            "type": "CheckBox",
+            "name": "Active",
+            "caption": "Aktiv"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "Host",
+            "caption": "Host (IP oder Hostname, z. B. 192.168.1.100 oder wifiwhirl-xxxxxx.local)"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "UpdateIntervalSeconds",
+            "caption": "Aktualisierungsintervall (Sekunden, mindestens 15)",
+            "digits": 0,
+            "minimum": 15
+        },
+        {
+            "type": "Label",
+            "caption": "Steuerbefehle werden per POST /sendcommand/ gesendet. Status wird per GET /getpolldata/ abgefragt (Fallback: /getstates/ + /gettemps/)."
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Automatisierung (IPS)",
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Zeitgesteuerte Pumpe und Heizung in IP-Symcon. Manuelles Schalten pausiert die aktuelle Regel bis zum Ende ihres Zeitfensters. Keine Kopplung an andere Module — PV-Überschuss über frei wählbare IPS-Variable."
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "AutomationEnabled",
+                    "caption": "Automatisierung aktiv"
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "AutomationIntervalSec",
+                    "caption": "Automatisierungsintervall (Sekunden, mindestens 60)",
+                    "digits": 0,
+                    "minimum": 60
+                },
+                {
+                    "type": "SelectVariable",
+                    "name": "PvSurplusVar",
+                    "caption": "Variable: PV-Überschuss (W)"
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PvThresholdW",
+                    "caption": "PV-Schwellwert Heizung (W, Standard 2500)",
+                    "digits": 0,
+                    "minimum": 0
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PvOnDelaySec",
+                    "caption": "PV Einschalt-Verzögerung (Sekunden)",
+                    "digits": 0,
+                    "minimum": 0
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PvOffDelaySec",
+                    "caption": "PV Ausschalt-Verzögerung (Sekunden)",
+                    "digits": 0,
+                    "minimum": 0
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "PvHysteresisW",
+                    "caption": "PV Hysterese (W)",
+                    "digits": 0,
+                    "minimum": 0
+                },
+                {
+                    "type": "List",
+                    "name": "AutomationRules",
+                    "caption": "Automatisierungsregeln",
+                    "rowCount": 1,
+                    "add": true,
+                    "delete": true,
+                    "sort": true,
+                    "columns": [
+                        {
+                            "caption": "Aktiv",
+                            "name": "active",
+                            "width": "50px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": true
+                        },
+                        {
+                            "caption": "Typ",
+                            "name": "type",
+                            "width": "90px",
+                            "visible": true,
+                            "align": "left",
+                            "save": true,
+                            "edit": {
+                                "type": "Select",
+                                "options": [
+                                    {
+                                        "caption": "Pumpe",
+                                        "value": "pump"
+                                    },
+                                    {
+                                        "caption": "Heizung",
+                                        "value": "heater"
+                                    }
+                                ]
+                            },
+                            "add": "pump"
+                        },
+                        {
+                            "caption": "Mo",
+                            "name": "mo",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": true
+                        },
+                        {
+                            "caption": "Di",
+                            "name": "tu",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": true
+                        },
+                        {
+                            "caption": "Mi",
+                            "name": "we",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": true
+                        },
+                        {
+                            "caption": "Do",
+                            "name": "th",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": true
+                        },
+                        {
+                            "caption": "Fr",
+                            "name": "fr",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": true
+                        },
+                        {
+                            "caption": "Sa",
+                            "name": "sa",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": false
+                        },
+                        {
+                            "caption": "So",
+                            "name": "so",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": false
+                        },
+                        {
+                            "caption": "Start",
+                            "name": "start",
+                            "width": "70px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "ValidationTextBox",
+                                "validation": "hour"
+                            },
+                            "add": "08:00"
+                        },
+                        {
+                            "caption": "Ende",
+                            "name": "end",
+                            "width": "70px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "ValidationTextBox",
+                                "validation": "hour"
+                            },
+                            "add": "20:00"
+                        },
+                        {
+                            "caption": "Ziel °C",
+                            "name": "targetTemp",
+                            "width": "60px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "NumberSpinner",
+                                "minimum": 20,
+                                "maximum": 40
+                            },
+                            "add": 38
+                        },
+                        {
+                            "caption": "PV",
+                            "name": "pvGated",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": false
+                        }
+                    ],
+                    "values": []
+                },
+                {
+                    "type": "Label",
+                    "caption": "Zeitfenster: Start ≤ Uhrzeit < Ende (kein Über-Mitternacht in v1). Heizung: Zieltemperatur und optional PV-Freigabe pro Regel. Außerhalb aller Fenster schaltet die Automatisierung ab."
+                }
+            ]
+        }
+    ],
+    "actions": [
+        {
+            "type": "Button",
+            "caption": "Jetzt aktualisieren",
+            "onClick": "WWHL_Refresh($id); echo 'OK';"
+        },
+        {
+            "type": "Button",
+            "caption": "Automatisierung jetzt ausführen",
+            "onClick": "WWHL_RunAutomation($id); echo 'OK';"
+        },
+        {
+            "type": "Button",
+            "caption": "Manuelle Pause aufheben",
+            "onClick": "echo WWHL_ClearAutomationOverride($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Timer Chlor zurücksetzen",
+            "onClick": "echo WWHL_ResetChlorineTimer($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Timer Filterwechsel zurücksetzen",
+            "onClick": "echo WWHL_ResetFilterTimer($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Timer Filterreinigung zurücksetzen",
+            "onClick": "echo WWHL_ResetFilterCleanTimer($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Timer Wasserwechsel zurücksetzen",
+            "onClick": "echo WWHL_ResetWaterChangeTimer($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "WifiWhirl-Modul neustarten",
+            "onClick": "echo WWHL_RestartModule($id);"
+        }
+    ],
+    "status": [
+        {
+            "code": 102,
+            "icon": "active",
+            "caption": "Aktiv"
+        },
+        {
+            "code": 104,
+            "icon": "inactive",
+            "caption": "Inaktiv"
+        },
+        {
+            "code": 201,
+            "icon": "error",
+            "caption": "Host fehlt oder ungültig"
+        },
+        {
+            "code": 202,
+            "icon": "error",
+            "caption": "Gerät nicht erreichbar"
+        }
+    ]
+}
