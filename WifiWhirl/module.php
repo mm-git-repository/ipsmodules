@@ -7,7 +7,7 @@ require_once __DIR__ . '/libs/WifiWhirlHttpClient.php';
 
 class WifiWhirl extends IPSModuleStrict
 {
-    private const LIBRARY_ID = '{C4D8A1E2-9F3B-4A5C-D6E7-8F9012345678}';
+    private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
     private const MODULE_BUILD = 1;
 
