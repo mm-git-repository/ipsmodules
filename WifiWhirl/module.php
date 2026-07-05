@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 12;
+    private const MODULE_BUILD = 13;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -391,12 +391,14 @@ class WifiWhirl extends IPSModuleStrict
             $this->SetValue('AutomationPvGateOpen', false);
             $this->SetValue('AutomationPumpDesired', false);
             $this->SetValue('AutomationHeaterDesired', false);
+            $this->SetValue('AutomationTargetTemp', 0);
 
             return;
         }
 
         if (!$this->ReadPropertyBoolean('Active') || trim($this->ReadPropertyString('Host')) === '') {
             $this->SetValue('AutomationStatus', 'Automatisierung: Modul inaktiv oder Host fehlt');
+            $this->SetValue('AutomationTargetTemp', 0);
 
             return;
         }
@@ -442,18 +444,34 @@ class WifiWhirl extends IPSModuleStrict
         if ($pumpOverride) {
             $status .= ' | Pumpe manuell pausiert bis ' . date('H:i', (int) $this->GetBuffer('AutoOverridePumpUntil'));
         }
-        if ($heaterOverride) {
-            $status .= ' | Heizung manuell pausiert bis ' . date('H:i', (int) $this->GetBuffer('AutoOverrideHeaterUntil'));
-        }
-        $this->SetValue('AutomationStatus', $status);
 
         $wantPump = $result['pump'];
         $wantHeater = $result['heater'];
         $targetTemp = $result['targetTemp'];
+        $heaterWindowActive = $result['heaterWindowActive'];
+
+        $this->SetValue('AutomationTargetTemp', $heaterWindowActive ? $targetTemp : 0);
+
+        $deviceTargetTemp = $this->readDeviceTargetTemp();
 
         if ($heaterOverride) {
             $wantHeater = null;
+            if ($heaterWindowActive) {
+                $status .= sprintf(
+                    ' | Heizung manuell bis %s (Zeitplan %.0f °C, Gerät %.0f °C)',
+                    date('H:i', (int) $this->GetBuffer('AutoOverrideHeaterUntil')),
+                    (float) $targetTemp,
+                    (float) ($deviceTargetTemp >= 0 ? $deviceTargetTemp : $targetTemp),
+                );
+            } else {
+                $status .= ' | Heizung manuell pausiert bis ' . date('H:i', (int) $this->GetBuffer('AutoOverrideHeaterUntil'));
+            }
+        } elseif ($heaterWindowActive && $result['heater'] && $deviceTargetTemp >= 0 && $deviceTargetTemp !== $targetTemp) {
+            $status .= sprintf(' | Zieltemp. wird auf %.0f °C gesetzt (aktuell %.0f °C)', (float) $targetTemp, (float) $deviceTargetTemp);
         }
+
+        $this->SetValue('AutomationStatus', $status);
+
         if ($pumpOverride && ($wantHeater === null || $wantHeater === false)) {
             $wantPump = null;
         }
@@ -768,11 +786,15 @@ class WifiWhirl extends IPSModuleStrict
         $this->RegisterVariableBoolean('AutomationPumpDesired', 'Automatisierung Pumpe Soll', $switchPres, $pos);
         ++$pos;
         $this->RegisterVariableBoolean('AutomationHeaterDesired', 'Automatisierung Heizung Soll', $switchPres, $pos);
+        ++$pos;
+        $tempPres = $pres['~Temperature'] ?? '~Temperature';
+        $this->RegisterVariableInteger('AutomationTargetTemp', 'Automatisierung Zieltemp. Soll', $tempPres, $pos);
         $this->DisableAction('AutomationStatus');
         $this->DisableAction('AutomationPvSurplus');
         $this->DisableAction('AutomationPvGateOpen');
         $this->DisableAction('AutomationPumpDesired');
         $this->DisableAction('AutomationHeaterDesired');
+        $this->DisableAction('AutomationTargetTemp');
     }
 
     private function ensureModuleVersionVariable(): void
@@ -870,6 +892,26 @@ class WifiWhirl extends IPSModuleStrict
         return $until > $now;
     }
 
+    private function readDeviceTargetTemp(): int
+    {
+        try {
+            return (int) round((float) $this->GetValue('TargetTemperature'));
+        } catch (Throwable) {
+            return -1;
+        }
+    }
+
+    private function shouldApplyTargetTemp(int $targetTemp): bool
+    {
+        if ($this->getBufferInt('AutoLastTargetTemp') !== $targetTemp) {
+            return true;
+        }
+
+        $deviceTemp = $this->readDeviceTargetTemp();
+
+        return $deviceTemp >= 0 && $deviceTemp !== $targetTemp;
+    }
+
     /**
      * @param bool|null $wantPump null = keine Änderung
      * @param bool|null $wantHeater null = keine Änderung
@@ -884,7 +926,7 @@ class WifiWhirl extends IPSModuleStrict
         $lastPump = $this->getBufferBool('AutoLastPump');
 
         if ($wantHeater === true) {
-            if ($this->getBufferInt('AutoLastTargetTemp') !== $targetTemp) {
+            if ($this->shouldApplyTargetTemp($targetTemp)) {
                 if (!$this->sendCommandPayload(['CMD' => 0, 'VALUE' => $targetTemp])) {
                     return false;
                 }
