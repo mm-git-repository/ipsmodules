@@ -1,0 +1,88 @@
+{
+    "elements": [
+        {
+            "type": "Label",
+            "name": "ModuleVersionInfo",
+            "caption": "Installierte Modulversion"
+        },
+        {
+            "type": "Label",
+            "caption": "HTTP-Anbindung an das WifiWhirl-Modul im lokalen Netzwerk. Kein MQTT-Broker erforderlich. In der WifiWhirl-Web-UI muss der HTTP-Polling-Modus aktiv sein (Firmware ab v1.2.0), damit /getpolldata/ alle Werte liefert."
+        },
+        {
+            "type": "CheckBox",
+            "name": "Active",
+            "caption": "Aktiv"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "Host",
+            "caption": "Host (IP oder Hostname, z. B. 192.168.1.100 oder wifiwhirl-xxxxxx.local)"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "UpdateIntervalSeconds",
+            "caption": "Aktualisierungsintervall (Sekunden, mindestens 15)",
+            "digits": 0,
+            "minimum": 15
+        },
+        {
+            "type": "Label",
+            "caption": "Steuerbefehle werden per POST /sendcommand/ gesendet. Status wird per GET /getpolldata/ abgefragt (Fallback: /getstates/ + /gettemps/)."
+        }
+    ],
+    "actions": [
+        {
+            "type": "Button",
+            "caption": "Jetzt aktualisieren",
+            "onClick": "WWHL_Refresh($id); echo 'OK';"
+        },
+        {
+            "type": "Button",
+            "caption": "Timer Chlor zurücksetzen",
+            "onClick": "echo WWHL_ResetChlorineTimer($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Timer Filterwechsel zurücksetzen",
+            "onClick": "echo WWHL_ResetFilterTimer($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Timer Filterreinigung zurücksetzen",
+            "onClick": "echo WWHL_ResetFilterCleanTimer($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Timer Wasserwechsel zurücksetzen",
+            "onClick": "echo WWHL_ResetWaterChangeTimer($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "WifiWhirl-Modul neustarten",
+            "onClick": "echo WWHL_RestartModule($id);"
+        }
+    ],
+    "status": [
+        {
+            "code": 102,
+            "icon": "active",
+            "caption": "Aktiv"
+        },
+        {
+            "code": 104,
+            "icon": "inactive",
+            "caption": "Inaktiv"
+        },
+        {
+            "code": 201,
+            "icon": "error",
+            "caption": "Host fehlt oder ungültig"
+        },
+        {
+            "code": 202,
+            "icon": "error",
+            "caption": "Gerät nicht erreichbar"
+        }
+    ]
+}
