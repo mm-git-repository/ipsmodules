@@ -11,17 +11,41 @@ final class WifiWhirlAutomation
     public const TYPE_HEATER = 'heater';
 
     /**
-     * @return list<array{
-     *   active: bool,
-     *   type: string,
-     *   mo: bool, tu: bool, we: bool, th: bool, fr: bool, sa: bool, so: bool,
-     *   start: string,
-     *   end: string,
-     *   targetTemp: int,
-     *   pvGated: bool
-     * }>
+     * Legacy: gemischte Regelliste mit Typ-Spalte (Migration).
+     *
+     * @return list<array<string, mixed>>
      */
     public static function parseRules(mixed $raw): array
+    {
+        return self::parseTypedRules($raw, null);
+    }
+
+    /** @return list<array<string, mixed>> */
+    public static function parsePumpRules(mixed $raw): array
+    {
+        return self::parseTypedRules($raw, self::TYPE_PUMP);
+    }
+
+    /** @return list<array<string, mixed>> */
+    public static function parseHeaterRules(mixed $raw): array
+    {
+        return self::parseTypedRules($raw, self::TYPE_HEATER);
+    }
+
+    /**
+     * @param list<array<string, mixed>> $pumpRules
+     * @param list<array<string, mixed>> $heaterRules
+     * @return list<array<string, mixed>>
+     */
+    public static function mergeRuleLists(array $pumpRules, array $heaterRules): array
+    {
+        return array_merge($pumpRules, $heaterRules);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private static function parseTypedRules(mixed $raw, ?string $fixedType): array
     {
         if (is_string($raw)) {
             $decoded = json_decode($raw, true);
@@ -40,7 +64,7 @@ final class WifiWhirlAutomation
             if (!is_array($row)) {
                 continue;
             }
-            $rule = self::normalizeRule($row);
+            $rule = self::normalizeRule($row, $fixedType);
             if ($rule !== null) {
                 $rules[] = $rule;
             }
@@ -53,11 +77,15 @@ final class WifiWhirlAutomation
      * @param array<string, mixed> $row
      * @return array<string, mixed>|null
      */
-    private static function normalizeRule(array $row): ?array
+    private static function normalizeRule(array $row, ?string $fixedType = null): ?array
     {
-        $type = strtolower(trim((string) ($row['type'] ?? '')));
-        if (!in_array($type, [self::TYPE_PUMP, self::TYPE_HEATER], true)) {
-            return null;
+        if ($fixedType !== null) {
+            $type = $fixedType;
+        } else {
+            $type = strtolower(trim((string) ($row['type'] ?? '')));
+            if (!in_array($type, [self::TYPE_PUMP, self::TYPE_HEATER], true)) {
+                return null;
+            }
         }
 
         $start = self::normalizeTime((string) ($row['start'] ?? ''));

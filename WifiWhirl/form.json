@@ -6,10 +6,6 @@
             "caption": "Installierte Modulversion"
         },
         {
-            "type": "Label",
-            "caption": "HTTP-Anbindung an das WifiWhirl-Modul im lokalen Netzwerk. Kein MQTT-Broker erforderlich. In der WifiWhirl-Web-UI muss der HTTP-Polling-Modus aktiv sein (Firmware ab v1.2.0), damit /getpolldata/ alle Werte liefert."
-        },
-        {
             "type": "CheckBox",
             "name": "Active",
             "caption": "Aktiv"
@@ -27,17 +23,9 @@
             "minimum": 15
         },
         {
-            "type": "Label",
-            "caption": "Steuerbefehle werden per POST /sendcommand/ gesendet. Status wird per GET /getpolldata/ abgefragt (Fallback: /getstates/ + /gettemps/)."
-        },
-        {
             "type": "ExpansionPanel",
             "caption": "Automatisierung (IPS)",
             "items": [
-                {
-                    "type": "Label",
-                    "caption": "Zeitgesteuerte Pumpe und Heizung in IP-Symcon. Manuelles Schalten pausiert die aktuelle Regel bis zum Ende ihres Zeitfensters. Keine Kopplung an andere Module — PV-Überschuss über frei wählbare IPS-Variable."
-                },
                 {
                     "type": "CheckBox",
                     "name": "AutomationEnabled",
@@ -85,8 +73,8 @@
                 },
                 {
                     "type": "List",
-                    "name": "AutomationRules",
-                    "caption": "Automatisierungsregeln",
+                    "name": "AutomationPumpRules",
+                    "caption": "Pumpen-Zeitpläne",
                     "rowCount": 1,
                     "add": true,
                     "delete": true,
@@ -105,26 +93,138 @@
                             "add": true
                         },
                         {
-                            "caption": "Typ",
-                            "name": "type",
-                            "width": "90px",
+                            "caption": "Mo",
+                            "name": "mo",
+                            "width": "40px",
                             "visible": true,
-                            "align": "left",
+                            "align": "center",
                             "save": true,
                             "edit": {
-                                "type": "Select",
-                                "options": [
-                                    {
-                                        "caption": "Pumpe",
-                                        "value": "pump"
-                                    },
-                                    {
-                                        "caption": "Heizung",
-                                        "value": "heater"
-                                    }
-                                ]
+                                "type": "CheckBox"
                             },
-                            "add": "pump"
+                            "add": true
+                        },
+                        {
+                            "caption": "Di",
+                            "name": "tu",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": true
+                        },
+                        {
+                            "caption": "Mi",
+                            "name": "we",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": true
+                        },
+                        {
+                            "caption": "Do",
+                            "name": "th",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": true
+                        },
+                        {
+                            "caption": "Fr",
+                            "name": "fr",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": true
+                        },
+                        {
+                            "caption": "Sa",
+                            "name": "sa",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": false
+                        },
+                        {
+                            "caption": "So",
+                            "name": "so",
+                            "width": "40px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": false
+                        },
+                        {
+                            "caption": "Start",
+                            "name": "start",
+                            "width": "70px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "ValidationTextBox",
+                                "validation": "hour"
+                            },
+                            "add": "08:00"
+                        },
+                        {
+                            "caption": "Ende",
+                            "name": "end",
+                            "width": "70px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "ValidationTextBox",
+                                "validation": "hour"
+                            },
+                            "add": "20:00"
+                        }
+                    ],
+                    "values": []
+                },
+                {
+                    "type": "List",
+                    "name": "AutomationHeaterRules",
+                    "caption": "Heizungs-Zeitpläne",
+                    "rowCount": 1,
+                    "add": true,
+                    "delete": true,
+                    "sort": true,
+                    "columns": [
+                        {
+                            "caption": "Aktiv",
+                            "name": "active",
+                            "width": "50px",
+                            "visible": true,
+                            "align": "center",
+                            "save": true,
+                            "edit": {
+                                "type": "CheckBox"
+                            },
+                            "add": true
                         },
                         {
                             "caption": "Mo",
@@ -251,9 +351,9 @@
                             "add": 38
                         },
                         {
-                            "caption": "PV",
+                            "caption": "PV-Freigabe",
                             "name": "pvGated",
-                            "width": "40px",
+                            "width": "70px",
                             "visible": true,
                             "align": "center",
                             "save": true,
@@ -264,10 +364,6 @@
                         }
                     ],
                     "values": []
-                },
-                {
-                    "type": "Label",
-                    "caption": "Zeitfenster: Start ≤ Uhrzeit < Ende (kein Über-Mitternacht in v1). Heizung: Zieltemperatur und optional PV-Freigabe pro Regel. Außerhalb aller Fenster schaltet die Automatisierung ab."
                 }
             ]
         }

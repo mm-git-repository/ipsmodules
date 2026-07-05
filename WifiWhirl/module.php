@@ -10,7 +10,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 3;
+    private const MODULE_BUILD = 4;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -43,7 +43,8 @@ class WifiWhirl extends IPSModuleStrict
 
         $this->RegisterPropertyBoolean('AutomationEnabled', false);
         $this->RegisterPropertyInteger('AutomationIntervalSec', self::AUTOMATION_INTERVAL_DEFAULT_SEC);
-        $this->RegisterPropertyString('AutomationRules', '[]');
+        $this->RegisterPropertyString('AutomationPumpRules', '[]');
+        $this->RegisterPropertyString('AutomationHeaterRules', '[]');
         $this->RegisterPropertyInteger('PvSurplusVar', 0);
         $this->RegisterPropertyInteger('PvThresholdW', self::PV_THRESHOLD_DEFAULT_W);
         $this->RegisterPropertyInteger('PvOnDelaySec', self::PV_ON_DELAY_DEFAULT_SEC);
@@ -72,6 +73,8 @@ class WifiWhirl extends IPSModuleStrict
             }
         }
 
+        $this->migrateAutomationRules($data['configuration']);
+
         return json_encode($data, JSON_UNESCAPED_UNICODE);
     }
 
@@ -84,13 +87,74 @@ class WifiWhirl extends IPSModuleStrict
             'UpdateIntervalSeconds' => self::UPDATE_INTERVAL_DEFAULT_SEC,
             'AutomationEnabled' => false,
             'AutomationIntervalSec' => self::AUTOMATION_INTERVAL_DEFAULT_SEC,
-            'AutomationRules' => '[]',
+            'AutomationPumpRules' => '[]',
+            'AutomationHeaterRules' => '[]',
             'PvSurplusVar' => 0,
             'PvThresholdW' => self::PV_THRESHOLD_DEFAULT_W,
             'PvOnDelaySec' => self::PV_ON_DELAY_DEFAULT_SEC,
             'PvOffDelaySec' => self::PV_OFF_DELAY_DEFAULT_SEC,
             'PvHysteresisW' => self::PV_HYSTERESIS_DEFAULT_W,
         ];
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function loadAutomationRules(): array
+    {
+        $pump = WifiWhirlAutomation::parsePumpRules($this->ReadPropertyString('AutomationPumpRules'));
+        $heater = WifiWhirlAutomation::parseHeaterRules($this->ReadPropertyString('AutomationHeaterRules'));
+
+        return WifiWhirlAutomation::mergeRuleLists($pump, $heater);
+    }
+
+    /** @param array<string, mixed> $configuration */
+    private function migrateAutomationRules(array &$configuration): void
+    {
+        if (!isset($configuration['AutomationRules'])) {
+            return;
+        }
+
+        $legacyRaw = $configuration['AutomationRules'];
+        if ($this->isEmptyRuleList($configuration['AutomationPumpRules'] ?? '[]')
+            && $this->isEmptyRuleList($configuration['AutomationHeaterRules'] ?? '[]')
+        ) {
+            $legacy = is_string($legacyRaw) ? json_decode($legacyRaw, true) : $legacyRaw;
+            if (!is_array($legacy)) {
+                $legacy = [];
+            }
+
+            $pumpRows = [];
+            $heaterRows = [];
+            foreach ($legacy as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $type = strtolower(trim((string) ($row['type'] ?? '')));
+                unset($row['type']);
+                if ($type === WifiWhirlAutomation::TYPE_PUMP) {
+                    $pumpRows[] = $row;
+                } elseif ($type === WifiWhirlAutomation::TYPE_HEATER) {
+                    $heaterRows[] = $row;
+                }
+            }
+
+            $configuration['AutomationPumpRules'] = json_encode($pumpRows, JSON_UNESCAPED_UNICODE);
+            $configuration['AutomationHeaterRules'] = json_encode($heaterRows, JSON_UNESCAPED_UNICODE);
+        }
+
+        unset($configuration['AutomationRules']);
+    }
+
+    private function isEmptyRuleList(mixed $raw): bool
+    {
+        if (is_string($raw)) {
+            $decoded = json_decode($raw, true);
+        } elseif (is_array($raw)) {
+            $decoded = $raw;
+        } else {
+            return true;
+        }
+
+        return !is_array($decoded) || $decoded === [];
     }
 
     public function ApplyChanges(): void
@@ -253,7 +317,7 @@ class WifiWhirl extends IPSModuleStrict
             return;
         }
 
-        $rules = WifiWhirlAutomation::parseRules($this->ReadPropertyString('AutomationRules'));
+        $rules = $this->loadAutomationRules();
         $now = new DateTimeImmutable('now');
         $nowUnix = (int) $now->getTimestamp();
         $pvVarId = (int) $this->ReadPropertyInteger('PvSurplusVar');
@@ -464,7 +528,7 @@ class WifiWhirl extends IPSModuleStrict
 
     private function applyManualOverride(string $ident): void
     {
-        $rules = WifiWhirlAutomation::parseRules($this->ReadPropertyString('AutomationRules'));
+        $rules = $this->loadAutomationRules();
         $now = new DateTimeImmutable('now');
         $nowUnix = (int) $now->getTimestamp();
 
