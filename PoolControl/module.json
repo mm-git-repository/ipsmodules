@@ -4,8 +4,7 @@
     "type": 3,
     "vendor": "MM-Modules",
     "aliases": [
-        "Pool Steuerung",
-        "Poolsteuerung"
+        "Pool Steuerung"
     ],
     "url": "https://github.com/mm-git-repository/ipsmodule.git",
     "parentRequirements": [],

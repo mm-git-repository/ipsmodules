@@ -9,7 +9,7 @@ class PoolControl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 1;
+    private const MODULE_BUILD = 2;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -316,13 +316,16 @@ class PoolControl extends IPSModuleStrict
     private function ensureProfiles(): void
     {
         if (!IPS_VariableProfileExists('POOL.pH')) {
-            IPS_CreateVariableProfile('POOL.pH', 2, 'pH', '', 2);
+            IPS_CreateVariableProfile('POOL.pH', 2);
+            IPS_SetVariableProfileText('POOL.pH', '', '');
+            IPS_SetVariableProfileDigits('POOL.pH', 2);
         }
         if (!IPS_VariableProfileExists('POOL.mV')) {
-            IPS_CreateVariableProfile('POOL.mV', 1, 'mV', '', 0);
+            IPS_CreateVariableProfile('POOL.mV', 1);
+            IPS_SetVariableProfileText('POOL.mV', '', ' mV');
         }
         if (!IPS_VariableProfileExists('POOL.state')) {
-            IPS_CreateVariableProfile('POOL.state', 3, '', '', 0);
+            IPS_CreateVariableProfile('POOL.state', 3);
             IPS_SetVariableProfileValues('POOL.state', [
                 ['Value' => 'ok', 'Name' => 'OK'],
                 ['Value' => 'ph_low', 'Name' => 'pH zu niedrig'],

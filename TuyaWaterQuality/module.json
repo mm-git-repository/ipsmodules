@@ -4,7 +4,6 @@
     "type": 3,
     "vendor": "MM-Modules",
     "aliases": [
-        "Tuya Wasserqualität",
         "Yieryi Wasserqualität"
     ],
     "url": "https://github.com/mm-git-repository/ipsmodule.git",

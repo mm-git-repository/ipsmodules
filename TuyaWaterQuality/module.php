@@ -9,7 +9,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 1;
+    private const MODULE_BUILD = 2;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -146,16 +146,21 @@ class TuyaWaterQuality extends IPSModuleStrict
     private function ensureProfiles(): void
     {
         if (!IPS_VariableProfileExists('TWQT.pH')) {
-            IPS_CreateVariableProfile('TWQT.pH', 2, 'pH', '', 2);
+            IPS_CreateVariableProfile('TWQT.pH', 2);
+            IPS_SetVariableProfileText('TWQT.pH', '', '');
+            IPS_SetVariableProfileDigits('TWQT.pH', 2);
         }
         if (!IPS_VariableProfileExists('TWQT.mV')) {
-            IPS_CreateVariableProfile('TWQT.mV', 1, 'mV', '', 0);
+            IPS_CreateVariableProfile('TWQT.mV', 1);
+            IPS_SetVariableProfileText('TWQT.mV', '', ' mV');
         }
         if (!IPS_VariableProfileExists('TWQT.uScm')) {
-            IPS_CreateVariableProfile('TWQT.uScm', 2, 'µS/cm', '', 0);
+            IPS_CreateVariableProfile('TWQT.uScm', 2);
+            IPS_SetVariableProfileText('TWQT.uScm', '', ' µS/cm');
         }
         if (!IPS_VariableProfileExists('TWQT.ppm')) {
-            IPS_CreateVariableProfile('TWQT.ppm', 2, 'ppm', '', 0);
+            IPS_CreateVariableProfile('TWQT.ppm', 2);
+            IPS_SetVariableProfileText('TWQT.ppm', '', ' ppm');
         }
     }
 

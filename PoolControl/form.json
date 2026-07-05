@@ -13,7 +13,7 @@
         {
             "type": "Instance",
             "name": "SensorInstanceId",
-            "caption": "Sensor-Instanz (Tuya Wasserqualität)",
+            "caption": "Sensor-Instanz (Yieryi Wasserqualität)",
             "moduleID": "{E7C4A891-3D2F-4B6E-9A1C-5F8E2D0B4A71}"
         },
         {
