@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 13;
+    private const MODULE_BUILD = 14;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -43,6 +43,7 @@ class WifiWhirl extends IPSModuleStrict
         $this->RegisterPropertyInteger('UpdateIntervalSeconds', self::UPDATE_INTERVAL_DEFAULT_SEC);
 
         $this->RegisterPropertyBoolean('AutomationEnabled', false);
+        $this->RegisterPropertyBoolean('AutomationIdlePowerOff', true);
         $this->RegisterPropertyInteger('AutomationIntervalSec', self::AUTOMATION_INTERVAL_DEFAULT_SEC);
         $this->RegisterPropertyString('AutomationPumpRules', '[]');
         $this->RegisterPropertyString('AutomationHeaterRules', '[]');
@@ -91,6 +92,7 @@ class WifiWhirl extends IPSModuleStrict
             'Host' => '',
             'UpdateIntervalSeconds' => self::UPDATE_INTERVAL_DEFAULT_SEC,
             'AutomationEnabled' => false,
+            'AutomationIdlePowerOff' => true,
             'AutomationIntervalSec' => self::AUTOMATION_INTERVAL_DEFAULT_SEC,
             'AutomationPumpRules' => '[]',
             'AutomationHeaterRules' => '[]',
@@ -470,11 +472,19 @@ class WifiWhirl extends IPSModuleStrict
             $status .= sprintf(' | Zieltemp. wird auf %.0f °C gesetzt (aktuell %.0f °C)', (float) $targetTemp, (float) $deviceTargetTemp);
         }
 
-        $this->SetValue('AutomationStatus', $status);
-
         if ($pumpOverride && ($wantHeater === null || $wantHeater === false)) {
             $wantPump = null;
         }
+
+        if (
+            $this->ReadPropertyBoolean('AutomationIdlePowerOff')
+            && $wantPump === false
+            && $wantHeater === false
+        ) {
+            $status .= ' | Gerät aus (Display)';
+        }
+
+        $this->SetValue('AutomationStatus', $status);
 
         if (!$this->applyAutomationCommands($wantPump, $wantHeater, $targetTemp)) {
             $this->LogMessage('Automatisierung: Steuerbefehl fehlgeschlagen', KL_ERROR);
@@ -922,6 +932,12 @@ class WifiWhirl extends IPSModuleStrict
             return true;
         }
 
+        if ($wantHeater === true || $wantPump === true) {
+            if (!$this->ensureAutomationPowerOn()) {
+                return false;
+            }
+        }
+
         $lastHeater = $this->getBufferBool('AutoLastHeater');
         $lastPump = $this->getBufferBool('AutoLastPump');
 
@@ -971,6 +987,46 @@ class WifiWhirl extends IPSModuleStrict
         } elseif ($wasHeater && !$wantPump) {
             $this->SetBuffer('AutoLastPump', '0');
         }
+
+        if (
+            $this->ReadPropertyBoolean('AutomationIdlePowerOff')
+            && $wantPump === false
+            && $wantHeater === false
+        ) {
+            return $this->applyAutomationPowerOff();
+        }
+
+        return true;
+    }
+
+    private function ensureAutomationPowerOn(): bool
+    {
+        if ($this->getBufferBool('AutoLastPower')) {
+            return true;
+        }
+
+        if (!$this->sendCommandPayload(['CMD' => 22, 'VALUE' => true])) {
+            return false;
+        }
+
+        $this->SetBuffer('AutoLastPower', '1');
+
+        return true;
+    }
+
+    private function applyAutomationPowerOff(): bool
+    {
+        if (!$this->getBufferBool('AutoLastPower')) {
+            return true;
+        }
+
+        if (!$this->sendCommandPayload(['CMD' => 22, 'VALUE' => false])) {
+            return false;
+        }
+
+        $this->SetBuffer('AutoLastPower', '0');
+        $this->SetBuffer('AutoLastPump', '0');
+        $this->SetBuffer('AutoLastHeater', '0');
 
         return true;
     }

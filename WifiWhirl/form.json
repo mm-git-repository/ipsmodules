@@ -32,6 +32,11 @@
                     "caption": "Automatisierung aktiv"
                 },
                 {
+                    "type": "CheckBox",
+                    "name": "AutomationIdlePowerOff",
+                    "caption": "Bei Leerlauf Gerät ausschalten (Display aus)"
+                },
+                {
                     "type": "NumberSpinner",
                     "name": "AutomationIntervalSec",
                     "caption": "Automatisierungsintervall (Sekunden, mindestens 60)",
