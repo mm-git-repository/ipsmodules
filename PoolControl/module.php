@@ -9,7 +9,7 @@ class PoolControl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 6;
+    private const MODULE_BUILD = 7;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -36,8 +36,8 @@ class PoolControl extends IPSModuleStrict
         parent::Create();
 
         $this->RegisterPropertyBoolean('Active', true);
-        $this->RegisterPropertyInteger('SensorInstanceId', 0);
-        $this->RegisterPropertyInteger('WifiWhirlInstanceId', 0);
+        $this->RegisterPropertyInteger('SensorInstanceId', 1);
+        $this->RegisterPropertyInteger('WifiWhirlInstanceId', 1);
         $this->RegisterPropertyInteger('EvaluationIntervalSec', self::EVAL_INTERVAL_DEFAULT_SEC);
         $this->RegisterPropertyInteger('SensorMaxAgeSec', 600);
 
@@ -81,6 +81,7 @@ class PoolControl extends IPSModuleStrict
 
     public function ApplyChanges(): void
     {
+        $this->migrateSelectInstanceProperties();
         parent::ApplyChanges();
 
         $this->ensureProfiles();
@@ -110,8 +111,39 @@ class PoolControl extends IPSModuleStrict
         }
 
         $this->injectMaintenanceDateLabels($form);
+        $this->normalizeSelectInstanceFormValues($form);
 
         return json_encode($form, JSON_UNESCAPED_UNICODE);
+    }
+
+    private function migrateSelectInstanceProperties(): void
+    {
+        foreach (['SensorInstanceId', 'WifiWhirlInstanceId'] as $property) {
+            if ((int) $this->ReadPropertyInteger($property) !== 0) {
+                continue;
+            }
+            IPS_SetProperty($this->InstanceID, $property, 1);
+        }
+    }
+
+    /** @param array<string, mixed> $form */
+    private function normalizeSelectInstanceFormValues(array &$form): void
+    {
+        $values = [
+            'SensorInstanceId' => (int) $this->ReadPropertyInteger('SensorInstanceId'),
+            'WifiWhirlInstanceId' => (int) $this->ReadPropertyInteger('WifiWhirlInstanceId'),
+        ];
+
+        foreach ($form['elements'] ?? [] as $idx => $element) {
+            if (($element['type'] ?? '') !== 'SelectInstance') {
+                continue;
+            }
+            $name = (string) ($element['name'] ?? '');
+            if (!array_key_exists($name, $values) || $values[$name] > 0) {
+                continue;
+            }
+            $form['elements'][$idx]['value'] = 1;
+        }
     }
 
     /** @param array<string, mixed> $form */
@@ -199,7 +231,7 @@ class PoolControl extends IPSModuleStrict
         }
 
         $sensorId = (int) $this->ReadPropertyInteger('SensorInstanceId');
-        if ($sensorId <= 0 || !IPS_InstanceExists($sensorId)) {
+        if (!IPS_InstanceExists($sensorId)) {
             $this->SetValue('ControlStatus', 'Sensor-Instanz fehlt');
             $this->SetStatus(self::IS_INVALID_CONFIG);
 
@@ -293,7 +325,7 @@ class PoolControl extends IPSModuleStrict
     private function maybeSyncPhToWifiWhirl(float $ph): void
     {
         $wwId = (int) $this->ReadPropertyInteger('WifiWhirlInstanceId');
-        if ($wwId <= 0 || !IPS_InstanceExists($wwId)) {
+        if (!IPS_InstanceExists($wwId)) {
             return;
         }
 
@@ -480,7 +512,7 @@ class PoolControl extends IPSModuleStrict
         }
 
         $sensorId = (int) $this->ReadPropertyInteger('SensorInstanceId');
-        if ($sensorId <= 0) {
+        if (!IPS_InstanceExists($sensorId)) {
             $this->SetStatus(self::IS_INVALID_CONFIG);
 
             return;
