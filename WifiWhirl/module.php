@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 17;
+    private const MODULE_BUILD = 18;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -281,6 +281,7 @@ class WifiWhirl extends IPSModuleStrict
         $this->syncModuleVersionVariable();
         $this->configureTimer();
         $this->configureAutomationTimer();
+        $this->handleAutomationEnabledTransition();
         if (method_exists($this, 'SetVisualizationType')) {
             $this->SetVisualizationType(1);
         }
@@ -590,6 +591,35 @@ class WifiWhirl extends IPSModuleStrict
         $this->SetBuffer('AutoOverrideHeaterUntil', '0');
     }
 
+    private function prepareAutomationResume(): void
+    {
+        $this->clearAutomationOverrideBuffers();
+        $this->SetBuffer('AutoLastPower', '0');
+        $this->SetBuffer('AutoLastPump', '0');
+        $this->SetBuffer('AutoLastHeater', '0');
+        $this->SetBuffer('AutoLastTargetTemp', '0');
+    }
+
+    private function handleAutomationEnabledTransition(): void
+    {
+        $enabled = $this->ReadPropertyBoolean('AutomationEnabled');
+        $raw = $this->GetBuffer('AutoWasAutomationEnabled');
+        if ($raw === false || $raw === '') {
+            $this->SetBuffer('AutoWasAutomationEnabled', $enabled ? '1' : '0');
+
+            return;
+        }
+
+        $wasEnabled = $this->getBufferBool('AutoWasAutomationEnabled');
+        $this->SetBuffer('AutoWasAutomationEnabled', $enabled ? '1' : '0');
+        if ($enabled && !$wasEnabled) {
+            $this->prepareAutomationResume();
+            $this->RunAutomation();
+        } elseif (!$enabled && $wasEnabled) {
+            $this->RunAutomation();
+        }
+    }
+
     private function syncAutomationManualPauseVariable(): void
     {
         $now = time();
@@ -783,14 +813,15 @@ class WifiWhirl extends IPSModuleStrict
             return;
         }
 
-        IPS_SetProperty($this->InstanceID, 'AutomationEnabled', WifiWhirlAutomation::toBool($payload['enabled'] ?? false));
+        $enabled = WifiWhirlAutomation::toBool($payload['enabled'] ?? false);
+
+        IPS_SetProperty($this->InstanceID, 'AutomationEnabled', $enabled);
         if (function_exists('IPS_ApplyChanges')) {
             IPS_ApplyChanges($this->InstanceID);
         } else {
             $this->ApplyChanges();
         }
         $this->configureAutomationTimer();
-        $this->RunAutomation();
         $this->pushEditorVisualization($this->buildEditorPayload());
     }
 

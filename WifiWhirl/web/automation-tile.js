@@ -237,8 +237,10 @@
         root.innerHTML = ''
             + '<div class="wwhl-auto-header">'
             + '  <label class="wwhl-auto-enabled"><input type="checkbox" id="wwhl-enabled"' + (state.enabled ? ' checked' : '') + '> ' + esc(t('Automatisierung aktiv')) + '</label>'
-            + '  <button type="button" class="wwhl-auto-btn wwhl-auto-btn-secondary wwhl-auto-clear-pause" id="wwhl-clear-pause"' + (state.manualPause ? '' : ' disabled') + '>' + esc(t('Manuelle Pause aufheben')) + '</button>'
+            + '</div>'
+            + '<div class="wwhl-auto-zeitfenster">'
             + '  <div class="wwhl-auto-status" id="wwhl-status">' + esc(state.status || '') + '</div>'
+            + '  <button type="button" class="wwhl-auto-btn wwhl-auto-btn-secondary wwhl-auto-clear-pause" id="wwhl-clear-pause"' + (state.manualPause ? '' : ' disabled') + '>' + esc(t('Manuelle Pause aufheben')) + '</button>'
             + '</div>'
             + '<div class="wwhl-auto-section">'
             + '  <h3>' + esc(t('Pumpen-Zeitpläne')) + '</h3>'
@@ -303,6 +305,13 @@
                     pump: readRowsFromDom('pump'),
                     heater: readRowsFromDom('heater'),
                 });
+            });
+        }
+
+        var enabledCb = document.getElementById('wwhl-enabled');
+        if (enabledCb) {
+            enabledCb.addEventListener('change', function () {
+                sendCommand({ cmd: 'setenabled', enabled: !!enabledCb.checked });
             });
         }
 
