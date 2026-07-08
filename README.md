@@ -1,4 +1,4 @@
-# IPS Modules
+# MM-Modules
 
 Eine IP-Symcon-Bibliothek kann **mehrere Module** enthalten. Symcon erkennt sie automatisch: Jeder Unterordner mit `module.json` wird als Modul installiert. In der `library.json` selbst gibt es **keine Modulliste** — nur Metadaten der Bibliothek (GUID, Name, Version).
 
