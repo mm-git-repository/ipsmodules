@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 15;
+    private const MODULE_BUILD = 16;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -273,6 +273,8 @@ class WifiWhirl extends IPSModuleStrict
             parent::ApplyChanges();
         }
 
+        $this->sanitizeConfigurationProperties();
+
         $this->ensureProfiles();
         $this->registerAllVariables();
         $this->ensureModuleVersionVariable();
@@ -320,9 +322,14 @@ class WifiWhirl extends IPSModuleStrict
             return '<div>Automatisierungs-Editor nicht verfügbar</div>';
         }
 
+        $initial = json_encode($this->buildEditorPayload(), JSON_UNESCAPED_UNICODE);
+        if (!is_string($initial)) {
+            $initial = '{}';
+        }
+
         return str_replace(
-            ['{{INLINE_CSS}}', '{{INLINE_JS}}'],
-            [$css, $js],
+            ['{{INLINE_CSS}}', '{{INLINE_JS}}', '{{INITIAL_JSON}}'],
+            [$css, $js, $initial],
             $html,
         );
     }
@@ -755,7 +762,11 @@ class WifiWhirl extends IPSModuleStrict
             return;
         }
 
-        $this->UpdateVisualizationValue($json);
+        try {
+            $this->UpdateVisualizationValue($json);
+        } catch (Throwable $e) {
+            $this->SendDebug(__FUNCTION__, 'UpdateVisualizationValue: ' . $e->getMessage(), 0);
+        }
     }
 
     private function getAutomationStatusSafe(): string
@@ -1212,20 +1223,26 @@ class WifiWhirl extends IPSModuleStrict
             $current = (int) $this->ReadPropertyInteger('PvSurplusVar');
         }
         if ($current > 0) {
-            return $current;
+            if (!function_exists('IPS_VariableExists') || IPS_VariableExists($current)) {
+                return $current;
+            }
+
+            return 0;
         }
 
         $persisted = $this->getPersistedConfigurationValues();
         if ($persisted !== null && array_key_exists('PvSurplusVar', $persisted)) {
             $current = $this->coerceVariableIdFromStoredValue($persisted['PvSurplusVar']);
-            if ($current > 0) {
+            if ($current > 0 && $this->isValidPvSurplusVarId($persisted['PvSurplusVar'])) {
                 return $current;
             }
         }
 
         $backup = $this->loadPersistentConfigurationBackup();
         if ($backup !== null && array_key_exists('PvSurplusVar', $backup)) {
-            return $this->coerceVariableIdFromStoredValue($backup['PvSurplusVar']);
+            if ($this->isValidPvSurplusVarId($backup['PvSurplusVar'])) {
+                return $this->coerceVariableIdFromStoredValue($backup['PvSurplusVar']);
+            }
         }
 
         return 0;
@@ -1259,6 +1276,12 @@ class WifiWhirl extends IPSModuleStrict
             }
             if ($key === 'Host' && trim((string) $config[$key]) === '') {
                 continue;
+            }
+            if ($key === 'PvSurplusVar') {
+                $id = $this->coerceVariableIdFromStoredValue($config[$key]);
+                if ($id <= 0 || !$this->isValidPvSurplusVarId($config[$key])) {
+                    continue;
+                }
             }
             if (($key === 'AutomationPumpRules' || $key === 'AutomationHeaterRules')
                 && $this->isEmptyRuleList($config[$key])
@@ -1424,11 +1447,62 @@ class WifiWhirl extends IPSModuleStrict
             if (!is_string($key) || !$this->shouldRestorePropertyFromSnapshot($key, $stored)) {
                 continue;
             }
-            IPS_SetProperty($this->InstanceID, $key, $stored);
+            IPS_SetProperty($this->InstanceID, $key, $this->normalizePropertyValueForSet($key, $stored));
             $restored++;
         }
 
         return $restored;
+    }
+
+    private function sanitizeConfigurationProperties(): void
+    {
+        if (!function_exists('IPS_SetProperty')) {
+            return;
+        }
+
+        $pvId = (int) $this->ReadPropertyInteger('PvSurplusVar');
+        if ($pvId <= 0) {
+            return;
+        }
+
+        if (function_exists('IPS_VariableExists') && !IPS_VariableExists($pvId)) {
+            IPS_SetProperty($this->InstanceID, 'PvSurplusVar', 0);
+            $this->SendDebug(
+                'Konfiguration',
+                'PvSurplusVar: ungültige Variable #' . $pvId . ' entfernt.',
+                0,
+            );
+        }
+    }
+
+    /** @param mixed $stored */
+    private function normalizePropertyValueForSet(string $key, mixed $stored): mixed
+    {
+        if ($key === 'AutomationPumpRules' || $key === 'AutomationHeaterRules') {
+            if (is_array($stored)) {
+                $json = json_encode($stored, JSON_UNESCAPED_UNICODE);
+
+                return is_string($json) ? $json : '[]';
+            }
+
+            return is_string($stored) ? $stored : '[]';
+        }
+
+        if ($key === 'PvSurplusVar') {
+            return $this->coerceVariableIdFromStoredValue($stored);
+        }
+
+        return $stored;
+    }
+
+    private function isValidPvSurplusVarId(mixed $stored): bool
+    {
+        $id = $this->coerceVariableIdFromStoredValue($stored);
+        if ($id <= 0) {
+            return false;
+        }
+
+        return !function_exists('IPS_VariableExists') || IPS_VariableExists($id);
     }
 
     private function shouldRestorePropertyFromSnapshot(string $key, mixed $stored): bool
@@ -1439,7 +1513,7 @@ class WifiWhirl extends IPSModuleStrict
 
         if ($key === 'PvSurplusVar') {
             return (int) $this->ReadPropertyInteger('PvSurplusVar') <= 0
-                && $this->coerceVariableIdFromStoredValue($stored) > 0;
+                && $this->isValidPvSurplusVarId($stored);
         }
 
         if ($key === 'AutomationPumpRules' || $key === 'AutomationHeaterRules') {

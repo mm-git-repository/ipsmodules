@@ -359,6 +359,11 @@
     };
 
     document.addEventListener('DOMContentLoaded', function () {
+        if (window.__WWHL_INITIAL__ && typeof window.__WWHL_INITIAL__ === 'object') {
+            applyPayload(window.__WWHL_INITIAL__);
+            return;
+        }
+
         render();
         sendCommand({ cmd: 'load' });
     });
