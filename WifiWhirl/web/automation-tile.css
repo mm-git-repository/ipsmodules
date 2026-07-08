@@ -230,6 +230,16 @@
     color: inherit;
 }
 
+.wwhl-auto-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.wwhl-auto-clear-pause {
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
 .wwhl-auto-msg {
     margin-top: 8px;
     font-size: 13px;

@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 16;
+    private const MODULE_BUILD = 17;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -346,6 +346,17 @@ class WifiWhirl extends IPSModuleStrict
             return;
         }
 
+        if ($Ident === 'AutomationManualPause') {
+            if (WifiWhirlAutomation::toBool($Value) === false) {
+                $this->clearAutomationOverrideBuffers();
+                $this->RunAutomation();
+            } else {
+                $this->syncAutomationManualPauseVariable();
+            }
+
+            return;
+        }
+
         $map = $this->entityMap();
         $payload = WifiWhirlEntities::commandPayload($Ident, $Value, $map);
         if ($payload === null) {
@@ -366,6 +377,7 @@ class WifiWhirl extends IPSModuleStrict
 
         if ($this->ReadPropertyBoolean('AutomationEnabled') && in_array($Ident, self::MANUAL_OVERRIDE_IDENTS, true)) {
             $this->applyManualOverride($Ident);
+            $this->syncAutomationManualPauseVariable();
         }
 
         IPS_Sleep(250);
@@ -457,6 +469,7 @@ class WifiWhirl extends IPSModuleStrict
             $this->SetValue('AutomationPumpDesired', false);
             $this->SetValue('AutomationHeaterDesired', false);
             $this->SetValue('AutomationTargetTemp', 0);
+            $this->syncAutomationManualPauseVariable();
 
             return;
         }
@@ -464,6 +477,7 @@ class WifiWhirl extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active') || $this->readHostProperty() === '') {
             $this->SetValue('AutomationStatus', 'Automatisierung: Modul inaktiv oder Host fehlt');
             $this->SetValue('AutomationTargetTemp', 0);
+            $this->syncAutomationManualPauseVariable();
 
             return;
         }
@@ -551,21 +565,50 @@ class WifiWhirl extends IPSModuleStrict
 
         if (!$this->applyAutomationCommands($wantPump, $wantHeater, $targetTemp)) {
             $this->LogMessage('Automatisierung: Steuerbefehl fehlgeschlagen', KL_ERROR);
+            $this->syncAutomationManualPauseVariable();
 
             return;
         }
 
         IPS_Sleep(250);
         $this->UpdateValues();
+        $this->syncAutomationManualPauseVariable();
     }
 
     public function ClearAutomationOverride(): string
     {
-        $this->SetBuffer('AutoOverridePumpUntil', '0');
-        $this->SetBuffer('AutoOverrideHeaterUntil', '0');
+        $this->clearAutomationOverrideBuffers();
         $this->RunAutomation();
+        $this->syncAutomationManualPauseVariable();
 
         return 'Manuelle Pause aufgehoben';
+    }
+
+    private function clearAutomationOverrideBuffers(): void
+    {
+        $this->SetBuffer('AutoOverridePumpUntil', '0');
+        $this->SetBuffer('AutoOverrideHeaterUntil', '0');
+    }
+
+    private function syncAutomationManualPauseVariable(): void
+    {
+        $now = time();
+        $active = $this->isManualOverrideActive('pump', $now)
+            || $this->isManualOverrideActive('heater', $now);
+
+        try {
+            $this->SetValue('AutomationManualPause', $active);
+        } catch (Throwable) {
+            // Variable noch nicht angelegt
+        }
+    }
+
+    private function isAutomationManualPauseActive(): bool
+    {
+        $now = time();
+
+        return $this->isManualOverrideActive('pump', $now)
+            || $this->isManualOverrideActive('heater', $now);
     }
 
     private function handleAutomationEditorRequest(mixed $value): void
@@ -586,6 +629,7 @@ class WifiWhirl extends IPSModuleStrict
             'load' => $this->pushEditorVisualization($this->buildEditorPayload()),
             'save' => $this->saveAutomationFromEditor($payload),
             'setenabled' => $this->setAutomationEnabledFromEditor($payload),
+            'clearoverride' => $this->clearAutomationOverrideFromEditor(),
             default => $this->pushEditorVisualization([
                 'message' => 'Unbekannter Befehl',
                 'messageOk' => false,
@@ -662,9 +706,30 @@ class WifiWhirl extends IPSModuleStrict
                 $heaterPropertyRows ?? $this->readRulesPropertyRaw('AutomationHeaterRules'),
                 true,
             ),
+            'manualPause' => $this->isAutomationManualPauseActive(),
             'message' => $message ?? '',
             'messageOk' => $messageOk,
         ];
+    }
+
+    private function clearAutomationOverrideFromEditor(): void
+    {
+        if (!$this->isAutomationManualPauseActive()) {
+            $this->pushEditorVisualization($this->buildEditorPayload(
+                'Keine manuelle Pause aktiv',
+                true,
+            ));
+
+            return;
+        }
+
+        $this->clearAutomationOverrideBuffers();
+        $this->RunAutomation();
+        $this->syncAutomationManualPauseVariable();
+        $this->pushEditorVisualization($this->buildEditorPayload(
+            'Manuelle Pause aufgehoben',
+            true,
+        ));
     }
 
     /** @param array<string, mixed> $payload */
@@ -866,6 +931,9 @@ class WifiWhirl extends IPSModuleStrict
         ++$pos;
         $tempPres = $pres['~Temperature'] ?? '~Temperature';
         $this->RegisterVariableInteger('AutomationTargetTemp', 'Automatisierung Zieltemp. Soll', $tempPres, $pos);
+        ++$pos;
+        $this->RegisterVariableBoolean('AutomationManualPause', 'Automatisierung Manuelle Pause', $switchPres, $pos);
+        $this->EnableAction('AutomationManualPause');
         $this->DisableAction('AutomationStatus');
         $this->DisableAction('AutomationPvSurplus');
         $this->DisableAction('AutomationPvGateOpen');

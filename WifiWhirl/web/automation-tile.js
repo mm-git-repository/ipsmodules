@@ -6,6 +6,7 @@
         status: '',
         pump: [],
         heater: [],
+        manualPause: false,
         message: '',
         messageOk: true,
     };
@@ -236,6 +237,7 @@
         root.innerHTML = ''
             + '<div class="wwhl-auto-header">'
             + '  <label class="wwhl-auto-enabled"><input type="checkbox" id="wwhl-enabled"' + (state.enabled ? ' checked' : '') + '> ' + esc(t('Automatisierung aktiv')) + '</label>'
+            + '  <button type="button" class="wwhl-auto-btn wwhl-auto-btn-secondary wwhl-auto-clear-pause" id="wwhl-clear-pause"' + (state.manualPause ? '' : ' disabled') + '>' + esc(t('Manuelle Pause aufheben')) + '</button>'
             + '  <div class="wwhl-auto-status" id="wwhl-status">' + esc(state.status || '') + '</div>'
             + '</div>'
             + '<div class="wwhl-auto-section">'
@@ -310,6 +312,13 @@
                 sendCommand({ cmd: 'load' });
             });
         }
+
+        var clearPauseBtn = document.getElementById('wwhl-clear-pause');
+        if (clearPauseBtn) {
+            clearPauseBtn.addEventListener('click', function () {
+                sendCommand({ cmd: 'clearoverride' });
+            });
+        }
     }
 
     function sendCommand(payload) {
@@ -337,6 +346,9 @@
         }
         if (Array.isArray(data.heaterRules)) {
             state.heater = data.heaterRules.map(function (row) { return normalizeRow(row, true); });
+        }
+        if (typeof data.manualPause === 'boolean') {
+            state.manualPause = data.manualPause;
         }
         if (typeof data.message === 'string') {
             state.message = data.message ? t(data.message) : '';
