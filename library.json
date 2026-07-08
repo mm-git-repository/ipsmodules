@@ -1,12 +1,12 @@
 {
     "id": "{078F2CCC-248B-E9F8-37A2-89E15868706B}",
-    "name": "MM-Modules",
+    "name": "IPS Modules",
     "author": "mm",
-    "url": "https://github.com/mm-git-repository/ipsmodule.git",
+    "url": "",
     "compatibility": {
         "version": "7.1"
     },
-    "version": "1.3",
-    "build": 55,
+    "version": "1.2",
+    "build": 35,
     "date": 0
 }

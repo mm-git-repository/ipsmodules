@@ -1,14 +1,19 @@
-# MM-Modules
+# IPS Modules
 
-IP-Symcon-Bibliothek mit vier Gerätemodulen. Beim Hinzufügen einer Instanz erscheinen alle unter Hersteller **MM-Modules**.
+Eine IP-Symcon-Bibliothek kann **mehrere Module** enthalten. Symcon erkennt sie automatisch: Jeder Unterordner mit `module.json` wird als Modul installiert. In der `library.json` selbst gibt es **keine Modulliste** — nur Metadaten der Bibliothek (GUID, Name, Version).
 
-| Anzeigename | Ordner | Beschreibung |
-|-------------|--------|--------------|
-| Pixoo Energy Viewer | `PIXOOEnergyViewer/` | SMA/Energie-Variablen → Divoom Pixoo-64 |
-| WifiWhirl Whirlpool | `WifiWhirl/` | Bestway-Whirlpool per HTTP inkl. IPS-Automatisierung |
-| Tuya Wasserqualität | `TuyaWaterQuality/` | Yieryi/Tuya-Sensor (pH, ORP, EC, TDS) per LAN |
-| Pool Steuerung | `PoolControl/` | Wasserqualität, Grenzwerte, Dosierungsempfehlungen, pH-Sync |
+## Enthaltene Module
 
-**Bibliothek:** 1.3 (Build 49) · **GUID:** `{078F2CCC-248B-E9F8-37A2-89E15868706B}`
+| Ordner | Modul | Beschreibung |
+|--------|-------|--------------|
+| `PIXOOEnergyViewer/` | PIXOO Energy Viewer | SMA/Home-Manager-Werte auf Pixoo-Display |
+| `WifiWhirl/` | WifiWhirl | Bestway-Whirlpool per HTTP (Polling) |
 
-Ausführliche Dokumentation: [README.md](../README.md) im Repository-Root.
+## Versionierung
+
+| Datei | Feld |
+|-------|------|
+| `library.json` | `version`, `build` (gesamte Bibliothek) |
+| `*/module.php` | `MODULE_VERSION`, `MODULE_BUILD` (pro Modul) |
+
+Bibliothek: **1.2 (Build 35)**

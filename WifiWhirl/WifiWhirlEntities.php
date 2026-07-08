@@ -42,6 +42,7 @@ final class WifiWhirlEntities
             // Steuerbare Zahlen
             ['ident' => 'Brightness', 'name' => 'Helligkeit', 'ipsType' => 1, 'profile' => 'WWHL.Brightness', 'source' => self::SOURCE_STATES, 'field' => 'BRT', 'action' => true, 'cmd' => 12, 'scale' => 1.0, 'min' => 0, 'max' => 8],
             ['ident' => 'TargetTemperature', 'name' => 'Zieltemperatur', 'ipsType' => 1, 'profile' => '~Temperature', 'source' => self::SOURCE_STATES, 'field' => 'TGTC', 'action' => true, 'cmd' => 0, 'scale' => 1.0, 'min' => 20, 'max' => 40],
+            ['ident' => 'AmbientTemperature', 'name' => 'Umgebungstemperatur', 'ipsType' => 1, 'profile' => '~Temperature', 'source' => self::SOURCE_STATES, 'field' => 'AMBC', 'action' => true, 'cmd' => 15, 'scale' => 1.0, 'min' => -20, 'max' => 50],
             ['ident' => 'PhValue', 'name' => 'pH-Wert', 'ipsType' => 2, 'profile' => 'WWHL.pH', 'source' => self::SOURCE_TIMES, 'field' => 'PHVAL', 'action' => true, 'cmd' => 27, 'scale' => 10.0, 'min' => 0, 'max' => 14],
             ['ident' => 'ChlorineValue', 'name' => 'Chlorgehalt', 'ipsType' => 2, 'profile' => 'WWHL.mgL', 'source' => self::SOURCE_TIMES, 'field' => 'CLVAL', 'action' => true, 'cmd' => 28, 'scale' => 10.0, 'min' => 0, 'max' => 10],
             ['ident' => 'CyanuricAcid', 'name' => 'Cyanursäure', 'ipsType' => 2, 'profile' => 'WWHL.mgL', 'source' => self::SOURCE_TIMES, 'field' => 'CYAVAL', 'action' => true, 'cmd' => 29, 'scale' => 10.0, 'min' => 0, 'max' => 100],
@@ -53,7 +54,6 @@ final class WifiWhirlEntities
 
             // Temperaturen (Sensor)
             ['ident' => 'WaterTemperature', 'name' => 'Wassertemperatur', 'ipsType' => 2, 'profile' => '~Temperature', 'source' => self::SOURCE_STATES, 'field' => 'TMPC', 'action' => false, 'cmd' => null, 'scale' => 1.0, 'min' => null, 'max' => null],
-            ['ident' => 'AmbientTemperature', 'name' => 'Umgebungstemperatur', 'ipsType' => 2, 'profile' => '~Temperature', 'source' => self::SOURCE_STATES, 'field' => 'AMBC', 'action' => false, 'cmd' => null, 'scale' => 1.0, 'min' => null, 'max' => null],
 
             // Energie
             ['ident' => 'EnergyTotal', 'name' => 'Gesamtenergieverbrauch', 'ipsType' => 2, 'profile' => 'WWHL.kWh', 'source' => self::SOURCE_TIMES, 'field' => 'KWH', 'action' => false, 'cmd' => null, 'scale' => 1.0, 'min' => null, 'max' => null],

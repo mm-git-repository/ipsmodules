@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 14;
+    private const MODULE_BUILD = 15;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -30,6 +30,17 @@ class WifiWhirl extends IPSModuleStrict
     private const PV_HYSTERESIS_DEFAULT_W = 200;
 
     private const MANUAL_OVERRIDE_IDENTS = ['Pump', 'Heater', 'Power', 'TargetTemperature'];
+
+    /** @var list<string> */
+    private const PERSISTENT_CONFIGURATION_KEYS = [
+        'Host',
+        'AutomationEnabled',
+        'AutomationPumpRules',
+        'AutomationHeaterRules',
+        'PvSurplusVar',
+    ];
+
+    private const PERSISTENT_CONFIG_BACKUP_PREFIX = 'WWHL_';
 
     /** @var array<string, array<string, mixed>>|null */
     private ?array $entityMapCache = null;
@@ -115,14 +126,42 @@ class WifiWhirl extends IPSModuleStrict
 
     private function readRulesPropertyRaw(string $name): mixed
     {
+        $value = null;
         if (function_exists('IPS_GetProperty')) {
-            $value = IPS_GetProperty($this->InstanceID, $name);
-            if ($value !== false && $value !== null && $value !== '') {
-                return $value;
+            $raw = IPS_GetProperty($this->InstanceID, $name);
+            if ($raw !== false && $raw !== null && $raw !== '') {
+                $value = $raw;
             }
         }
+        if ($value === null) {
+            $read = $this->ReadPropertyString($name);
+            if ($read !== '') {
+                $value = $read;
+            }
+        }
+        if ($value !== null && !$this->isEmptyRuleList($value)) {
+            return $value;
+        }
 
-        return $this->ReadPropertyString($name);
+        $persisted = $this->getPersistedConfigurationValues();
+        if (
+            $persisted !== null
+            && array_key_exists($name, $persisted)
+            && !$this->isEmptyRuleList($persisted[$name])
+        ) {
+            return $persisted[$name];
+        }
+
+        $backup = $this->loadPersistentConfigurationBackup();
+        if (
+            $backup !== null
+            && array_key_exists($name, $backup)
+            && !$this->isEmptyRuleList($backup[$name])
+        ) {
+            return $backup[$name];
+        }
+
+        return $value ?? '[]';
     }
 
     /**
@@ -150,7 +189,12 @@ class WifiWhirl extends IPSModuleStrict
         }
 
         if (function_exists('IPS_ApplyChanges')) {
-            return IPS_ApplyChanges($this->InstanceID);
+            $ok = IPS_ApplyChanges($this->InstanceID);
+            if ($ok) {
+                $this->savePersistentConfigurationBackup($this->captureCurrentPersistentConfiguration());
+            }
+
+            return $ok;
         }
 
         $this->ApplyChanges();
@@ -216,7 +260,18 @@ class WifiWhirl extends IPSModuleStrict
 
     public function ApplyChanges(): void
     {
+        $snapshot = $this->takePersistentConfigurationSnapshot();
+        $this->ensureConfigurationDefaults();
         parent::ApplyChanges();
+        $restored = $this->restorePersistentConfigurationFromSnapshot($snapshot);
+        if ($restored > 0) {
+            $this->SendDebug(
+                'Konfiguration',
+                $restored . ' gespeicherte Einstellung(en) nach IPS-Neustart wiederhergestellt.',
+                0,
+            );
+            parent::ApplyChanges();
+        }
 
         $this->ensureProfiles();
         $this->registerAllVariables();
@@ -229,6 +284,7 @@ class WifiWhirl extends IPSModuleStrict
         }
         $this->updateInstanceStatus();
         $this->SetSummary($this->buildSummary());
+        $this->savePersistentConfigurationBackup($this->captureCurrentPersistentConfiguration());
     }
 
     public function GetConfigurationForm(): string
@@ -318,7 +374,7 @@ class WifiWhirl extends IPSModuleStrict
             return;
         }
 
-        $host = trim($this->ReadPropertyString('Host'));
+        $host = $this->readHostProperty();
         if ($host === '') {
             $this->SetValue('Reachable', false);
             $this->updateInstanceStatus();
@@ -398,7 +454,7 @@ class WifiWhirl extends IPSModuleStrict
             return;
         }
 
-        if (!$this->ReadPropertyBoolean('Active') || trim($this->ReadPropertyString('Host')) === '') {
+        if (!$this->ReadPropertyBoolean('Active') || $this->readHostProperty() === '') {
             $this->SetValue('AutomationStatus', 'Automatisierung: Modul inaktiv oder Host fehlt');
             $this->SetValue('AutomationTargetTemp', 0);
 
@@ -408,7 +464,7 @@ class WifiWhirl extends IPSModuleStrict
         $rules = $this->loadAutomationRules();
         $now = new DateTimeImmutable('now');
         $nowUnix = (int) $now->getTimestamp();
-        $pvVarId = (int) $this->ReadPropertyInteger('PvSurplusVar');
+        $pvVarId = $this->readPvSurplusVarId();
 
         $pvConfig = [
             'thresholdW' => (float) max(0, (int) $this->ReadPropertyInteger('PvThresholdW')),
@@ -748,7 +804,7 @@ class WifiWhirl extends IPSModuleStrict
     /** @param array<string, mixed> $payload */
     private function sendCommandPayload(array $payload): bool
     {
-        $host = trim($this->ReadPropertyString('Host'));
+        $host = $this->readHostProperty();
         if ($host === '') {
             return false;
         }
@@ -827,7 +883,7 @@ class WifiWhirl extends IPSModuleStrict
     private function configureTimer(): void
     {
         $interval = max(self::UPDATE_INTERVAL_MIN_SEC, (int) $this->ReadPropertyInteger('UpdateIntervalSeconds'));
-        if ($this->ReadPropertyBoolean('Active') && trim($this->ReadPropertyString('Host')) !== '') {
+        if ($this->ReadPropertyBoolean('Active') && $this->readHostProperty() !== '') {
             $this->SetTimerInterval('Update', $interval * 1000);
         } else {
             $this->SetTimerInterval('Update', 0);
@@ -840,7 +896,7 @@ class WifiWhirl extends IPSModuleStrict
         if (
             $this->ReadPropertyBoolean('Active')
             && $this->ReadPropertyBoolean('AutomationEnabled')
-            && trim($this->ReadPropertyString('Host')) !== ''
+            && $this->readHostProperty() !== ''
         ) {
             $this->SetTimerInterval('Automation', $interval * 1000);
         } else {
@@ -1033,7 +1089,7 @@ class WifiWhirl extends IPSModuleStrict
 
     private function readPvSurplusW(): float
     {
-        $variableId = (int) $this->ReadPropertyInteger('PvSurplusVar');
+        $variableId = $this->readPvSurplusVarId();
         if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
             return 0.0;
         }
@@ -1075,7 +1131,7 @@ class WifiWhirl extends IPSModuleStrict
             return;
         }
 
-        if (trim($this->ReadPropertyString('Host')) === '') {
+        if ($this->readHostProperty() === '') {
             $this->SetStatus(self::IS_INVALID_HOST);
 
             return;
@@ -1096,7 +1152,7 @@ class WifiWhirl extends IPSModuleStrict
 
     private function buildSummary(): string
     {
-        $host = trim($this->ReadPropertyString('Host'));
+        $host = $this->readHostProperty();
 
         return $host !== '' ? $host : 'Host fehlt';
     }
@@ -1109,6 +1165,309 @@ class WifiWhirl extends IPSModuleStrict
         }
 
         return $this->entityMapCache;
+    }
+
+    private function readHostProperty(): string
+    {
+        $host = '';
+        if (function_exists('IPS_GetProperty')) {
+            $raw = IPS_GetProperty($this->InstanceID, 'Host');
+            if (is_string($raw)) {
+                $host = trim($raw);
+            }
+        }
+        if ($host === '') {
+            $host = trim($this->ReadPropertyString('Host'));
+        }
+        if ($host !== '') {
+            return $host;
+        }
+
+        $persisted = $this->getPersistedConfigurationValues();
+        if ($persisted !== null && isset($persisted['Host']) && is_string($persisted['Host'])) {
+            $host = trim($persisted['Host']);
+            if ($host !== '') {
+                return $host;
+            }
+        }
+
+        $backup = $this->loadPersistentConfigurationBackup();
+        if ($backup !== null && isset($backup['Host']) && is_string($backup['Host'])) {
+            return trim($backup['Host']);
+        }
+
+        return '';
+    }
+
+    private function readPvSurplusVarId(): int
+    {
+        $current = 0;
+        if (function_exists('IPS_GetProperty')) {
+            $raw = IPS_GetProperty($this->InstanceID, 'PvSurplusVar');
+            if ($raw !== false && $raw !== null && $raw !== '') {
+                $current = $this->coerceVariableIdFromStoredValue($raw);
+            }
+        }
+        if ($current <= 0) {
+            $current = (int) $this->ReadPropertyInteger('PvSurplusVar');
+        }
+        if ($current > 0) {
+            return $current;
+        }
+
+        $persisted = $this->getPersistedConfigurationValues();
+        if ($persisted !== null && array_key_exists('PvSurplusVar', $persisted)) {
+            $current = $this->coerceVariableIdFromStoredValue($persisted['PvSurplusVar']);
+            if ($current > 0) {
+                return $current;
+            }
+        }
+
+        $backup = $this->loadPersistentConfigurationBackup();
+        if ($backup !== null && array_key_exists('PvSurplusVar', $backup)) {
+            return $this->coerceVariableIdFromStoredValue($backup['PvSurplusVar']);
+        }
+
+        return 0;
+    }
+
+    private function getPersistentConfigurationBackupPath(): string
+    {
+        if (!function_exists('IPS_GetKernelDir')) {
+            return '';
+        }
+        $dir = rtrim((string) IPS_GetKernelDir(), "\\/") . DIRECTORY_SEPARATOR . 'storage';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0777, true);
+        }
+
+        return $dir . DIRECTORY_SEPARATOR . self::PERSISTENT_CONFIG_BACKUP_PREFIX . $this->InstanceID . '_config.json';
+    }
+
+    /** @param array<string, mixed> $config */
+    private function savePersistentConfigurationBackup(array $config): void
+    {
+        $path = $this->getPersistentConfigurationBackupPath();
+        if ($path === '') {
+            return;
+        }
+
+        $payload = [];
+        foreach (self::PERSISTENT_CONFIGURATION_KEYS as $key) {
+            if (!array_key_exists($key, $config)) {
+                continue;
+            }
+            if ($key === 'Host' && trim((string) $config[$key]) === '') {
+                continue;
+            }
+            if (($key === 'AutomationPumpRules' || $key === 'AutomationHeaterRules')
+                && $this->isEmptyRuleList($config[$key])
+            ) {
+                continue;
+            }
+            $payload[$key] = $config[$key];
+        }
+
+        if ($payload === []) {
+            return;
+        }
+
+        @file_put_contents($path, json_encode($payload, JSON_UNESCAPED_UNICODE));
+    }
+
+    /** @return array<string, mixed>|null */
+    private function loadPersistentConfigurationBackup(): ?array
+    {
+        $path = $this->getPersistentConfigurationBackupPath();
+        if ($path === '' || !is_readable($path)) {
+            return null;
+        }
+
+        $raw = @file_get_contents($path);
+        if (!is_string($raw) || $raw === '') {
+            return null;
+        }
+
+        $data = json_decode($raw, true);
+
+        return is_array($data) ? $data : null;
+    }
+
+    /** @return array<string, mixed> */
+    private function captureCurrentPersistentConfiguration(): array
+    {
+        $config = [];
+        foreach (self::PERSISTENT_CONFIGURATION_KEYS as $key) {
+            $config[$key] = match ($key) {
+                'Host' => $this->readHostProperty(),
+                'AutomationEnabled' => $this->ReadPropertyBoolean('AutomationEnabled'),
+                'AutomationPumpRules' => $this->readRulesPropertyRaw('AutomationPumpRules'),
+                'AutomationHeaterRules' => $this->readRulesPropertyRaw('AutomationHeaterRules'),
+                'PvSurplusVar' => $this->readPvSurplusVarId(),
+                default => null,
+            };
+        }
+
+        return $config;
+    }
+
+    /**
+     * Symcon speichert Modul-Properties teils unter "configuration", teils flach im JSON-Root.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function getPersistedConfigurationValues(): ?array
+    {
+        if (function_exists('IPS_GetConfiguration')) {
+            $raw = IPS_GetConfiguration($this->InstanceID);
+            $data = json_decode($raw, true);
+            if (is_array($data)) {
+                if (isset($data['configuration']) && is_array($data['configuration'])) {
+                    return $data['configuration'];
+                }
+
+                return $data;
+            }
+        }
+
+        $fromFile = $this->loadConfigurationFromInstanceStorageFile();
+        if ($fromFile !== null) {
+            return $fromFile;
+        }
+
+        return $this->loadPersistentConfigurationBackup();
+    }
+
+    /** @return array<string, mixed>|null */
+    private function loadConfigurationFromInstanceStorageFile(): ?array
+    {
+        if (!function_exists('IPS_GetKernelDir')) {
+            return null;
+        }
+
+        $base = rtrim((string) IPS_GetKernelDir(), "\\/") . DIRECTORY_SEPARATOR . 'instances';
+        $candidates = [
+            $base . DIRECTORY_SEPARATOR . $this->InstanceID . '.ipson',
+            $base . DIRECTORY_SEPARATOR . $this->InstanceID . '.json',
+        ];
+        foreach ($candidates as $path) {
+            if (!is_readable($path)) {
+                continue;
+            }
+            $raw = @file_get_contents($path);
+            if (!is_string($raw) || $raw === '') {
+                continue;
+            }
+            $data = json_decode($raw, true);
+            if (!is_array($data)) {
+                continue;
+            }
+            if (isset($data['configuration']) && is_array($data['configuration'])) {
+                return $data['configuration'];
+            }
+
+            return $data;
+        }
+
+        return null;
+    }
+
+    private function ensureConfigurationDefaults(): void
+    {
+        if (!function_exists('IPS_SetProperty')) {
+            return;
+        }
+
+        $values = $this->getPersistedConfigurationValues();
+        if ($values === null) {
+            return;
+        }
+
+        foreach ($this->migrateDefaultConfiguration() as $key => $default) {
+            if (array_key_exists($key, $values)) {
+                continue;
+            }
+            IPS_SetProperty($this->InstanceID, $key, $default);
+        }
+    }
+
+    /** @return array<string, mixed> */
+    private function takePersistentConfigurationSnapshot(): array
+    {
+        $values = $this->getPersistedConfigurationValues();
+        if ($values === null) {
+            $values = $this->loadPersistentConfigurationBackup();
+        }
+        if ($values === null) {
+            return [];
+        }
+
+        $snapshot = [];
+        foreach (self::PERSISTENT_CONFIGURATION_KEYS as $key) {
+            if (array_key_exists($key, $values)) {
+                $snapshot[$key] = $values[$key];
+            }
+        }
+
+        return $snapshot;
+    }
+
+    /** @param array<string, mixed> $snapshot */
+    private function restorePersistentConfigurationFromSnapshot(array $snapshot): int
+    {
+        if ($snapshot === [] || !function_exists('IPS_SetProperty')) {
+            return 0;
+        }
+
+        $restored = 0;
+        foreach ($snapshot as $key => $stored) {
+            if (!is_string($key) || !$this->shouldRestorePropertyFromSnapshot($key, $stored)) {
+                continue;
+            }
+            IPS_SetProperty($this->InstanceID, $key, $stored);
+            $restored++;
+        }
+
+        return $restored;
+    }
+
+    private function shouldRestorePropertyFromSnapshot(string $key, mixed $stored): bool
+    {
+        if ($key === 'Host') {
+            return trim($this->ReadPropertyString('Host')) === '' && trim((string) $stored) !== '';
+        }
+
+        if ($key === 'PvSurplusVar') {
+            return (int) $this->ReadPropertyInteger('PvSurplusVar') <= 0
+                && $this->coerceVariableIdFromStoredValue($stored) > 0;
+        }
+
+        if ($key === 'AutomationPumpRules' || $key === 'AutomationHeaterRules') {
+            return $this->isEmptyRuleList($this->ReadPropertyString($key))
+                && !$this->isEmptyRuleList($stored);
+        }
+
+        if ($key === 'AutomationEnabled') {
+            return !$this->ReadPropertyBoolean('AutomationEnabled') && (bool) $stored;
+        }
+
+        return false;
+    }
+
+    /** @param mixed $stored */
+    private function coerceVariableIdFromStoredValue($stored): int
+    {
+        if (is_array($stored)) {
+            foreach (['variableID', 'VariableID', 'value', 'Value', 'id', 'ID'] as $subKey) {
+                if (isset($stored[$subKey])) {
+                    return max(0, (int) $stored[$subKey]);
+                }
+            }
+
+            return 0;
+        }
+
+        return max(0, (int) $stored);
     }
 
     private function ensureProfiles(): void

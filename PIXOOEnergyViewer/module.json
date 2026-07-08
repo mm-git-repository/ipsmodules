@@ -2,11 +2,13 @@
     "id": "{F4A91C37-2B8D-4E6F-8C1A-9D3E702B5F81}",
     "name": "PIXOOEnergyViewer",
     "type": 3,
-    "vendor": "MM-Modules",
+    "vendor": "PIXOO Energy Viewer",
     "aliases": [
-        "Pixoo Energy Viewer"
+        "PIXOO Energy Viewer",
+        "Pixoo Energy Viewer",
+        "Pixoo Energie-Anzeige"
     ],
-    "url": "https://github.com/mm-git-repository/ipsmodule.git",
+    "url": "https://github.com",
     "parentRequirements": [],
     "childRequirements": [],
     "implemented": [],
