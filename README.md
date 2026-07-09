@@ -8,6 +8,7 @@ Eine IP-Symcon-Bibliothek kann **mehrere Module** enthalten. Symcon erkennt sie 
 |--------|-------|--------------|
 | `PIXOOEnergyViewer/` | PIXOO Energy Viewer | SMA/Home-Manager-Werte auf Pixoo-Display |
 | `WifiWhirl/` | WifiWhirl | Bestway-Whirlpool per HTTP (Polling) |
+| `TuyaWaterQuality/` | Yieryi Wasserqualität | Yieryi/Tuya-Sensor (pH, ORP, EC, TDS) per LAN |
 
 ## Versionierung
 
@@ -16,4 +17,4 @@ Eine IP-Symcon-Bibliothek kann **mehrere Module** enthalten. Symcon erkennt sie 
 | `library.json` | `version`, `build` (gesamte Bibliothek) |
 | `*/module.php` | `MODULE_VERSION`, `MODULE_BUILD` (pro Modul) |
 
-Bibliothek: **1.2 (Build 35)**
+Bibliothek: **1.3 (Build 36)**
