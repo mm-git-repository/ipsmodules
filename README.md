@@ -17,4 +17,4 @@ Eine IP-Symcon-Bibliothek kann **mehrere Module** enthalten. Symcon erkennt sie 
 | `library.json` | `version`, `build` (gesamte Bibliothek) |
 | `*/module.php` | `MODULE_VERSION`, `MODULE_BUILD` (pro Modul) |
 
-Bibliothek: **1.3 (Build 36)**
+Bibliothek: **1.3 (Build 37)**

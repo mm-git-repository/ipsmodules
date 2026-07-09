@@ -55,15 +55,14 @@
             "type": "ValidationTextBox",
             "name": "DpMapping",
             "caption": "DP-Mapping (JSON, Standard: PH-W218 / 8-in-1)"
-        },
-        {
-            "type": "Button",
-            "name": "UpdateNow",
-            "caption": "Jetzt aktualisieren",
-            "onClick": "TWQT_RequestAction($_IPS['TARGET'], 'UpdateNow', true);"
         }
     ],
     "actions": [
+        {
+            "type": "Button",
+            "caption": "Jetzt aktualisieren",
+            "onClick": "TWQT_Refresh($id); echo 'OK';"
+        },
         {
             "type": "Label",
             "caption": "Hinweis: Local Key und DP-Mapping nach Geräte-Lieferung mit Tuya Smart / tinytuya verifizieren."

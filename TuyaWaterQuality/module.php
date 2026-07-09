@@ -9,7 +9,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 3;
+    private const MODULE_BUILD = 4;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -70,14 +70,13 @@ class TuyaWaterQuality extends IPSModuleStrict
         return json_encode($form, JSON_UNESCAPED_UNICODE);
     }
 
+    public function Refresh(): void
+    {
+        $this->UpdateValues();
+    }
+
     public function RequestAction(string $Ident, mixed $Value): void
     {
-        if ($Ident === 'UpdateNow') {
-            $this->UpdateValues();
-
-            return;
-        }
-
         parent::RequestAction($Ident, $Value);
     }
 
