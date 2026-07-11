@@ -3,9 +3,9 @@
 declare(strict_types=1);
 
 /**
- * Minimaler Tuya-Lokalprotokoll-Client (3.3/3.4/3.5) für Yieryi & ähnliche Sensoren.
+ * Tuya-Lokalprotokoll-Client (3.3/3.4/3.5) für Yieryi & ähnliche Sensoren.
  *
- * Paketformat 0x55AA: Prefix, Seq, Cmd, Length, Payload, CRC32, Suffix 0xAA55
+ * Paketformat 0x55AA: Prefix, Seq, Cmd, Length, [Retcode], Payload, CRC/HMAC, Suffix 0xAA55
  */
 final class TuyaLocalClient
 {
@@ -13,13 +13,21 @@ final class TuyaLocalClient
     private const PREFIX_RECV = 0x000055AA;
     private const PREFIX_RECV_ALT = 0x000066AA;
     private const SUFFIX = 0x0000AA55;
+    private const CMD_SESS_KEY_NEG_START = 0x00000003;
+    private const CMD_SESS_KEY_NEG_RESP = 0x00000004;
+    private const CMD_SESS_KEY_NEG_FINISH = 0x00000005;
     private const CMD_STATUS = 0x0000000A;
     private const CMD_CONTROL_NEW = 0x0000000D;
     private const CMD_DP_QUERY_NEW = 0x00000010;
     private const DEFAULT_PORT = 6668;
     private const SOCKET_TIMEOUT_SEC = 5;
-    /** @var string 3.3 + 12 NUL (tinytuya PROTOCOL_33_HEADER) */
+    private const SEND_WAIT_USEC = 150000;
+    /** @var string */
+    private const LOCAL_NONCE = '0123456789abcdef';
+    /** @var string 3.3 + 12 NUL */
     private const PROTOCOL_HEADER_33 = "3.3\0\0\0\0\0\0\0\0\0\0\0\0";
+    /** @var string */
+    private const PROTOCOL_HEADER_34 = "3.4\0\0\0\0\0\0\0\0\0\0\0\0";
 
     /** @var list<int> */
     private static $crcTable = [];
@@ -28,6 +36,9 @@ final class TuyaLocalClient
     private string $localKey;
     private string $protocolVersion;
     private int $seqNo = 0;
+    private string $sessionKey = '';
+    private string $localNonce = '';
+    private string $remoteNonce = '';
 
     /** @var list<int> */
     private $dpsQueryKeys = [];
@@ -100,7 +111,7 @@ final class TuyaLocalClient
     }
 
     /**
-     * @param array{mode: string, command: int, json: string} $attempt
+     * @param array{mode: string, command: int, json: string, proto: string, keyMode: string, session: bool} $attempt
      * @return array{ok: bool, dps: array<string|int, mixed>, error: string}
      */
     private function fetchStatusAttempt(string $host, array $attempt): array
@@ -127,22 +138,41 @@ final class TuyaLocalClient
 
         try {
             $this->seqNo = 0;
+            $this->sessionKey = '';
+            $proto = $attempt['proto'];
+            $realKey = $this->deriveKey($attempt['keyMode']);
+
             $this->log(sprintf(
-                'Versuch mode=%s cmd=0x%02X json=%s',
+                'Versuch mode=%s cmd=0x%02X proto=%s key=%s session=%s json=%s',
                 $attempt['mode'],
                 $attempt['command'],
+                $proto,
+                $attempt['keyMode'],
+                $attempt['session'] ? 'yes' : 'no',
                 $attempt['json'],
             ));
 
-            $encrypted = $this->encrypt($attempt['json'], $this->deriveKey());
-            $wirePayload = $this->wrapWirePayload($encrypted, $attempt['command']);
-            $packet = $this->packMessage($attempt['command'], $wirePayload);
+            $hmacKey = null;
+            $encryptKey = $realKey;
+
+            if ($attempt['session']) {
+                if (!$this->negotiateSessionKey($socket, $realKey, $proto)) {
+                    return ['ok' => false, 'dps' => [], 'error' => 'Session-Key-Verhandlung fehlgeschlagen (' . $attempt['mode'] . ')'];
+                }
+                $encryptKey = $this->sessionKey;
+                $hmacKey = $this->sessionKey;
+            }
+
+            $encrypted = $this->encrypt($attempt['json'], $encryptKey);
+            $wirePayload = $this->wrapWirePayload($encrypted, $attempt['command'], $proto);
+            $packet = $this->packMessage($attempt['command'], $wirePayload, $hmacKey);
             $this->log(sprintf(
-                'Sende Paket seq=%d len=%d wireLen=%d encLen=%d',
+                'Sende Paket seq=%d len=%d wireLen=%d encLen=%d hmac=%s',
                 $this->seqNo,
                 strlen($packet),
                 strlen($wirePayload),
                 strlen($encrypted),
+                $hmacKey !== null ? 'yes' : 'no',
             ));
 
             $written = @socket_write($socket, $packet, strlen($packet));
@@ -152,7 +182,9 @@ final class TuyaLocalClient
                 return ['ok' => false, 'dps' => [], 'error' => 'Senden fehlgeschlagen'];
             }
 
-            $response = $this->readResponse($socket);
+            usleep(self::SEND_WAIT_USEC);
+
+            $response = $this->readResponse($socket, $hmacKey);
             if ($response === null) {
                 $this->log('Keine/leere Antwort (Timeout nach ' . self::SOCKET_TIMEOUT_SEC . 's)');
 
@@ -161,7 +193,7 @@ final class TuyaLocalClient
 
             $this->log(sprintf('Empfangen %d Bytes, hex=%s', strlen($response), $this->hexPreview($response)));
 
-            $decoded = $this->decodeMessage($response);
+            $decoded = $this->decodeMessage($response, $encryptKey, $proto, $hmacKey !== null);
             if (!$decoded['ok']) {
                 $this->log('Decode: ' . $decoded['error']);
 
@@ -183,72 +215,112 @@ final class TuyaLocalClient
     }
 
     /**
-     * @return list<array{mode: string, command: int, json: string}>
+     * @return list<array{mode: string, command: int, json: string, proto: string, keyMode: string, session: bool}>
      */
     private function buildFetchAttempts(): array
     {
         $attempts = [];
+        $keyModes = $this->keyModes();
+        $configuredProto = $this->protocolVersion;
 
         if ($this->isDevice22()) {
-            $attempts[] = [
-                'mode' => 'device22',
-                'command' => self::CMD_CONTROL_NEW,
-                'json' => $this->buildDevice22Payload(),
-            ];
+            foreach ($keyModes as $keyMode) {
+                $attempts[] = $this->attemptSpec('device22', self::CMD_CONTROL_NEW, $this->buildDevice22Payload(true), $configuredProto, $keyMode, false);
+                $attempts[] = $this->attemptSpec('device22-nodps', self::CMD_CONTROL_NEW, $this->buildDevice22Payload(false), $configuredProto, $keyMode, false);
+                $attempts[] = $this->attemptSpec('device22-uid', self::CMD_CONTROL_NEW, $this->buildDevice22Payload(true, true), $configuredProto, $keyMode, false);
+            }
         }
 
-        if (in_array($this->protocolVersion, ['3.4', '3.5'], true)) {
-            $attempts[] = [
-                'mode' => 'v34',
-                'command' => self::CMD_DP_QUERY_NEW,
-                'json' => $this->buildModernPayload(),
-            ];
+        if (in_array($configuredProto, ['3.4', '3.5'], true)) {
+            foreach ($keyModes as $keyMode) {
+                $attempts[] = $this->attemptSpec('v34-query', self::CMD_DP_QUERY_NEW, $this->buildModernPayload(), $configuredProto, $keyMode, true);
+                if ($this->isDevice22()) {
+                    $attempts[] = $this->attemptSpec('v34-device22', self::CMD_CONTROL_NEW, $this->buildDevice22Payload(true), $configuredProto, $keyMode, true);
+                }
+            }
         }
 
-        $attempts[] = [
-            'mode' => 'default33',
-            'command' => self::CMD_STATUS,
-            'json' => $this->buildLegacy33Payload(),
-        ];
+        foreach ($keyModes as $keyMode) {
+            $attempts[] = $this->attemptSpec('default33', self::CMD_STATUS, $this->buildLegacy33Payload(), '3.3', $keyMode, false);
+        }
+
+        if (!in_array($configuredProto, ['3.4', '3.5'], true)) {
+            foreach ($keyModes as $keyMode) {
+                $attempts[] = $this->attemptSpec('v34-fallback', self::CMD_DP_QUERY_NEW, $this->buildModernPayload(), '3.4', $keyMode, true);
+                if ($this->isDevice22()) {
+                    $attempts[] = $this->attemptSpec('v34-fallback-d22', self::CMD_CONTROL_NEW, $this->buildDevice22Payload(true), '3.4', $keyMode, true);
+                }
+            }
+        }
 
         return $attempts;
     }
 
+    /**
+     * @return array{mode: string, command: int, json: string, proto: string, keyMode: string, session: bool}
+     */
+    private function attemptSpec(
+        string $mode,
+        int $command,
+        string $json,
+        string $proto,
+        string $keyMode,
+        bool $session
+    ): array {
+        return [
+            'mode' => $mode,
+            'command' => $command,
+            'json' => $json,
+            'proto' => $proto,
+            'keyMode' => $keyMode,
+            'session' => $session,
+        ];
+    }
+
+    /** @return list<string> */
+    private function keyModes(): array
+    {
+        $modes = ['raw'];
+        if (strlen($this->localKey) !== 16) {
+            return $modes;
+        }
+
+        return ['raw', 'md5'];
+    }
+
     private function buildLegacy33Payload(): string
     {
-        $json = [
+        return $this->encodeJson([
             'gwId' => $this->deviceId,
             'devId' => $this->deviceId,
-        ];
-
-        return $this->encodeJson($json);
+        ]);
     }
 
     private function buildModernPayload(): string
     {
-        $json = [
+        return $this->encodeJson([
             'devId' => $this->deviceId,
             'uid' => '',
             't' => (string) time(),
-        ];
-
-        return $this->encodeJson($json);
+        ]);
     }
 
-    private function buildDevice22Payload(): string
+    private function buildDevice22Payload(bool $withDps, bool $uidAsDevId = false): string
     {
-        $dps = [];
-        $keys = $this->dpsQueryKeys !== [] ? $this->dpsQueryKeys : [1, 2];
-        foreach ($keys as $dp) {
-            $dps[(string) $dp] = null;
-        }
-
         $json = [
             'devId' => $this->deviceId,
-            'uid' => '',
+            'uid' => $uidAsDevId ? $this->deviceId : '',
             't' => (string) time(),
-            'dps' => $dps,
         ];
+
+        if ($withDps) {
+            $dps = [];
+            $keys = $this->dpsQueryKeys !== [] ? $this->dpsQueryKeys : [1, 2];
+            foreach ($keys as $dp) {
+                $dps[(string) $dp] = null;
+            }
+            $json['dps'] = $dps;
+        }
 
         return $this->encodeJson($json);
     }
@@ -264,10 +336,19 @@ final class TuyaLocalClient
         return str_replace(' ', '', $encoded);
     }
 
-    private function wrapWirePayload(string $encrypted, int $command): string
+    private function protocolHeader(string $proto): string
+    {
+        if ($proto === '3.4' || $proto === '3.5') {
+            return self::PROTOCOL_HEADER_34;
+        }
+
+        return self::PROTOCOL_HEADER_33;
+    }
+
+    private function wrapWirePayload(string $encrypted, int $command, string $proto): string
     {
         if ($this->needsProtocolHeader($command)) {
-            return self::PROTOCOL_HEADER_33 . $encrypted;
+            return $this->protocolHeader($proto) . $encrypted;
         }
 
         return $encrypted;
@@ -275,11 +356,90 @@ final class TuyaLocalClient
 
     private function needsProtocolHeader(int $command): bool
     {
-        if (in_array($command, [self::CMD_STATUS, self::CMD_DP_QUERY_NEW], true)) {
+        if (in_array($command, [self::CMD_STATUS, self::CMD_DP_QUERY_NEW, self::CMD_SESS_KEY_NEG_START, self::CMD_SESS_KEY_NEG_RESP, self::CMD_SESS_KEY_NEG_FINISH], true)) {
             return false;
         }
 
-        return in_array($this->protocolVersion, ['3.2', '3.3', '3.4', '3.5'], true);
+        return true;
+    }
+
+    private function negotiateSessionKey($socket, string $realKey, string $proto): bool
+    {
+        $this->localNonce = self::LOCAL_NONCE;
+        $this->remoteNonce = '';
+        $hmacKey = $realKey;
+
+        $this->log('Session Schritt 1: SESS_KEY_NEG_START');
+
+        $step1Payload = $this->encrypt($this->localNonce, $realKey);
+        $step1Packet = $this->packMessage(self::CMD_SESS_KEY_NEG_START, $step1Payload, $hmacKey);
+        if (@socket_write($socket, $step1Packet, strlen($step1Packet)) === false) {
+            $this->log('Session Schritt 1: Senden fehlgeschlagen');
+
+            return false;
+        }
+
+        usleep(self::SEND_WAIT_USEC);
+
+        $response = $this->readResponse($socket, $hmacKey);
+        if ($response === null) {
+            $this->log('Session Schritt 2: keine Antwort');
+
+            return false;
+        }
+
+        $message = $this->parseMessage($response, $hmacKey);
+        if ($message === null) {
+            $this->log('Session Schritt 2: Parse fehlgeschlagen');
+
+            return false;
+        }
+
+        if ($message['cmd'] !== self::CMD_SESS_KEY_NEG_RESP) {
+            $this->log(sprintf('Session Schritt 2: unerwartetes cmd=0x%X', $message['cmd']));
+
+            return false;
+        }
+
+        $payload = $this->decrypt($message['body'], $realKey);
+        if ($payload === null || strlen($payload) < 48) {
+            $this->log('Session Schritt 2: Payload zu kurz oder Entschlüsselung fehlgeschlagen');
+
+            return false;
+        }
+
+        $this->remoteNonce = substr($payload, 0, 16);
+        $hmacCheck = hash_hmac('sha256', $this->localNonce, $realKey, true);
+        if (!hash_equals($hmacCheck, substr($payload, 16, 32))) {
+            $this->log('Session Schritt 2: HMAC-Prüfung fehlgeschlagen (Local Key?)');
+
+            return false;
+        }
+
+        $this->log('Session Schritt 3: SESS_KEY_NEG_FINISH');
+        $finishPayload = hash_hmac('sha256', $this->remoteNonce, $realKey, true);
+        $step3Wire = $this->encryptRawBlock($finishPayload, $realKey);
+        $step3Packet = $this->packMessage(self::CMD_SESS_KEY_NEG_FINISH, $step3Wire, $hmacKey);
+        if (@socket_write($socket, $step3Packet, strlen($step3Packet)) === false) {
+            $this->log('Session Schritt 3: Senden fehlgeschlagen');
+
+            return false;
+        }
+
+        $xored = '';
+        for ($i = 0; $i < 16; $i++) {
+            $xored .= chr(ord($this->localNonce[$i]) ^ ord($this->remoteNonce[$i]));
+        }
+
+        if ($proto === '3.4' || $proto === '3.5') {
+            $this->sessionKey = $this->encryptRawBlock($xored, $realKey);
+        } else {
+            $this->sessionKey = substr($this->encryptRawBlock($xored, $realKey), 0, 16);
+        }
+
+        $this->log('Session-Key-Verhandlung erfolgreich');
+
+        return strlen($this->sessionKey) === 16;
     }
 
     private function log(string $message): void
@@ -300,73 +460,124 @@ final class TuyaLocalClient
         return $hex;
     }
 
-    private function buildStatusPayload(): string
-    {
-        if ($this->isDevice22()) {
-            return $this->buildDevice22Payload();
-        }
-
-        if (in_array($this->protocolVersion, ['3.4', '3.5'], true)) {
-            return $this->buildModernPayload();
-        }
-
-        return $this->buildLegacy33Payload();
-    }
-
-    private function packMessage(int $command, string $wirePayload): string
+    private function packMessage(int $command, string $wirePayload, ?string $hmacKey = null): string
     {
         $this->seqNo = ($this->seqNo + 1) % 0xFFFFFFFF;
-        $payloadLen = strlen($wirePayload) + 8;
+        $footerLen = $hmacKey !== null ? 36 : 8;
+        $payloadLen = strlen($wirePayload) + $footerLen;
 
         $header = pack('N', self::PREFIX_SEND)
             . pack('N', $this->seqNo)
             . pack('N', $command)
             . pack('N', $payloadLen);
 
-        $dataForCrc = $header . $wirePayload;
-        $crc = self::crc32($dataForCrc);
+        $data = $header . $wirePayload;
+        if ($hmacKey !== null) {
+            $hmac = hash_hmac('sha256', $data, $hmacKey, true);
 
-        return $dataForCrc . pack('N', $crc) . pack('N', self::SUFFIX);
+            return $data . $hmac . pack('N', self::SUFFIX);
+        }
+
+        $crc = self::crc32($data);
+
+        return $data . pack('N', $crc) . pack('N', self::SUFFIX);
     }
 
     /**
      * @return array{ok: bool, payload: string, error: string}
      */
-    private function decodeMessage(string $raw): array
+    private function decodeMessage(string $raw, string $key, string $proto, bool $withHmac): array
     {
-        if (strlen($raw) < 28) {
-            return ['ok' => false, 'payload' => '', 'error' => 'Antwort zu kurz'];
+        $message = $this->parseMessage($raw, $withHmac ? $key : null);
+        if ($message === null) {
+            return ['ok' => false, 'payload' => '', 'error' => 'Antwort konnte nicht gelesen werden'];
         }
 
-        $prefix = unpack('N', substr($raw, 0, 4))[1] ?? 0;
-        if ($prefix !== self::PREFIX_RECV && $prefix !== self::PREFIX_RECV_ALT) {
-            return ['ok' => false, 'payload' => '', 'error' => 'Ungültiges Antwort-Präfix'];
-        }
-
-        $payloadLength = unpack('N', substr($raw, 12, 4))[1] ?? 0;
-        if ($payloadLength < 8) {
-            return ['ok' => false, 'payload' => '', 'error' => 'Ungültige Payload-Länge'];
-        }
-
-        $bodyLength = $payloadLength - 8;
-        $body = substr($raw, 16, $bodyLength);
-        if ($body === false || strlen($body) !== $bodyLength) {
-            return ['ok' => false, 'payload' => '', 'error' => 'Payload unvollständig'];
-        }
-
+        $body = $message['body'];
         $encrypted = $body;
-        if ($bodyLength >= 15 && substr($body, 0, 3) === '3.3') {
+        $header = $this->protocolHeader($proto);
+
+        if (strlen($body) >= 15 && substr($body, 0, 3) === substr($header, 0, 3)) {
             $encrypted = substr($body, 15);
-        } elseif ($bodyLength > 4 && $body[0] !== '{') {
-            $encrypted = substr($body, 4);
+        } elseif ($body !== '' && $body[0] !== '{') {
+            if (strlen($body) >= 15) {
+                $encrypted = substr($body, 15);
+            }
         }
 
-        $decrypted = $this->decrypt($encrypted, $this->deriveKey());
+        $decrypted = $this->decrypt($encrypted, $key);
         if ($decrypted === null) {
             return ['ok' => false, 'payload' => '', 'error' => 'Entschlüsselung fehlgeschlagen (Local Key?)'];
         }
 
         return ['ok' => true, 'payload' => $decrypted, 'error' => ''];
+    }
+
+    /**
+     * @return null|array{cmd: int, retcode: int, body: string}
+     */
+    private function parseMessage(string $raw, ?string $hmacKey = null): ?array
+    {
+        if (strlen($raw) < 28) {
+            return null;
+        }
+
+        $prefix = unpack('N', substr($raw, 0, 4))[1] ?? 0;
+        if ($prefix !== self::PREFIX_RECV && $prefix !== self::PREFIX_RECV_ALT) {
+            return null;
+        }
+
+        $cmd = unpack('N', substr($raw, 8, 4))[1] ?? 0;
+        $payloadLength = unpack('N', substr($raw, 12, 4))[1] ?? 0;
+        $headerLen = 16;
+        $footerLen = $hmacKey !== null ? 36 : 8;
+        $expectedLen = $headerLen + $payloadLength;
+
+        if (strlen($raw) < $expectedLen) {
+            return null;
+        }
+
+        $frame = substr($raw, 0, $expectedLen);
+        $bodyWithFooter = substr($frame, $headerLen, $payloadLength);
+        if ($bodyWithFooter === false) {
+            return null;
+        }
+
+        if ($hmacKey !== null) {
+            if (strlen($bodyWithFooter) < $footerLen + 4) {
+                return null;
+            }
+            $hmac = substr($bodyWithFooter, -$footerLen, 32);
+            $suffix = unpack('N', substr($bodyWithFooter, -4))[1] ?? 0;
+            if ($suffix !== self::SUFFIX) {
+                return null;
+            }
+            $expectedHmac = hash_hmac('sha256', substr($frame, 0, $expectedLen - $footerLen), $hmacKey, true);
+            if (!hash_equals($expectedHmac, $hmac)) {
+                $this->log('HMAC der Antwort ungültig');
+
+                return null;
+            }
+        } else {
+            $crc = unpack('N', substr($bodyWithFooter, -8, 4))[1] ?? 0;
+            $suffix = unpack('N', substr($bodyWithFooter, -4))[1] ?? 0;
+            $expectedCrc = self::crc32(substr($frame, 0, $expectedLen - 8));
+            if ($suffix !== self::SUFFIX || $crc !== $expectedCrc) {
+                $this->log(sprintf('CRC der Antwort ungültig (crc=0x%08X erwartet=0x%08X)', $crc, $expectedCrc));
+            }
+        }
+
+        $retcode = unpack('N', substr($bodyWithFooter, 0, 4))[1] ?? 0;
+        $body = substr($bodyWithFooter, 4, strlen($bodyWithFooter) - 4 - $footerLen);
+        if ($body === false) {
+            return null;
+        }
+
+        return [
+            'cmd' => $cmd,
+            'retcode' => $retcode,
+            'body' => $body,
+        ];
     }
 
     /**
@@ -390,8 +601,12 @@ final class TuyaLocalClient
         return [];
     }
 
-    private function deriveKey(): string
+    private function deriveKey(string $mode = 'raw'): string
     {
+        if ($mode === 'md5') {
+            return substr(md5($this->localKey, true), 0, 16);
+        }
+
         $key = $this->localKey;
         if (strlen($key) === 16) {
             return $key;
@@ -407,8 +622,21 @@ final class TuyaLocalClient
         return openssl_encrypt($padded, 'AES-128-ECB', $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING) ?: '';
     }
 
+    private function encryptRawBlock(string $data, string $key): string
+    {
+        if (strlen($data) !== 16) {
+            return '';
+        }
+
+        return openssl_encrypt($data, 'AES-128-ECB', $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING) ?: '';
+    }
+
     private function decrypt(string $data, string $key): ?string
     {
+        if ($data === '') {
+            return null;
+        }
+
         $decrypted = openssl_decrypt($data, 'AES-128-ECB', $key, OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING);
         if (!is_string($decrypted)) {
             return null;
@@ -439,46 +667,54 @@ final class TuyaLocalClient
         return substr($data, 0, $len - $pad);
     }
 
-    private function readResponse($socket): ?string
+    private function readResponse($socket, ?string $hmacKey = null): ?string
     {
-        $header = @socket_read($socket, 16, PHP_BINARY_READ);
-        if ($header === false || strlen($header) < 16) {
-            $this->log(sprintf(
-                'Header unvollständig (%d Bytes)',
-                is_string($header) ? strlen($header) : 0,
-            ));
+        $header = $this->recvExact($socket, 16);
+        if ($header === null) {
+            $this->log('Header unvollständig (0 Bytes)');
 
             return null;
         }
 
         $prefix = unpack('N', substr($header, 0, 4))[1] ?? 0;
         $payloadLength = unpack('N', substr($header, 12, 4))[1] ?? 0;
-        $this->log(sprintf('Header prefix=0x%08X payloadLen=%d', $prefix, $payloadLength));
+        $this->log(sprintf('Header prefix=0x%08X payloadLen=%d hmac=%s', $prefix, $payloadLength, $hmacKey !== null ? 'yes' : 'no'));
 
-        $remaining = max(0, $payloadLength);
-        $buffer = $header;
-        $read = 0;
+        if ($payloadLength <= 0 || $payloadLength > 4096) {
+            $this->log('Header payloadLen unplausibel');
 
-        while ($read < $remaining) {
-            $chunk = @socket_read($socket, $remaining - $read, PHP_BINARY_READ);
+            return null;
+        }
+
+        $rest = $this->recvExact($socket, $payloadLength);
+        if ($rest === null) {
+            $this->log(sprintf('Payload unvollständig (%d erwartet)', $payloadLength));
+
+            return null;
+        }
+
+        return $header . $rest;
+    }
+
+    private function recvExact($socket, int $length): ?string
+    {
+        $buffer = '';
+        $remaining = $length;
+
+        while ($remaining > 0) {
+            $chunk = @socket_read($socket, $remaining, PHP_BINARY_READ);
             if ($chunk === false || $chunk === '') {
+                if ($buffer === '') {
+                    return null;
+                }
+
                 break;
             }
             $buffer .= $chunk;
-            $read += strlen($chunk);
+            $remaining -= strlen($chunk);
         }
 
-        if ($read < $remaining) {
-            $this->log(sprintf('Payload unvollständig: %d/%d Bytes', $read, $remaining));
-        }
-
-        $footer = @socket_read($socket, 8, PHP_BINARY_READ);
-        if (is_string($footer) && $footer !== '') {
-            $buffer .= $footer;
-            $this->log('Footer: ' . $this->hexPreview($footer, 8));
-        }
-
-        if (strlen($buffer) <= 16) {
+        if (strlen($buffer) < $length) {
             return null;
         }
 

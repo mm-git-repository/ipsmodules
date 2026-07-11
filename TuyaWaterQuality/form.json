@@ -49,9 +49,9 @@
             "caption": "Tuya Device ID"
         },
         {
-            "type": "PasswordTextBox",
+            "type": "ValidationTextBox",
             "name": "LocalKey",
-            "caption": "Tuya Local Key (bleibt nach Cloud-Übernahme leer sichtbar — wird beim Übernehmen gespeichert)"
+            "caption": "Tuya Local Key (Klartext)"
         },
         {
             "type": "Select",
@@ -118,7 +118,7 @@
         },
         {
             "type": "Label",
-            "caption": "Kopplung: User Code → QR-Code anzeigen → scannen → Auf Anmeldung warten → Gerät wählen → „Gerät übernehmen & speichern“. Kein extra Übernehmen nötig. Local-Key-Feld bleibt leer sichtbar."
+            "caption": "Kopplung: User Code → QR-Code anzeigen → scannen → Auf Anmeldung warten → Gerät wählen → „Gerät übernehmen & speichern“. Local Key erscheint danach im Feld oben."
         }
     ],
     "status": [

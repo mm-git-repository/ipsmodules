@@ -11,7 +11,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 12;
+    private const MODULE_BUILD = 14;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -77,6 +77,9 @@ class TuyaWaterQuality extends IPSModuleStrict
                     self::MODULE_VERSION,
                     self::MODULE_BUILD
                 );
+            }
+            if (($element['name'] ?? '') === 'LocalKey') {
+                $form['elements'][$idx]['value'] = $this->ReadPropertyString('LocalKey');
             }
         }
 
@@ -327,9 +330,10 @@ class TuyaWaterQuality extends IPSModuleStrict
         $lastError = trim((string) $this->GetValue('LastError'));
 
         $message = sprintf(
-            "Gerät gespeichert: %s\nDevice ID: %s\nHost: %s\nErreichbar: %s",
+            "Gerät gespeichert: %s\nDevice ID: %s\nLocal Key: %s\nHost: %s\nErreichbar: %s",
             $name,
             $deviceId,
+            $localKey,
             $hostHint,
             $reachable,
         );
