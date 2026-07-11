@@ -11,7 +11,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 8;
+    private const MODULE_BUILD = 9;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -258,18 +258,30 @@ class TuyaWaterQuality extends IPSModuleStrict
             'Host' => $host,
             'DpMapping' => $mapping,
         ]);
-        $this->setInstanceProperty('LocalKey', $localKey);
-
+        $this->applyPendingCloudCoupling();
+        $this->persistInstanceConfiguration();
         $this->CloudLogout();
+        $this->UpdateValues();
 
-        $hostHint = $host !== '' ? $host : '(IP fehlt — LAN-Scan oder Router prüfen)';
+        $hostHint = $host !== '' ? $host : '(IP fehlt — LAN-Scan klicken)';
+        $reachable = $this->GetValue('Reachable') ? 'ja' : 'nein';
+        $lastError = trim((string) $this->GetValue('LastError'));
 
-        return sprintf(
-            "Gerät übernommen: %s\nDevice ID: %s\nLocal Key: gesetzt (wird beim Übernehmen gespeichert)\nHost: %s\n\n→ Jetzt „Übernehmen“ klicken.\n(Hinweis: Passwortfeld bleibt leer — das ist normal.)",
+        $message = sprintf(
+            "Gerät gespeichert: %s\nDevice ID: %s\nHost: %s\nErreichbar: %s",
             $name,
             $deviceId,
             $hostHint,
+            $reachable,
         );
+        if ($lastError !== '') {
+            $message .= "\nHinweis: " . $lastError;
+        }
+        if ($host === '') {
+            $message .= "\n\n→ „LAN-Scan (IP)“ ausführen, falls nötig.";
+        }
+
+        return $message;
     }
 
     public function CloudLogout(): string
@@ -557,6 +569,17 @@ class TuyaWaterQuality extends IPSModuleStrict
 
         $this->SetBuffer(self::BUF_PENDING_CLOUD, '');
         $this->setCloudStatus('Gerät übernommen — Konfiguration gespeichert');
+    }
+
+    private function persistInstanceConfiguration(): void
+    {
+        if (function_exists('IPS_ApplyChanges')) {
+            IPS_ApplyChanges($this->InstanceID);
+
+            return;
+        }
+
+        $this->ApplyChanges();
     }
 
     /**

@@ -98,7 +98,7 @@
         },
         {
             "type": "Button",
-            "caption": "Gerät übernehmen",
+            "caption": "Gerät übernehmen & speichern",
             "onClick": "echo TWQT_CloudApplyDevice($id);"
         },
         {
@@ -118,7 +118,7 @@
         },
         {
             "type": "Label",
-            "caption": "Kopplung: User Code → QR-Code anzeigen (öffnet Browser mit QR) → in Tuya Smart scannen → Auf Anmeldung warten → Gerät wählen → Übernehmen. QR bleibt auch im Panel sichtbar (Konfiguration neu öffnen)."
+            "caption": "Kopplung: User Code → QR-Code anzeigen → scannen → Auf Anmeldung warten → Gerät wählen → „Gerät übernehmen & speichern“. Kein extra Übernehmen nötig. Local-Key-Feld bleibt leer sichtbar."
         }
     ],
     "status": [
