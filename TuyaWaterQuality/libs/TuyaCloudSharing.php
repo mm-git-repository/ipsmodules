@@ -323,16 +323,29 @@ final class TuyaCloudSharing
  */
 final class TuyaCloudCustomerApi
 {
+    /** @var string */
+    private $clientId;
+    /** @var string */
+    private $userCode;
+    /** @var string */
+    private $endpoint;
     /** @var array<string, mixed> */
-    private array $tokenInfo;
-    private bool $refreshing = false;
+    private $tokenInfo;
+    /** @var bool */
+    private $refreshing = false;
 
+    /**
+     * @param array<string, mixed> $tokenInfo
+     */
     public function __construct(
-        private readonly string $clientId,
-        private readonly string $userCode,
-        private readonly string $endpoint,
-        array $tokenInfo,
+        string $clientId,
+        string $userCode,
+        string $endpoint,
+        array $tokenInfo
     ) {
+        $this->clientId = $clientId;
+        $this->userCode = $userCode;
+        $this->endpoint = $endpoint;
         $this->tokenInfo = $tokenInfo;
     }
 

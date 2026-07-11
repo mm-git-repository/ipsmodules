@@ -11,7 +11,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 10;
+    private const MODULE_BUILD = 11;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -82,7 +82,18 @@ class TuyaWaterQuality extends IPSModuleStrict
 
         $form = $this->injectCloudFormElements($form);
 
-        return json_encode($form, JSON_UNESCAPED_UNICODE);
+        $flags = JSON_UNESCAPED_UNICODE;
+        if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+            $flags |= JSON_INVALID_UTF8_SUBSTITUTE;
+        }
+        $encoded = json_encode($form, $flags);
+        if (!is_string($encoded)) {
+            $this->SendDebug('Form', 'GetConfigurationForm: json_encode fehlgeschlagen', 0);
+
+            return '{}';
+        }
+
+        return $encoded;
     }
 
     public function Refresh(): void
@@ -413,7 +424,9 @@ class TuyaWaterQuality extends IPSModuleStrict
             $deviceId,
             $localKey,
             $this->ReadPropertyString('ProtocolVersion'),
-            fn (string $message): void => $this->debugLocal('LAN', $message),
+            function (string $message): void {
+                $this->debugLocal('LAN', $message);
+            }
         );
 
         $result = $client->fetchStatus($host);
@@ -484,7 +497,7 @@ class TuyaWaterQuality extends IPSModuleStrict
             $options[] = ['label' => $label, 'value' => $id];
         }
 
-        $qrImage = trim((string) $this->GetBuffer(self::BUF_QR_IMAGE));
+        $qrToken = trim((string) $this->GetBuffer(self::BUF_QR_TOKEN));
 
         foreach ($form['elements'] ?? [] as $idx => $element) {
             if (($element['type'] ?? '') !== 'ExpansionPanel') {
@@ -495,7 +508,6 @@ class TuyaWaterQuality extends IPSModuleStrict
             }
 
             $items = [];
-            $hasQrImage = false;
 
             foreach ($element['items'] ?? [] as $item) {
                 if (($item['name'] ?? '') === 'CloudQrImage') {
@@ -503,36 +515,17 @@ class TuyaWaterQuality extends IPSModuleStrict
                 }
 
                 if (($item['name'] ?? '') === 'CloudCouplingStatus') {
-                    $item['caption'] = $status;
+                    $caption = $status;
+                    if ($qrToken !== '') {
+                        $caption .= ' — QR aktiv (Button „QR-Code anzeigen“)';
+                    }
+                    $item['caption'] = $caption;
                 }
                 if (($item['name'] ?? '') === 'CloudSelectedDevice') {
                     $item['options'] = $options;
                 }
 
                 $items[] = $item;
-
-                if (($item['name'] ?? '') === 'CloudCouplingStatus' && $qrImage !== '') {
-                    $items[] = [
-                        'type' => 'Image',
-                        'name' => 'CloudQrImage',
-                        'caption' => 'QR-Code (Tuya Smart scannen)',
-                        'image' => $qrImage,
-                        'width' => '280px',
-                        'center' => true,
-                    ];
-                    $hasQrImage = true;
-                }
-            }
-
-            if (!$hasQrImage && $qrImage !== '') {
-                array_unshift($items, [
-                    'type' => 'Image',
-                    'name' => 'CloudQrImage',
-                    'caption' => 'QR-Code (Tuya Smart scannen)',
-                    'image' => $qrImage,
-                    'width' => '280px',
-                    'center' => true,
-                ]);
             }
 
             $form['elements'][$idx]['items'] = $items;

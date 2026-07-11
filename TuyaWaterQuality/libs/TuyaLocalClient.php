@@ -18,7 +18,7 @@ final class TuyaLocalClient
     private const SOCKET_TIMEOUT_SEC = 5;
 
     /** @var list<int> */
-    private static array $crcTable = [];
+    private static $crcTable = [];
 
     private string $deviceId;
     private string $localKey;
@@ -32,7 +32,7 @@ final class TuyaLocalClient
         string $deviceId,
         string $localKey,
         string $protocolVersion = '3.3',
-        ?callable $debugLogger = null,
+        ?callable $debugLogger = null
     ) {
         $this->deviceId = trim($deviceId);
         $this->localKey = trim($localKey);
