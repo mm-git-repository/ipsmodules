@@ -14,8 +14,12 @@ final class TuyaLocalClient
     private const PREFIX_RECV_ALT = 0x000066AA;
     private const SUFFIX = 0x0000AA55;
     private const CMD_STATUS = 0x0000000A;
+    private const CMD_CONTROL_NEW = 0x0000000D;
+    private const CMD_DP_QUERY_NEW = 0x00000010;
     private const DEFAULT_PORT = 6668;
     private const SOCKET_TIMEOUT_SEC = 5;
+    /** @var string 3.3 + 12 NUL (tinytuya PROTOCOL_33_HEADER) */
+    private const PROTOCOL_HEADER_33 = "3.3\0\0\0\0\0\0\0\0\0\0\0\0";
 
     /** @var list<int> */
     private static $crcTable = [];
@@ -25,19 +29,32 @@ final class TuyaLocalClient
     private string $protocolVersion;
     private int $seqNo = 0;
 
+    /** @var list<int> */
+    private $dpsQueryKeys = [];
+
     /** @var null|callable(string): void */
     private $debugLogger;
 
+    /**
+     * @param list<int> $dpsQueryKeys
+     */
     public function __construct(
         string $deviceId,
         string $localKey,
         string $protocolVersion = '3.3',
-        ?callable $debugLogger = null
+        ?callable $debugLogger = null,
+        array $dpsQueryKeys = []
     ) {
         $this->deviceId = trim($deviceId);
         $this->localKey = trim($localKey);
         $this->protocolVersion = trim($protocolVersion) !== '' ? trim($protocolVersion) : '3.3';
         $this->debugLogger = $debugLogger;
+        $this->dpsQueryKeys = $dpsQueryKeys;
+    }
+
+    private function isDevice22(): bool
+    {
+        return strlen($this->deviceId) === 22;
     }
 
     /**
@@ -59,14 +76,35 @@ final class TuyaLocalClient
         }
 
         $this->log(sprintf(
-            'Start host=%s:%d devId=%s proto=%s keyLen=%d',
+            'Start host=%s:%d devId=%s proto=%s keyLen=%d device22=%s',
             $host,
             self::DEFAULT_PORT,
             $this->deviceId,
             $this->protocolVersion,
             strlen($this->localKey),
+            $this->isDevice22() ? 'yes' : 'no',
         ));
 
+        $attempts = $this->buildFetchAttempts();
+        $lastError = 'Keine Antwort vom Gerät';
+
+        foreach ($attempts as $attempt) {
+            $result = $this->fetchStatusAttempt($host, $attempt);
+            if ($result['ok']) {
+                return $result;
+            }
+            $lastError = $result['error'];
+        }
+
+        return ['ok' => false, 'dps' => [], 'error' => $lastError];
+    }
+
+    /**
+     * @param array{mode: string, command: int, json: string} $attempt
+     * @return array{ok: bool, dps: array<string|int, mixed>, error: string}
+     */
+    private function fetchStatusAttempt(string $host, array $attempt): array
+    {
         $socket = @socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         if ($socket === false) {
             return ['ok' => false, 'dps' => [], 'error' => 'Socket konnte nicht erstellt werden'];
@@ -82,17 +120,31 @@ final class TuyaLocalClient
             socket_close($socket);
             $this->log('Connect fehlgeschlagen: ' . $errMsg);
 
-            return ['ok' => false, 'dps' => [], 'error' => 'Verbindung zu ' . $host . ':' . self::DEFAULT_PORT . ' fehlgeschlagen (' . $errMsg . ')'];
+            return ['ok' => false, 'dps' => [], 'error' => 'Verbindung fehlgeschlagen (' . $errMsg . ')'];
         }
 
         $this->log('TCP verbunden');
 
         try {
-            $payload = $this->buildStatusPayload();
-            $this->log('Request-JSON: ' . $payload);
-            $encrypted = $this->encrypt($payload, $this->deriveKey());
-            $packet = $this->packMessage(self::CMD_STATUS, $encrypted);
-            $this->log(sprintf('Sende Paket seq=%d len=%d encLen=%d', $this->seqNo, strlen($packet), strlen($encrypted)));
+            $this->seqNo = 0;
+            $this->log(sprintf(
+                'Versuch mode=%s cmd=0x%02X json=%s',
+                $attempt['mode'],
+                $attempt['command'],
+                $attempt['json'],
+            ));
+
+            $encrypted = $this->encrypt($attempt['json'], $this->deriveKey());
+            $wirePayload = $this->wrapWirePayload($encrypted, $attempt['command']);
+            $packet = $this->packMessage($attempt['command'], $wirePayload);
+            $this->log(sprintf(
+                'Sende Paket seq=%d len=%d wireLen=%d encLen=%d',
+                $this->seqNo,
+                strlen($packet),
+                strlen($wirePayload),
+                strlen($encrypted),
+            ));
+
             $written = @socket_write($socket, $packet, strlen($packet));
             if ($written === false || $written === 0) {
                 $this->log('socket_write fehlgeschlagen');
@@ -104,7 +156,7 @@ final class TuyaLocalClient
             if ($response === null) {
                 $this->log('Keine/leere Antwort (Timeout nach ' . self::SOCKET_TIMEOUT_SEC . 's)');
 
-                return ['ok' => false, 'dps' => [], 'error' => 'Keine Antwort vom Gerät'];
+                return ['ok' => false, 'dps' => [], 'error' => 'Keine Antwort vom Gerät (' . $attempt['mode'] . ')'];
             }
 
             $this->log(sprintf('Empfangen %d Bytes, hex=%s', strlen($response), $this->hexPreview($response)));
@@ -120,10 +172,114 @@ final class TuyaLocalClient
             $dps = $this->extractDps($decoded['payload']);
             $this->log('DPS count=' . count($dps) . ' keys=' . implode(',', array_map('strval', array_keys($dps))));
 
+            if ($dps === []) {
+                return ['ok' => false, 'dps' => [], 'error' => 'Antwort ohne DPS-Daten'];
+            }
+
             return ['ok' => true, 'dps' => $dps, 'error' => ''];
         } finally {
             socket_close($socket);
         }
+    }
+
+    /**
+     * @return list<array{mode: string, command: int, json: string}>
+     */
+    private function buildFetchAttempts(): array
+    {
+        $attempts = [];
+
+        if ($this->isDevice22()) {
+            $attempts[] = [
+                'mode' => 'device22',
+                'command' => self::CMD_CONTROL_NEW,
+                'json' => $this->buildDevice22Payload(),
+            ];
+        }
+
+        if (in_array($this->protocolVersion, ['3.4', '3.5'], true)) {
+            $attempts[] = [
+                'mode' => 'v34',
+                'command' => self::CMD_DP_QUERY_NEW,
+                'json' => $this->buildModernPayload(),
+            ];
+        }
+
+        $attempts[] = [
+            'mode' => 'default33',
+            'command' => self::CMD_STATUS,
+            'json' => $this->buildLegacy33Payload(),
+        ];
+
+        return $attempts;
+    }
+
+    private function buildLegacy33Payload(): string
+    {
+        $json = [
+            'gwId' => $this->deviceId,
+            'devId' => $this->deviceId,
+        ];
+
+        return $this->encodeJson($json);
+    }
+
+    private function buildModernPayload(): string
+    {
+        $json = [
+            'devId' => $this->deviceId,
+            'uid' => '',
+            't' => (string) time(),
+        ];
+
+        return $this->encodeJson($json);
+    }
+
+    private function buildDevice22Payload(): string
+    {
+        $dps = [];
+        $keys = $this->dpsQueryKeys !== [] ? $this->dpsQueryKeys : [1, 2];
+        foreach ($keys as $dp) {
+            $dps[(string) $dp] = null;
+        }
+
+        $json = [
+            'devId' => $this->deviceId,
+            'uid' => '',
+            't' => (string) time(),
+            'dps' => $dps,
+        ];
+
+        return $this->encodeJson($json);
+    }
+
+    /** @param array<string, mixed> $json */
+    private function encodeJson(array $json): string
+    {
+        $encoded = json_encode($json, JSON_UNESCAPED_UNICODE);
+        if (!is_string($encoded)) {
+            return '{}';
+        }
+
+        return str_replace(' ', '', $encoded);
+    }
+
+    private function wrapWirePayload(string $encrypted, int $command): string
+    {
+        if ($this->needsProtocolHeader($command)) {
+            return self::PROTOCOL_HEADER_33 . $encrypted;
+        }
+
+        return $encrypted;
+    }
+
+    private function needsProtocolHeader(int $command): bool
+    {
+        if (in_array($command, [self::CMD_STATUS, self::CMD_DP_QUERY_NEW], true)) {
+            return false;
+        }
+
+        return in_array($this->protocolVersion, ['3.2', '3.3', '3.4', '3.5'], true);
     }
 
     private function log(string $message): void
@@ -146,35 +302,28 @@ final class TuyaLocalClient
 
     private function buildStatusPayload(): string
     {
-        if (in_array($this->protocolVersion, ['3.4', '3.5'], true)) {
-            $json = [
-                'devId' => $this->deviceId,
-                'uid' => '',
-                't' => (string) time(),
-            ];
-        } else {
-            $json = [
-                'gwId' => $this->deviceId,
-                'devId' => $this->deviceId,
-            ];
+        if ($this->isDevice22()) {
+            return $this->buildDevice22Payload();
         }
 
-        $encoded = json_encode($json, JSON_UNESCAPED_UNICODE);
+        if (in_array($this->protocolVersion, ['3.4', '3.5'], true)) {
+            return $this->buildModernPayload();
+        }
 
-        return is_string($encoded) ? $encoded : '{}';
+        return $this->buildLegacy33Payload();
     }
 
-    private function packMessage(int $command, string $encryptedPayload): string
+    private function packMessage(int $command, string $wirePayload): string
     {
         $this->seqNo = ($this->seqNo + 1) % 0xFFFFFFFF;
-        $payloadLen = strlen($encryptedPayload) + 8;
+        $payloadLen = strlen($wirePayload) + 8;
 
         $header = pack('N', self::PREFIX_SEND)
             . pack('N', $this->seqNo)
             . pack('N', $command)
             . pack('N', $payloadLen);
 
-        $dataForCrc = $header . $encryptedPayload;
+        $dataForCrc = $header . $wirePayload;
         $crc = self::crc32($dataForCrc);
 
         return $dataForCrc . pack('N', $crc) . pack('N', self::SUFFIX);
@@ -206,7 +355,9 @@ final class TuyaLocalClient
         }
 
         $encrypted = $body;
-        if ($bodyLength > 4 && $body[0] !== '{') {
+        if ($bodyLength >= 15 && substr($body, 0, 3) === '3.3') {
+            $encrypted = substr($body, 15);
+        } elseif ($bodyLength > 4 && $body[0] !== '{') {
             $encrypted = substr($body, 4);
         }
 
