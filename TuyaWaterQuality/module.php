@@ -5,13 +5,13 @@ declare(strict_types=1);
 require_once __DIR__ . '/libs/TuyaLocalClient.php';
 require_once __DIR__ . '/libs/TuyaWaterQualityMapping.php';
 require_once __DIR__ . '/libs/TuyaCloudSharing.php';
-require_once __DIR__ . '/libs/TuyaQrImage.php';
+require_once __DIR__ . '/libs/TuyaUdpDiscovery.php';
 
 class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 15;
+    private const MODULE_BUILD = 16;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -372,9 +372,11 @@ class TuyaWaterQuality extends IPSModuleStrict
             }
         }
 
-        $found = $this->udpDiscoverDevices(3);
+        $hintIp = trim($this->ReadPropertyString('Host'));
+        $found = TuyaUdpDiscovery::scan(5, $hintIp !== '' ? $hintIp : null);
+
         if ($found === []) {
-            return "Kein Tuya-Gerät per UDP gefunden.\nAlternativ: python -m tinytuya scan\noder feste IP im Router setzen.";
+            return $this->buildLanDiscoverFallbackMessage($hintIp, $targetDeviceId);
         }
 
         $lines = [];
@@ -403,6 +405,39 @@ class TuyaWaterQuality extends IPSModuleStrict
         }
 
         return "Gefundene Geräte:\n" . implode("\n", $lines);
+    }
+
+    private function buildLanDiscoverFallbackMessage(string $hintIp, string $targetDeviceId): string
+    {
+        $lines = [
+            'Kein Tuya-Gerät per UDP-Broadcast gefunden.',
+            '',
+            'Ping zum Gerät kann trotzdem funktionieren — UDP-Scan und Ping sind verschiedene Protokolle.',
+        ];
+
+        if ($hintIp !== '') {
+            $tcpOpen = TuyaUdpDiscovery::tcpPortOpen($hintIp, 6668, 3);
+            $lines[] = '';
+            $lines[] = 'Konfigurierte IP ' . $hintIp . ':';
+            $lines[] = $tcpOpen
+                ? 'TCP Port 6668 (Tuya LAN): erreichbar → IP sehr wahrscheinlich korrekt'
+                : 'TCP Port 6668 (Tuya LAN): nicht erreichbar';
+        }
+
+        $lines[] = '';
+        $lines[] = 'Typische Gründe für fehlenden UDP-Scan:';
+        $lines[] = '- IP-Symcon und Sensor in verschiedenen VLANs/Subnetzen';
+        $lines[] = '- Firewall blockiert UDP 6666, 6667, 7000';
+        $lines[] = '- Gerät sendet nur auf Anfrage (Port 7000) — erneut versuchen';
+        $lines[] = '- LAN-Steuerung in Tuya Smart deaktiviert';
+        $lines[] = '';
+        $lines[] = '→ Host manuell eintragen (z. B. ' . ($hintIp !== '' ? $hintIp : '172.18.x.x') . '), Protokoll 3.3 wählen';
+        if ($targetDeviceId !== '') {
+            $lines[] = '→ Device ID: ' . $targetDeviceId;
+        }
+        $lines[] = '→ Alternativ: python -m tinytuya scan (vom gleichen Netz wie der Sensor)';
+
+        return implode("\n", $lines);
     }
 
     public function UpdateValues(): void
@@ -684,67 +719,16 @@ class TuyaWaterQuality extends IPSModuleStrict
     }
 
     /**
-     * Vereinfachter Tuya-UDP-Discovery (Broadcast Port 6666).
-     *
      * @return list<array{id: string, ip: string, version: string}>
      */
-    private function udpDiscoverDevices(int $timeoutSec): array
+    private function udpDiscoverDevices(int $timeoutSec, ?string $hintIp = null): array
     {
-        $socket = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
-        if ($socket === false) {
-            return [];
+        $hint = trim((string) $hintIp);
+        if ($hint === '') {
+            $hint = trim($this->ReadPropertyString('Host'));
         }
 
-        socket_set_option($socket, SOL_SOCKET, SO_BROADCAST, 1);
-        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => $timeoutSec, 'usec' => 0]);
-
-        $payload = json_encode([
-            'from' => 'app',
-            'id' => 'scan',
-            'method' => 'discovery',
-            'params' => [],
-            't' => (int) (microtime(true) * 1000),
-            'version' => '1.0',
-        ], JSON_UNESCAPED_UNICODE);
-
-        if (!is_string($payload)) {
-            socket_close($socket);
-
-            return [];
-        }
-
-        @socket_sendto($socket, $payload, strlen($payload), 0, '255.255.255.255', 6666);
-        @socket_sendto($socket, $payload, strlen($payload), 0, '255.255.255.255', 6667);
-
-        $found = [];
-        $deadline = time() + $timeoutSec;
-        while (time() < $deadline) {
-            $buf = '';
-            $from = '';
-            $port = 0;
-            $bytes = @socket_recvfrom($socket, $buf, 4096, 0, $from, $port);
-            if ($bytes === false || $bytes <= 0) {
-                continue;
-            }
-
-            $decoded = json_decode($buf, true);
-            if (!is_array($decoded)) {
-                continue;
-            }
-
-            $id = (string) ($decoded['gwId'] ?? $decoded['devId'] ?? $decoded['id'] ?? '');
-            if ($id === '') {
-                continue;
-            }
-
-            $ip = (string) ($decoded['ip'] ?? $from);
-            $version = (string) ($decoded['version'] ?? $decoded['ver'] ?? '?');
-            $found[$id] = ['id' => $id, 'ip' => $ip, 'version' => $version];
-        }
-
-        socket_close($socket);
-
-        return array_values($found);
+        return TuyaUdpDiscovery::scan($timeoutSec, $hint !== '' ? $hint : null);
     }
 
     private function discoverProtocolForDevice(string $deviceId): ?string
@@ -753,7 +737,7 @@ class TuyaWaterQuality extends IPSModuleStrict
             return null;
         }
 
-        foreach ($this->udpDiscoverDevices(2) as $entry) {
+        foreach ($this->udpDiscoverDevices(3, $deviceId !== '' ? trim($this->ReadPropertyString('Host')) : null) as $entry) {
             if (($entry['id'] ?? '') === $deviceId) {
                 $version = $this->normalizeDiscoveredProtocol((string) ($entry['version'] ?? ''));
 
