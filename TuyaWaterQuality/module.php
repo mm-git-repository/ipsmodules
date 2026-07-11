@@ -6,12 +6,13 @@ require_once __DIR__ . '/libs/TuyaLocalClient.php';
 require_once __DIR__ . '/libs/TuyaWaterQualityMapping.php';
 require_once __DIR__ . '/libs/TuyaCloudSharing.php';
 require_once __DIR__ . '/libs/TuyaUdpDiscovery.php';
+require_once __DIR__ . '/libs/TuyaQrImage.php';
 
 class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 17;
+    private const MODULE_BUILD = 18;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
