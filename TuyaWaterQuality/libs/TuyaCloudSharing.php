@@ -222,15 +222,72 @@ final class TuyaCloudSharing
                 );
             }
 
+            $specs = $this->fetchDeviceSpecifications($api, $session, $deviceId);
+
             return [
                 'ok' => true,
                 'dps' => $dps,
                 'online' => (bool) ($item['online'] ?? false),
                 'error' => '',
+                'status_range' => $specs['status_range'],
+                'cloud_codes' => $specs['codes'],
             ];
         }
 
-        return ['ok' => false, 'dps' => [], 'online' => false, 'error' => 'Gerät nicht in Cloud-Antwort gefunden'];
+        return ['ok' => false, 'dps' => [], 'online' => false, 'error' => 'Gerät nicht in Cloud-Antwort gefunden', 'status_range' => [], 'cloud_codes' => []];
+    }
+
+    /**
+     * @param array<string, mixed> $session
+     * @return array{ok: bool, status_range: array<string, mixed>, codes: list<string>}
+     */
+    public function fetchDeviceSpecifications(array &$session, string $deviceId): array
+    {
+        $api = $this->createCustomerApi($session);
+        if ($api === null) {
+            return ['ok' => false, 'status_range' => [], 'codes' => []];
+        }
+
+        return $this->fetchDeviceSpecifications($api, $session, $deviceId);
+    }
+
+    /**
+     * @param array<string, mixed> $session
+     * @return array{ok: bool, status_range: array<string, mixed>, codes: list<string>}
+     */
+    private function fetchDeviceSpecifications(TuyaCloudCustomerApi $api, array &$session, string $deviceId): array
+    {
+        $deviceId = trim($deviceId);
+        if ($deviceId === '') {
+            return ['ok' => false, 'status_range' => [], 'codes' => []];
+        }
+
+        $response = $api->get('/v1.1/m/life/' . $deviceId . '/specifications');
+        $session['token_info'] = $api->getTokenInfo();
+        if ($response === null || !($response['success'] ?? false)) {
+            return ['ok' => false, 'status_range' => [], 'codes' => []];
+        }
+
+        $result = $response['result'] ?? [];
+        if (!is_array($result)) {
+            return ['ok' => false, 'status_range' => [], 'codes' => []];
+        }
+
+        $statusRange = [];
+        $codes = [];
+        foreach ($result['status'] ?? [] as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $code = trim((string) ($item['code'] ?? ''));
+            if ($code === '') {
+                continue;
+            }
+            $codes[] = $code;
+            $statusRange[$code] = $item;
+        }
+
+        return ['ok' => true, 'status_range' => $statusRange, 'codes' => $codes];
     }
 
     /**
@@ -279,14 +336,20 @@ final class TuyaCloudSharing
                         'dps' => [],
                         'online' => (bool) ($item['online'] ?? false),
                         'error' => $previousError . ' (Homes-Liste ohne Status)',
+                        'status_range' => [],
+                        'cloud_codes' => [],
                     ];
                 }
+
+                $specs = $this->fetchDeviceSpecifications($api, $session, $deviceId);
 
                 return [
                     'ok' => true,
                     'dps' => $dps,
                     'online' => (bool) ($item['online'] ?? false),
                     'error' => '',
+                    'status_range' => $specs['status_range'],
+                    'cloud_codes' => $specs['codes'],
                 ];
             }
         }

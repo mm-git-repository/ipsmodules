@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/libs/TuyaLocalClient.php';
 require_once __DIR__ . '/libs/TuyaWaterQualityMapping.php';
 require_once __DIR__ . '/libs/TuyaCloudSharing.php';
+require_once __DIR__ . '/libs/TuyaOpenApiClient.php';
 require_once __DIR__ . '/libs/TuyaUdpDiscovery.php';
 require_once __DIR__ . '/libs/TuyaQrImage.php';
 
@@ -12,7 +13,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 21;
+    private const MODULE_BUILD = 24;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -28,6 +29,8 @@ class TuyaWaterQuality extends IPSModuleStrict
     private const BUF_SESSION = 'CloudSession';
     private const BUF_DEVICES = 'CloudDevices';
     private const BUF_STATUS = 'CloudCouplingStatus';
+    private const BUF_UPDATE_RUNNING = 'UpdateRunning';
+    private const BUF_OPENAPI_TOKEN = 'OpenApiToken';
 
     private const DATA_SOURCE_LAN = 'lan';
     private const DATA_SOURCE_CLOUD = 'cloud';
@@ -42,6 +45,9 @@ class TuyaWaterQuality extends IPSModuleStrict
         $this->RegisterPropertyBoolean('KeepCloudSession', true);
         $this->RegisterPropertyString('CloudUserCode', '');
         $this->RegisterPropertyString('CloudSelectedDevice', '');
+        $this->RegisterPropertyString('OpenApiAccessId', '');
+        $this->RegisterPropertyString('OpenApiAccessSecret', '');
+        $this->RegisterPropertyString('OpenApiRegion', 'eu');
         $this->RegisterPropertyString('Host', '');
         $this->RegisterPropertyString('DeviceId', '');
         $this->RegisterPropertyString('LocalKey', '');
@@ -135,6 +141,7 @@ class TuyaWaterQuality extends IPSModuleStrict
                 . 'Fehler: ' . ($error !== '' ? $error : 'unbekannt') . "\n\n"
                 . "Tipps:\n"
                 . "- Bei LAN-Problemen: Datenquelle „LAN, sonst Cloud“ oder „Nur Cloud“\n"
+                . "- Für pH/ORP/EC: IoT Access ID/Secret + „IoT-Cloud testen“\n"
                 . "- Cloud-Session: QR-Login erneut, KeepCloudSession aktiv lassen\n"
                 . "- Host per „LAN-Scan (IP)“ prüfen oder tinytuya-Test vom Symcon-Server\n"
                 . "- Details: Instanz → Zahnrad → Debug aktivieren → Meldungen";
@@ -150,9 +157,24 @@ class TuyaWaterQuality extends IPSModuleStrict
         if ($source === 'Cloud' && $dataSource === self::DATA_SOURCE_LAN_THEN_CLOUD) {
             $lines[1] = 'Daten via Cloud (LAN nicht erreichbar)';
         }
+        if ($source === 'Cloud-IoT') {
+            $lines[1] = 'Daten via IoT-Cloud (voller Status)';
+        }
 
+        $ph = $this->GetValue('MeasuredPh');
+        $orp = $this->GetValue('MeasuredOrp');
+        $ec = $this->GetValue('MeasuredEc');
         $tds = $this->GetValue('MeasuredTds');
         $temp = $this->GetValue('MeasuredWaterTemp');
+        if ($ph !== null) {
+            $lines[] = 'pH: ' . $ph;
+        }
+        if ($orp !== null) {
+            $lines[] = 'ORP: ' . $orp . ' mV';
+        }
+        if ($ec !== null) {
+            $lines[] = 'EC: ' . $ec . ' µS/cm';
+        }
         if ($tds !== null && $tds !== 0.0) {
             $lines[] = 'TDS: ' . $tds . ' ppm';
         }
@@ -387,6 +409,43 @@ class TuyaWaterQuality extends IPSModuleStrict
         return 'Cloud-Session gelöscht (Local Key bleibt in den Feldern bis Übernehmen).';
     }
 
+    public function CloudOpenApiTest(): string
+    {
+        if (!$this->hasOpenApiCredentials()) {
+            return 'IoT Access ID und Secret eintragen (iot.tuya.com).';
+        }
+
+        $client = new TuyaOpenApiClient(
+            $this->ReadPropertyString('OpenApiAccessId'),
+            $this->ReadPropertyString('OpenApiAccessSecret'),
+            TuyaOpenApiClient::normalizeRegion($this->ReadPropertyString('OpenApiRegion')),
+            $this->loadOpenApiToken(),
+        );
+        $test = $client->testConnection();
+        $this->saveOpenApiToken($client->getTokenInfo());
+
+        if (!$test['ok']) {
+            return 'IoT-Cloud Verbindung fehlgeschlagen: ' . $test['error'];
+        }
+
+        $deviceId = trim($this->ReadPropertyString('DeviceId'));
+        if ($deviceId === '') {
+            return 'IoT-Cloud Token OK — Device ID fehlt für Status-Test.';
+        }
+
+        $status = $client->fetchDeviceStatus($deviceId);
+        $this->saveOpenApiToken($client->getTokenInfo());
+        if (!$status['ok']) {
+            return 'IoT-Cloud Token OK, Status-Abfrage fehlgeschlagen: ' . $status['error'];
+        }
+
+        $codes = $status['cloud_codes'] ?? [];
+        $codeList = is_array($codes) && $codes !== [] ? implode(', ', $codes) : '(keine Specs)';
+
+        return 'IoT-Cloud OK. Status-Codes: ' . $codeList . ' | DPS: '
+            . (json_encode($status['dps'], JSON_UNESCAPED_UNICODE) ?: '{}');
+    }
+
     public function LanDiscover(): string
     {
         if (!function_exists('socket_create')) {
@@ -473,6 +532,22 @@ class TuyaWaterQuality extends IPSModuleStrict
 
     public function UpdateValues(): void
     {
+        if ($this->GetBuffer(self::BUF_UPDATE_RUNNING) === '1') {
+            $this->debugLocal('Update', 'Übersprungen — vorheriger Lauf noch aktiv');
+
+            return;
+        }
+        $this->SetBuffer(self::BUF_UPDATE_RUNNING, '1');
+
+        try {
+            $this->updateValuesInner();
+        } finally {
+            $this->SetBuffer(self::BUF_UPDATE_RUNNING, '0');
+        }
+    }
+
+    private function updateValuesInner(): void
+    {
         if (!$this->ReadPropertyBoolean('Active')) {
             $this->SetValue('Reachable', false);
             $this->SetValue('LastError', 'Modul inaktiv');
@@ -508,7 +583,18 @@ class TuyaWaterQuality extends IPSModuleStrict
 
             $cloudResult = $this->fetchCloudStatus($deviceId);
             if ($cloudResult['ok']) {
-                $this->applyMeasurementResult($cloudResult['dps'], $mapping, 'Cloud', true);
+                $sourceLabel = trim((string) ($cloudResult['source'] ?? 'Cloud'));
+                if ($sourceLabel === '') {
+                    $sourceLabel = 'Cloud';
+                }
+                $this->applyMeasurementResult(
+                    $cloudResult['dps'],
+                    $mapping,
+                    $sourceLabel,
+                    true,
+                    is_array($cloudResult['status_range'] ?? null) ? $cloudResult['status_range'] : [],
+                    is_array($cloudResult['cloud_codes'] ?? null) ? $cloudResult['cloud_codes'] : [],
+                );
 
                 return;
             }
@@ -582,40 +668,140 @@ class TuyaWaterQuality extends IPSModuleStrict
     }
 
     /**
-     * @return array{ok: bool, dps: array<string|int, mixed>, online: bool, error: string}
+     * @return array{ok: bool, dps: array<string|int, mixed>, online: bool, error: string, status_range?: array<string, mixed>, cloud_codes?: list<string>, source?: string}
      */
     private function fetchCloudStatus(string $deviceId): array
     {
+        $openApiResult = $this->fetchOpenApiStatus($deviceId);
+        if ($openApiResult['ok']) {
+            return $openApiResult;
+        }
+
+        $openApiError = trim((string) ($openApiResult['error'] ?? ''));
+        if ($this->hasOpenApiCredentials() && $openApiError !== '') {
+            $this->debugLocal('Update', 'IoT-Cloud fehlgeschlagen: ' . $openApiError . ' — versuche QR-Sharing');
+        }
+
         $session = $this->loadCloudSession();
         if ($session === null) {
+            $sharingError = 'Keine Cloud-Session — QR-Login erneut durchführen (KeepCloudSession aktiv lassen)';
+            if ($openApiError !== '') {
+                $sharingError = 'IoT: ' . $openApiError . ' | Sharing: ' . $sharingError;
+            }
+
             return [
                 'ok' => false,
                 'dps' => [],
                 'online' => false,
-                'error' => 'Keine Cloud-Session — QR-Login erneut durchführen (KeepCloudSession aktiv lassen)',
+                'error' => $sharingError,
             ];
         }
 
-        $this->debugLocal('Update', 'Cloud-Abfrage devId=' . $deviceId);
+        $this->debugLocal('Update', 'Cloud-Sharing-Abfrage devId=' . $deviceId);
 
         $sharing = new TuyaCloudSharing();
         $result = $sharing->fetchDeviceStatus($session, $deviceId);
         $this->saveCloudSession($session);
+        $result['source'] = 'Cloud';
 
         if (!$result['ok']) {
             $this->debugLocal('Update', 'Cloud detail fehlgeschlagen: ' . $result['error']);
             $cached = $this->fetchCloudStatusFromCache($deviceId);
             if ($cached['ok']) {
                 $this->debugLocal('Update', 'Cloud-Fallback aus Geräteliste OK');
+                $cached['source'] = 'Cloud';
 
                 return $cached;
             }
             $this->debugLocal('Update', 'Cloud-Cache: ' . $cached['error']);
+            if ($openApiError !== '') {
+                $result['error'] = 'IoT: ' . $openApiError . ' | Sharing: ' . $result['error'];
+            }
         } else {
             $this->debugLocal('Update', 'Cloud-DPS: ' . (json_encode($result['dps'], JSON_UNESCAPED_UNICODE) ?: '{}'));
+            $cloudCodes = $result['cloud_codes'] ?? [];
+            if (is_array($cloudCodes) && $cloudCodes !== []) {
+                $this->debugLocal('Update', 'Cloud-Spec (verfügbare Codes): ' . implode(', ', $cloudCodes));
+            }
         }
 
         return $result;
+    }
+
+    /**
+     * @return array{ok: bool, dps: array<string|int, mixed>, online: bool, error: string, status_range: array<string, mixed>, cloud_codes: list<string>, source: string}
+     */
+    private function fetchOpenApiStatus(string $deviceId): array
+    {
+        if (!$this->hasOpenApiCredentials()) {
+            return [
+                'ok' => false,
+                'dps' => [],
+                'online' => false,
+                'error' => '',
+                'status_range' => [],
+                'cloud_codes' => [],
+                'source' => 'Cloud-IoT',
+            ];
+        }
+
+        $this->debugLocal('Update', 'IoT-Cloud-Abfrage devId=' . $deviceId);
+
+        $client = new TuyaOpenApiClient(
+            $this->ReadPropertyString('OpenApiAccessId'),
+            $this->ReadPropertyString('OpenApiAccessSecret'),
+            TuyaOpenApiClient::normalizeRegion($this->ReadPropertyString('OpenApiRegion')),
+            $this->loadOpenApiToken(),
+        );
+        $result = $client->fetchDeviceStatus($deviceId);
+        $this->saveOpenApiToken($client->getTokenInfo());
+        $result['source'] = 'Cloud-IoT';
+
+        if ($result['ok']) {
+            $this->debugLocal('Update', 'IoT-Cloud-DPS: ' . (json_encode($result['dps'], JSON_UNESCAPED_UNICODE) ?: '{}'));
+            $cloudCodes = $result['cloud_codes'] ?? [];
+            if (is_array($cloudCodes) && $cloudCodes !== []) {
+                $this->debugLocal('Update', 'IoT-Spec (Codes): ' . implode(', ', $cloudCodes));
+            }
+        }
+
+        return $result;
+    }
+
+    private function hasOpenApiCredentials(): bool
+    {
+        return trim($this->ReadPropertyString('OpenApiAccessId')) !== ''
+            && trim($this->ReadPropertyString('OpenApiAccessSecret')) !== '';
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function loadOpenApiToken(): ?array
+    {
+        $raw = $this->GetBuffer(self::BUF_OPENAPI_TOKEN);
+        if (!is_string($raw) || $raw === '') {
+            return null;
+        }
+
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    /**
+     * @param array<string, mixed> $tokenInfo
+     */
+    private function saveOpenApiToken(array $tokenInfo): void
+    {
+        if (($tokenInfo['access_token'] ?? '') === '') {
+            return;
+        }
+
+        $encoded = json_encode($tokenInfo, JSON_UNESCAPED_UNICODE);
+        if (is_string($encoded)) {
+            $this->SetBuffer(self::BUF_OPENAPI_TOKEN, $encoded);
+        }
     }
 
     /**
@@ -661,15 +847,47 @@ class TuyaWaterQuality extends IPSModuleStrict
     /**
      * @param array<string|int, mixed> $dps
      * @param array<string, array{dp: int, scale: float}> $mapping
+     * @param array<string, mixed> $statusRange
+     * @param list<string> $cloudCodes
      */
-    private function applyMeasurementResult(array $dps, array $mapping, string $sourceLabel, bool $reachable): void
-    {
-        $values = TuyaWaterQualityMapping::apply($dps, $mapping);
+    private function applyMeasurementResult(
+        array $dps,
+        array $mapping,
+        string $sourceLabel,
+        bool $reachable,
+        array $statusRange = [],
+        array $cloudCodes = [],
+    ): void {
+        $values = TuyaWaterQualityMapping::apply($dps, $mapping, $statusRange);
         $this->debugLocal('Update', sprintf(
             'Mapping (%s) angewendet: %s',
             $sourceLabel,
             json_encode($values, JSON_UNESCAPED_UNICODE),
         ));
+
+        if ($sourceLabel === 'Cloud' && $cloudCodes !== []) {
+            $missing = [];
+            foreach (['ph', 'orp', 'ec'] as $ident) {
+                if (!isset($mapping[$ident]) || $values[$ident] !== null) {
+                    continue;
+                }
+                $aliases = ['ph' => ['ph', 'ph_value'], 'orp' => ['orp', 'orp_value'], 'ec' => ['ec', 'conductivity_value', 'conductivity', 'ec_value']];
+                foreach ($aliases[$ident] as $code) {
+                    if (in_array($code, $cloudCodes, true)) {
+                        continue 2;
+                    }
+                }
+                $missing[] = strtoupper($ident);
+            }
+            if ($missing !== []) {
+                $this->debugLocal(
+                    'Update',
+                    'Cloud-Sharing liefert für dieses Produkt keine '
+                    . implode('/', $missing)
+                    . '-Werte (App zeigt mehr — nur TDS/Temp über QR-API). LAN nötig für vollständige Messwerte.',
+                );
+            }
+        }
 
         if ($values['ph'] !== null) {
             $this->SetValue('MeasuredPh', $values['ph']);

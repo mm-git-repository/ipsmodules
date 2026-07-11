@@ -63,6 +63,46 @@
             ]
         },
         {
+            "type": "ExpansionPanel",
+            "caption": "Tuya IoT Cloud (alle Messwerte: pH/ORP/EC)",
+            "expanded": false,
+            "items": [
+                {
+                    "type": "ValidationTextBox",
+                    "name": "OpenApiAccessId",
+                    "caption": "IoT Access ID (iot.tuya.com → Cloud → Entwicklung)"
+                },
+                {
+                    "type": "ValidationTextBox",
+                    "name": "OpenApiAccessSecret",
+                    "caption": "IoT Access Secret"
+                },
+                {
+                    "type": "Select",
+                    "name": "OpenApiRegion",
+                    "caption": "IoT Rechenzentrum (wie Tuya-App)",
+                    "options": [
+                        {
+                            "label": "EU (West)",
+                            "value": "eu"
+                        },
+                        {
+                            "label": "USA",
+                            "value": "us"
+                        },
+                        {
+                            "label": "China",
+                            "value": "cn"
+                        },
+                        {
+                            "label": "Indien",
+                            "value": "in"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
             "type": "ValidationTextBox",
             "name": "Host",
             "caption": "Geräte-IP (LAN)"
@@ -133,6 +173,11 @@
             "type": "Button",
             "caption": "LAN-Scan (IP)",
             "onClick": "echo TWQT_LanDiscover($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "IoT-Cloud testen",
+            "onClick": "echo TWQT_CloudOpenApiTest($id);"
         },
         {
             "type": "Button",

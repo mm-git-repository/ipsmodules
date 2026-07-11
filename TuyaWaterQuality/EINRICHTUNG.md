@@ -2,7 +2,7 @@
 
 Anleitung für das IP-Symcon-Modul **Yieryi Wasserqualität** (`TuyaWaterQuality`) der Bibliothek **MM-Modules**.
 
-Das Modul liest **pH, ORP, EC, TDS und Wassertemperatur** per **lokalem Tuya-LAN-Protokoll** (Port 6668) oder optional per **Tuya-Cloud** (Home-Assistant-QR-Session). Für die Einrichtung wird einmalig die **Tuya-Cloud-Kopplung im Formular** genutzt; im Betrieb kann LAN bevorzugt werden, mit automatischem Cloud-Fallback.
+Das Modul liest **pH, ORP, EC, TDS und Wassertemperatur** per **LAN** (Port 6668) oder **Cloud**. Für **alle Messwerte aus der Cloud** wird die **Tuya IoT Developer Cloud** (Access ID/Secret) benötigt; die QR-Kopplung reicht nur für TDS/Temperatur.
 
 ---
 
@@ -13,7 +13,8 @@ Das Modul liest **pH, ORP, EC, TDS und Wassertemperatur** per **lokalem Tuya-LAN
 | **Primärer Weg** | **Tuya-Kopplung** im Instanz-Formular: User Code → QR scannen → Gerät übernehmen → Local Key + Device ID automatisch |
 | **Local Key in der App** | In **Tuya Smart** / **Smart Life** wird der Key **nicht angezeigt**. Das ist normal — Kopplung oder Cloud-Login holen ihn. |
 | **Keine LAN-Einstellung in der App** | Bei **YINMIK** / **szjcy**-Sensoren fehlen oft Geräte-Einstellungen für LAN — **kein Blocker**, kein „Gerät aus App entfernen“ nötig |
-| **Datenquelle** | **LAN, sonst Cloud** (Standard): zuerst Port 6668, bei Fehler Cloud über gespeicherte QR-Session |
+| **Datenquelle** | **LAN, sonst Cloud** (Standard): zuerst Port 6668, dann Cloud (IoT-API bevorzugt, sonst QR-Sharing) |
+| **Alle Cloud-Werte (pH/ORP/EC)** | **IoT Access ID + Secret** aus [iot.tuya.com](https://iot.tuya.com) — Panel „Tuya IoT Cloud“ |
 | **Cloud-Session** | Mit **„Cloud-Session behalten“** (Standard) bleibt die Session nach „Gerät übernehmen“ für den Fallback aktiv — bei Ablauf QR erneut scannen |
 | **Internet** | QR-Login und Cloud-Abfragen (HTTPS zu Tuya); reines LAN ohne Cloud möglich, wenn Port 6668 antwortet |
 | **Linkify-Meldung** | Warnung *„The plugin Linkify cannot be loaded“* kommt vom **Browser/Adblocker**, nicht vom Modul |
@@ -64,15 +65,55 @@ Optional:
 | **Nur Cloud** | Nur Tuya-Cloud (Session muss gültig sein) |
 | **LAN, sonst Cloud** | Standard — bei fehlender Tuya-Antwort auf 6668 automatisch Cloud |
 
-Variable **Datenquelle (letzte Abfrage)** zeigt `LAN` oder `Cloud`.
+Variable **Datenquelle (letzte Abfrage)** zeigt `LAN`, `Cloud-IoT` oder `Cloud` (QR-Sharing).
+
+---
+
+## 3b. Tuya IoT Cloud — alle Messwerte (pH, ORP, EC)
+
+Die **QR-Kopplung** holt Local Key und liefert im Betrieb nur **TDS + Temperatur**. Für **pH/ORP/EC aus der Cloud**:
+
+### Schritt 1: Projekt auf iot.tuya.com
+
+1. [Tuya IoT Platform](https://iot.tuya.com) → Cloud-Projekt anlegen (Region **EU**, wenn die App in EU läuft).
+2. **Cloud → Link App Account** — dieselbe Smart-Life/Tuya-App verknüpfen wie am Sensor.
+3. Unter **API** die Dienste **IoT Core** / Gerätestatus freischalten.
+4. **Access ID** und **Access Secret** notieren.
+
+### Schritt 2: DP-Instruction-Modus (wichtig für YINMIK)
+
+Im IoT-Portal beim Produkt **u5xgcpcngk3pfxb4** (oder Support-Ticket):
+
+- **Control Instruction Mode** von *Standard Instruction* auf **DP Instruction** stellen.
+- Konfiguration synchronisieren (kann einige Stunden dauern).
+
+Ohne DP Instruction liefert auch die IoT-API oft nur `tds_in` und `temp_current` — wie die App-interne Standard-Schnittstelle.
+
+### Schritt 3: Im IP-Symcon-Modul
+
+Expansion **„Tuya IoT Cloud (alle Messwerte)“**:
+
+| Feld | Wert |
+|------|------|
+| **IoT Access ID** | aus dem Cloud-Projekt |
+| **IoT Access Secret** | aus dem Cloud-Projekt |
+| **IoT Rechenzentrum** | **EU (West)** — muss zur App-Region passen |
+
+→ **Übernehmen** → **IoT-Cloud testen** — sollte u. a. `ph`, `orp_value`, `conductivity_value` in den Status-Codes zeigen.
+
+Im Betrieb: Bei **Nur Cloud** oder **LAN, sonst Cloud** wird zuerst die **IoT-API** genutzt; QR-Sharing nur als Fallback (TDS/Temp).
+
+---
 
 ### YINMIK / szjcy DP-Mapping (automatisch)
 
 Bei Product ID `u5xgcpcngk3pfxb4` oder Kategorie `szjcy`:
 
 ```json
-{"tds":{"dp":1,"scale":0.001},"temperature":{"dp":2,"scale":0.1}}
+{"tds":{"dp":1,"scale":0.001},"temperature":{"dp":2,"scale":0.1},"ph":{"dp":10,"scale":0.01},"ec":{"dp":11,"scale":1},"orp":{"dp":12,"scale":1}}
 ```
+
+**Cloud-Hinweis (YINMIK):** QR-Sharing liefert nur TDS/Temp — für pH/ORP/EC siehe Abschnitt **3b IoT Cloud**.
 
 ---
 
@@ -151,6 +192,8 @@ Nur wenn Rechenzentrum zur App-Region passt: [iot.tuya.com](https://iot.tuya.com
 | QR-Login schlägt fehl | User Code prüfen, Internet/Firewall, erneut scannen |
 | `OpenSSL fehlt` | PHP-OpenSSL auf Symcon-Server aktivieren |
 | `Keine Cloud-Session` | QR-Login erneut; **Cloud-Session behalten** aktiv lassen |
+| Cloud OK, aber nur TDS/Temp | IoT Access ID/Secret eintragen + **DP Instruction** auf iot.tuya.com; „IoT-Cloud testen“ |
+| IoT-Cloud Token fehlgeschlagen | Region (EU/US), Access ID/Secret, App-Verknüpfung prüfen |
 | TCP 6668 offen, 0 Bytes Antwort | Normal bei manchen Firmwares → **LAN, sonst Cloud** |
 | Kein UDP-Scan, Ping OK | UDP ≠ Ping — Host manuell setzen |
 | Werte leer | **Roh-DPS** prüfen, DP-Mapping anpassen |
