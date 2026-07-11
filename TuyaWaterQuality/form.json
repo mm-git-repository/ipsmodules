@@ -114,7 +114,7 @@
         {
             "type": "Button",
             "caption": "Jetzt aktualisieren",
-            "onClick": "TWQT_Refresh($id); echo 'OK';"
+            "onClick": "echo TWQT_RefreshFeedback($id);"
         },
         {
             "type": "Label",

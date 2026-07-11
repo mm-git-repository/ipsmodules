@@ -25,11 +25,19 @@ final class TuyaLocalClient
     private string $protocolVersion;
     private int $seqNo = 0;
 
-    public function __construct(string $deviceId, string $localKey, string $protocolVersion = '3.3')
-    {
+    /** @var null|callable(string): void */
+    private $debugLogger;
+
+    public function __construct(
+        string $deviceId,
+        string $localKey,
+        string $protocolVersion = '3.3',
+        ?callable $debugLogger = null,
+    ) {
         $this->deviceId = trim($deviceId);
         $this->localKey = trim($localKey);
         $this->protocolVersion = trim($protocolVersion) !== '' ? trim($protocolVersion) : '3.3';
+        $this->debugLogger = $debugLogger;
     }
 
     /**
@@ -50,6 +58,15 @@ final class TuyaLocalClient
             return ['ok' => false, 'dps' => [], 'error' => 'PHP socket extension fehlt'];
         }
 
+        $this->log(sprintf(
+            'Start host=%s:%d devId=%s proto=%s keyLen=%d',
+            $host,
+            self::DEFAULT_PORT,
+            $this->deviceId,
+            $this->protocolVersion,
+            strlen($this->localKey),
+        ));
+
         $socket = @socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         if ($socket === false) {
             return ['ok' => false, 'dps' => [], 'error' => 'Socket konnte nicht erstellt werden'];
@@ -60,34 +77,71 @@ final class TuyaLocalClient
 
         $connected = @socket_connect($socket, $host, self::DEFAULT_PORT);
         if (!$connected) {
+            $err = socket_last_error($socket);
+            $errMsg = function_exists('socket_strerror') ? socket_strerror($err) : (string) $err;
             socket_close($socket);
+            $this->log('Connect fehlgeschlagen: ' . $errMsg);
 
-            return ['ok' => false, 'dps' => [], 'error' => 'Verbindung zu ' . $host . ':' . self::DEFAULT_PORT . ' fehlgeschlagen'];
+            return ['ok' => false, 'dps' => [], 'error' => 'Verbindung zu ' . $host . ':' . self::DEFAULT_PORT . ' fehlgeschlagen (' . $errMsg . ')'];
         }
+
+        $this->log('TCP verbunden');
 
         try {
             $payload = $this->buildStatusPayload();
+            $this->log('Request-JSON: ' . $payload);
             $encrypted = $this->encrypt($payload, $this->deriveKey());
             $packet = $this->packMessage(self::CMD_STATUS, $encrypted);
+            $this->log(sprintf('Sende Paket seq=%d len=%d encLen=%d', $this->seqNo, strlen($packet), strlen($encrypted)));
             $written = @socket_write($socket, $packet, strlen($packet));
             if ($written === false || $written === 0) {
+                $this->log('socket_write fehlgeschlagen');
+
                 return ['ok' => false, 'dps' => [], 'error' => 'Senden fehlgeschlagen'];
             }
 
             $response = $this->readResponse($socket);
             if ($response === null) {
+                $this->log('Keine/leere Antwort (Timeout nach ' . self::SOCKET_TIMEOUT_SEC . 's)');
+
                 return ['ok' => false, 'dps' => [], 'error' => 'Keine Antwort vom Gerät'];
             }
 
+            $this->log(sprintf('Empfangen %d Bytes, hex=%s', strlen($response), $this->hexPreview($response)));
+
             $decoded = $this->decodeMessage($response);
             if (!$decoded['ok']) {
+                $this->log('Decode: ' . $decoded['error']);
+
                 return ['ok' => false, 'dps' => [], 'error' => $decoded['error']];
             }
 
-            return ['ok' => true, 'dps' => $this->extractDps($decoded['payload']), 'error' => ''];
+            $this->log('Payload JSON: ' . $decoded['payload']);
+            $dps = $this->extractDps($decoded['payload']);
+            $this->log('DPS count=' . count($dps) . ' keys=' . implode(',', array_map('strval', array_keys($dps))));
+
+            return ['ok' => true, 'dps' => $dps, 'error' => ''];
         } finally {
             socket_close($socket);
         }
+    }
+
+    private function log(string $message): void
+    {
+        if ($this->debugLogger !== null) {
+            ($this->debugLogger)($message);
+        }
+    }
+
+    private function hexPreview(string $data, int $maxBytes = 48): string
+    {
+        $slice = substr($data, 0, $maxBytes);
+        $hex = strtoupper(bin2hex($slice));
+        if (strlen($data) > $maxBytes) {
+            $hex .= '…';
+        }
+
+        return $hex;
     }
 
     private function buildStatusPayload(): string
@@ -238,10 +292,18 @@ final class TuyaLocalClient
     {
         $header = @socket_read($socket, 16, PHP_BINARY_READ);
         if ($header === false || strlen($header) < 16) {
+            $this->log(sprintf(
+                'Header unvollständig (%d Bytes)',
+                is_string($header) ? strlen($header) : 0,
+            ));
+
             return null;
         }
 
+        $prefix = unpack('N', substr($header, 0, 4))[1] ?? 0;
         $payloadLength = unpack('N', substr($header, 12, 4))[1] ?? 0;
+        $this->log(sprintf('Header prefix=0x%08X payloadLen=%d', $prefix, $payloadLength));
+
         $remaining = max(0, $payloadLength);
         $buffer = $header;
         $read = 0;
@@ -253,6 +315,20 @@ final class TuyaLocalClient
             }
             $buffer .= $chunk;
             $read += strlen($chunk);
+        }
+
+        if ($read < $remaining) {
+            $this->log(sprintf('Payload unvollständig: %d/%d Bytes', $read, $remaining));
+        }
+
+        $footer = @socket_read($socket, 8, PHP_BINARY_READ);
+        if (is_string($footer) && $footer !== '') {
+            $buffer .= $footer;
+            $this->log('Footer: ' . $this->hexPreview($footer, 8));
+        }
+
+        if (strlen($buffer) <= 16) {
+            return null;
         }
 
         return $buffer;

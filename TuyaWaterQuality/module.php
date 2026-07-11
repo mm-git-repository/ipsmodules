@@ -11,7 +11,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 9;
+    private const MODULE_BUILD = 10;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -88,6 +88,54 @@ class TuyaWaterQuality extends IPSModuleStrict
     public function Refresh(): void
     {
         $this->UpdateValues();
+    }
+
+    /**
+     * Formular-Feedback nach manuellem Update (echo).
+     */
+    public function RefreshFeedback(): string
+    {
+        $this->UpdateValues();
+
+        $host = trim($this->ReadPropertyString('Host'));
+        $deviceId = trim($this->ReadPropertyString('DeviceId'));
+        $proto = trim($this->ReadPropertyString('ProtocolVersion'));
+        $reachable = (bool) $this->GetValue('Reachable');
+        $error = trim((string) $this->GetValue('LastError'));
+
+        if (!$reachable) {
+            return "Aktualisierung fehlgeschlagen\n"
+                . 'Host: ' . ($host !== '' ? $host : '(leer)') . "\n"
+                . 'Device ID: ' . ($deviceId !== '' ? $deviceId : '(leer)') . "\n"
+                . 'Protokoll: ' . ($proto !== '' ? $proto : '3.3') . "\n"
+                . 'Fehler: ' . ($error !== '' ? $error : 'unbekannt') . "\n\n"
+                . "Tipps:\n"
+                . "- Host per „LAN-Scan (IP)“ prüfen\n"
+                . "- Protokollversion 3.3 / 3.4 / 3.5 testen\n"
+                . "- Details: Instanz → Zahnrad → Debug aktivieren → Meldungen";
+        }
+
+        $lines = [
+            'Aktualisierung OK',
+            'Host: ' . $host,
+            'Erreichbar: ja',
+        ];
+
+        $tds = $this->GetValue('MeasuredTds');
+        $temp = $this->GetValue('MeasuredWaterTemp');
+        if ($tds !== null && $tds !== 0.0) {
+            $lines[] = 'TDS: ' . $tds . ' ppm';
+        }
+        if ($temp !== null && $temp !== 0.0) {
+            $lines[] = 'Temperatur: ' . $temp . ' °C';
+        }
+
+        $raw = trim((string) $this->GetValue('RawDps'));
+        if ($raw !== '' && $raw !== '{}') {
+            $lines[] = 'DPS: ' . $raw;
+        }
+
+        return implode("\n", $lines);
     }
 
     public function RequestAction(string $Ident, mixed $Value): void
@@ -348,14 +396,24 @@ class TuyaWaterQuality extends IPSModuleStrict
             $this->SetValue('Reachable', false);
             $this->SetValue('LastError', 'Host, Device ID oder Local Key fehlt');
             $this->SetStatus(self::IS_INVALID_CONFIG);
+            $this->debugLocal('Update', 'Abbruch: unvollständige Konfiguration (host/devId/key)');
 
             return;
         }
 
+        $this->debugLocal('Update', sprintf(
+            'Abfrage starten host=%s devId=%s proto=%s keyLen=%d',
+            $host,
+            $deviceId,
+            $this->ReadPropertyString('ProtocolVersion'),
+            strlen($localKey),
+        ));
+
         $client = new TuyaLocalClient(
             $deviceId,
             $localKey,
-            $this->ReadPropertyString('ProtocolVersion')
+            $this->ReadPropertyString('ProtocolVersion'),
+            fn (string $message): void => $this->debugLocal('LAN', $message),
         );
 
         $result = $client->fetchStatus($host);
@@ -363,12 +421,14 @@ class TuyaWaterQuality extends IPSModuleStrict
             $this->SetValue('Reachable', false);
             $this->SetValue('LastError', $result['error']);
             $this->SetStatus(self::IS_UNREACHABLE);
+            $this->debugLocal('Update', 'Fehler: ' . $result['error']);
 
             return;
         }
 
         $mapping = TuyaWaterQualityMapping::parse($this->ReadPropertyString('DpMapping'));
         $values = TuyaWaterQualityMapping::apply($result['dps'], $mapping);
+        $this->debugLocal('Update', 'Mapping angewendet: ' . json_encode($values, JSON_UNESCAPED_UNICODE));
 
         if ($values['ph'] !== null) {
             $this->SetValue('MeasuredPh', $values['ph']);
@@ -391,6 +451,12 @@ class TuyaWaterQuality extends IPSModuleStrict
         $this->SetValue('LastUpdate', time());
         $this->SetValue('RawDps', json_encode($result['dps'], JSON_UNESCAPED_UNICODE) ?: '{}');
         $this->SetStatus(self::IS_ACTIVE);
+        $this->debugLocal('Update', 'Erfolg, DPS=' . (json_encode($result['dps'], JSON_UNESCAPED_UNICODE) ?: '{}'));
+    }
+
+    private function debugLocal(string $category, string $message): void
+    {
+        $this->SendDebug($category, $message, 0);
     }
 
     /**
