@@ -2,7 +2,7 @@
 
 Anleitung für das IP-Symcon-Modul **Yieryi Wasserqualität** (`TuyaWaterQuality`) der Bibliothek **MM-Modules**.
 
-Das Modul liest **pH, ORP, EC, TDS und Wassertemperatur** per **lokalem Tuya-LAN-Protokoll** (Port 6668). Der laufende Betrieb ist **100 % lokal** — für die Einrichtung kann einmalig die **Tuya-Cloud-Kopplung im Formular** (QR-Login wie Home Assistant) genutzt werden.
+Das Modul liest **pH, ORP, EC, TDS und Wassertemperatur** per **lokalem Tuya-LAN-Protokoll** (Port 6668) oder optional per **Tuya-Cloud** (Home-Assistant-QR-Session). Für die Einrichtung wird einmalig die **Tuya-Cloud-Kopplung im Formular** genutzt; im Betrieb kann LAN bevorzugt werden, mit automatischem Cloud-Fallback.
 
 ---
 
@@ -10,17 +10,19 @@ Das Modul liest **pH, ORP, EC, TDS und Wassertemperatur** per **lokalem Tuya-LAN
 
 | Thema | Erklärung |
 |-------|-----------|
-| **Primärer Weg (ab Build 5)** | **Tuya-Kopplung** im Instanz-Formular: User Code → QR scannen → Gerät übernehmen → Local Key + Device ID automatisch |
+| **Primärer Weg** | **Tuya-Kopplung** im Instanz-Formular: User Code → QR scannen → Gerät übernehmen → Local Key + Device ID automatisch |
 | **Local Key in der App** | In **Tuya Smart** / **Smart Life** wird der Key **nicht angezeigt**. Das ist normal — Kopplung oder Cloud-Login holen ihn. |
-| **Nur lokal im Betrieb** | Nach der Kopplung: IP-Symcon und Sensor im **gleichen LAN**, Abfrage Port **6668**, **kein** Cloud-Polling |
-| **Internet** | Nur **einmalig** beim QR-Login (HTTPS zu `apigw.iotbing.com` / Tuya-Endpoint) und für die QR-Bildanzeige |
+| **Keine LAN-Einstellung in der App** | Bei **YINMIK** / **szjcy**-Sensoren fehlen oft Geräte-Einstellungen für LAN — **kein Blocker**, kein „Gerät aus App entfernen“ nötig |
+| **Datenquelle** | **LAN, sonst Cloud** (Standard): zuerst Port 6668, bei Fehler Cloud über gespeicherte QR-Session |
+| **Cloud-Session** | Mit **„Cloud-Session behalten“** (Standard) bleibt die Session nach „Gerät übernehmen“ für den Fallback aktiv — bei Ablauf QR erneut scannen |
+| **Internet** | QR-Login und Cloud-Abfragen (HTTPS zu Tuya); reines LAN ohne Cloud möglich, wenn Port 6668 antwortet |
 | **Linkify-Meldung** | Warnung *„The plugin Linkify cannot be loaded“* kommt vom **Browser/Adblocker**, nicht vom Modul |
 
 ---
 
 ## 1. Sensor vorbereiten
 
-1. Sensor in **Tuya Smart** oder **Smart Life** einrichten.
+1. Sensor in **Tuya Smart** oder **Smart Life** einrichten (Gerät **in der App behalten**).
 2. Nur **2,4-GHz-WLAN** verwenden.
 3. Prüfen, dass der Sensor in der App **online** ist.
 4. Im Router eine **feste IP** (DHCP-Reservierung) vergeben — hilfreich, falls die Cloud keine IP liefert.
@@ -42,16 +44,27 @@ Expansion **„Tuya-Kopplung (einmalig)“** in der Instanz:
 | Schritt | Aktion |
 |---------|--------|
 | 1 | **User Code** aus Tuya Smart: *Ich → Einstellungen → Konto und Sicherheit → User Code* eintragen → **Übernehmen** |
-| 2 | **QR-Code anzeigen** → Browser mit QR-Bild öffnet sich (IP-Symcon unterstützt kein HTML im Dialog) |
+| 2 | **QR-Code anzeigen** → Browser mit QR-Bild öffnet sich |
 | 3 | **Auf Anmeldung warten** (bis zu ~1 Minute Wartezeit pro Klick) |
 | 4 | **Gerät aus Cloud-Liste** wählen (z. B. YINMIK Water Quality Tester) |
-| 5 | **Gerät übernehmen** → Felder Device ID, Local Key, Host, DP-Mapping werden gesetzt |
-| 6 | **Übernehmen** → **Jetzt aktualisieren** |
+| 5 | **Cloud-Session behalten** ✓ (für Cloud-Fallback) |
+| 6 | **Gerät übernehmen & speichern** → Device ID, Local Key, Host, DP-Mapping werden gesetzt |
+| 7 | **Übernehmen** → **Jetzt aktualisieren** |
 
 Optional:
 
-- **LAN-Scan (IP)** — UDP-Discovery oder Hinweis auf `python -m tinytuya scan`
-- **Cloud-Session beenden** — temporäre Token löschen (Local Key bleibt in den Feldern)
+- **LAN-Scan (IP)** — UDP-Discovery oder TCP-6668-Hinweis
+- **Cloud-Session beenden** — Token löschen (nur wenn kein Cloud-Fallback gewünscht)
+
+### Datenquelle
+
+| Einstellung | Bedeutung |
+|-------------|-----------|
+| **Nur LAN** | Nur Port 6668 (schnell, offline-fähig) |
+| **Nur Cloud** | Nur Tuya-Cloud (Session muss gültig sein) |
+| **LAN, sonst Cloud** | Standard — bei fehlender Tuya-Antwort auf 6668 automatisch Cloud |
+
+Variable **Datenquelle (letzte Abfrage)** zeigt `LAN` oder `Cloud`.
 
 ### YINMIK / szjcy DP-Mapping (automatisch)
 
@@ -80,9 +93,24 @@ python -m tinytuya scan
 
 Liefert **IP** und **Device ID**, aber **keinen Local Key**.
 
+Referenztest **vom IP-Symcon-Server** (nicht vom PC, falls anderes Netz):
+
+```python
+import tinytuya
+d = tinytuya.Device('DEVICE_ID', 'GERÄTE_IP', 'LOCAL_KEY', dev_type='device22')
+d.set_version(3.3)
+d.set_dpsUsed({"1": None, "2": None})
+print(d.status())
+```
+
+| tinytuya-Ergebnis | Konsequenz |
+|-------------------|------------|
+| Auch 0 Bytes/Timeout | LAN am Gerät praktisch tot → **Cloud-Fallback** nutzen |
+| JSON mit DPS | LAN sollte funktionieren — Debug-Log mit Modul vergleichen |
+
 ### Methode C: tuya-uncover (veraltet / oft defekt)
 
-[github.com/blakadder/tuya-uncover](https://github.com/blakadder/tuya-uncover) — bei vielen Accounts inzwischen **nicht mehr zuverlässig** (`SING_VALIDATE_FALED_4` bei Tuya Smart).
+[github.com/blakadder/tuya-uncover](https://github.com/blakadder/tuya-uncover) — bei vielen Accounts inzwischen **nicht mehr zuverlässig**.
 
 ### Methode D: Tuya IoT Cloud
 
@@ -95,10 +123,11 @@ Nur wenn Rechenzentrum zur App-Region passt: [iot.tuya.com](https://iot.tuya.com
 | Feld | Wert |
 |------|------|
 | **Aktiv** | ✓ |
+| **Datenquelle** | **LAN, sonst Cloud** (empfohlen bei YINMIK) |
 | **Geräte-IP (LAN)** | Feste IP / Scan / Cloud |
 | **Tuya Device ID** | z. B. `bf304e1f1e35c32232syye` |
 | **Tuya Local Key** | aus Kopplung oder HA-Script |
-| **Tuya-Protokollversion** | Meist **3.3** |
+| **Tuya-Protokollversion** | Meist **3.3** (YINMIK oft device22) |
 | **Aktualisierungsintervall** | z. B. 60 s (Minimum 15) |
 | **DP-Mapping** | Standard (8-in-1) oder YINMIK (siehe oben) |
 
@@ -109,7 +138,8 @@ Nur wenn Rechenzentrum zur App-Region passt: [iot.tuya.com](https://iot.tuya.com
 | Variable | Bedeutung |
 |----------|-----------|
 | pH / ORP / EC / TDS / Wassertemperatur | Messwerte |
-| Erreichbar | LAN-Verbindung OK |
+| Erreichbar | Verbindung OK (LAN oder Cloud online) |
+| Datenquelle (letzte Abfrage) | `LAN` oder `Cloud` |
 | Roh-DPS (Debug) | Rohe Tuya-Datenpunkte |
 
 ---
@@ -119,10 +149,11 @@ Nur wenn Rechenzentrum zur App-Region passt: [iot.tuya.com](https://iot.tuya.com
 | Symptom | Maßnahme |
 |---------|----------|
 | QR-Login schlägt fehl | User Code prüfen, Internet/Firewall, erneut scannen |
-| `OpenSSL fehlt` | PHP-OpenSSL auf Symcon-Server aktivieren (für Geräteliste) |
-| `Entschlüsselung fehlgeschlagen` | Local Key veraltet → erneut kopplern |
+| `OpenSSL fehlt` | PHP-OpenSSL auf Symcon-Server aktivieren |
+| `Keine Cloud-Session` | QR-Login erneut; **Cloud-Session behalten** aktiv lassen |
+| TCP 6668 offen, 0 Bytes Antwort | Normal bei manchen Firmwares → **LAN, sonst Cloud** |
+| Kein UDP-Scan, Ping OK | UDP ≠ Ping — Host manuell setzen |
 | Werte leer | **Roh-DPS** prüfen, DP-Mapping anpassen |
-| Keine IP nach Kopplung | **LAN-Scan** oder Router-Reservierung |
 | Sensor neu gekoppelt | **Gerät übernehmen** erneut ausführen |
 
 ### Standard DP-Mapping (PH-W218 / 8-in-1)
@@ -136,9 +167,9 @@ Nur wenn Rechenzentrum zur App-Region passt: [iot.tuya.com](https://iot.tuya.com
 ## 7. Ablauf (Übersicht)
 
 ```
-Tuya Smart (Sensor online)
+Tuya Smart (Sensor online, in App behalten)
         │
-        ├─► Formular QR-Kopplung ──► Device ID + Local Key + Mapping
+        ├─► Formular QR-Kopplung ──► Device ID + Local Key + Mapping + Session
         │
         └─► LAN-Scan / Router-IP ──► Host
                     │
@@ -146,7 +177,7 @@ Tuya Smart (Sensor online)
         IP-Symcon: Yieryi Wasserqualität (Übernehmen)
                     │
                     ▼
-        Lokale Abfrage alle 15–60 s (Port 6668)
+        Abfrage alle 15–60 s: LAN (6668) → optional Cloud-Fallback
 ```
 
 ---
@@ -157,4 +188,4 @@ Mit **Pool Steuerung** (`PoolControl`) die konfigurierte **Yieryi-Wasserqualitä
 
 ---
 
-*Modul: `TuyaWaterQuality` · Präfix: `TWQT` · Build 5 · Bibliothek: MM-Modules*
+*Modul: `TuyaWaterQuality` · Präfix: `TWQT` · Build 17 · Bibliothek: MM-Modules*

@@ -18,6 +18,7 @@ final class TuyaLocalClient
     private const CMD_SESS_KEY_NEG_START = 0x00000003;
     private const CMD_SESS_KEY_NEG_RESP = 0x00000004;
     private const CMD_SESS_KEY_NEG_FINISH = 0x00000005;
+    private const CMD_HEART_BEAT = 0x00000009;
     private const CMD_STATUS = 0x0000000A;
     private const CMD_CONTROL_NEW = 0x0000000D;
     private const CMD_DP_QUERY_NEW = 0x00000010;
@@ -28,6 +29,8 @@ final class TuyaLocalClient
     private const LOCAL_NONCE = '0123456789abcdef';
     /** @var string 3.3 + 12 NUL */
     private const PROTOCOL_HEADER_33 = "3.3\0\0\0\0\0\0\0\0\0\0\0\0";
+    /** @var string 3.2 + 12 NUL (tinytuya behandelt 3.2 wie device22) */
+    private const PROTOCOL_HEADER_32 = "3.2\0\0\0\0\0\0\0\0\0\0\0\0";
     /** @var string */
     private const PROTOCOL_HEADER_34 = "3.4\0\0\0\0\0\0\0\0\0\0\0\0";
     /** @var string */
@@ -118,7 +121,7 @@ final class TuyaLocalClient
             $lastError = $result['error'];
         }
 
-        return ['ok' => false, 'dps' => [], 'error' => $lastError . ' — LAN-Steuerung in Tuya Smart prüfen oder Protokoll per LAN-Scan ermitteln'];
+        return ['ok' => false, 'dps' => [], 'error' => $lastError . ' — Keine Tuya-Antwort auf Port 6668; ggf. Cloud-Fallback aktivieren'];
     }
 
     /**
@@ -167,6 +170,10 @@ final class TuyaLocalClient
                 return $this->fetchStatusAttempt35($socket, $attempt, $realKey);
             }
 
+            if (!$attempt['session'] && in_array($proto, ['3.2', '3.3'], true)) {
+                $this->sendHeartbeat($socket, $realKey, $proto);
+            }
+
             $hmacKey = null;
             $encryptKey = $realKey;
 
@@ -182,12 +189,13 @@ final class TuyaLocalClient
             $wirePayload = $this->wrapWirePayload($encrypted, $attempt['command'], $proto);
             $packet = $this->packMessage($attempt['command'], $wirePayload, $hmacKey);
             $this->log(sprintf(
-                'Sende Paket seq=%d len=%d wireLen=%d encLen=%d hmac=%s',
+                'Sende Paket seq=%d len=%d wireLen=%d encLen=%d hmac=%s hex=%s',
                 $this->seqNo,
                 strlen($packet),
                 strlen($wirePayload),
                 strlen($encrypted),
                 $hmacKey !== null ? 'yes' : 'no',
+                $this->hexPreview($packet, 64),
             ));
 
             $written = @socket_write($socket, $packet, strlen($packet));
@@ -245,18 +253,18 @@ final class TuyaLocalClient
         if (!in_array($configuredProto, $primaryProtos, true)) {
             $primaryProtos[] = $configuredProto;
         }
-        foreach (['3.3', '3.4', '3.5'] as $fallbackProto) {
+        foreach (['3.2', '3.3', '3.4', '3.5'] as $fallbackProto) {
             if (!in_array($fallbackProto, $primaryProtos, true)) {
                 $primaryProtos[] = $fallbackProto;
             }
         }
 
         foreach ($primaryProtos as $proto) {
-            if ($this->isDevice22() && $proto === '3.3') {
+            if ($this->isDevice22() && in_array($proto, ['3.2', '3.3'], true)) {
                 foreach ($keyModes as $keyMode) {
-                    $attempts[] = $this->attemptSpec('device22', self::CMD_CONTROL_NEW, $this->buildDevice22Payload(true), '3.3', $keyMode, false);
-                    $attempts[] = $this->attemptSpec('device22-nodps', self::CMD_CONTROL_NEW, $this->buildDevice22Payload(false), '3.3', $keyMode, false);
-                    $attempts[] = $this->attemptSpec('device22-uid', self::CMD_CONTROL_NEW, $this->buildDevice22Payload(true, true), '3.3', $keyMode, false);
+                    $attempts[] = $this->attemptSpec('device22', self::CMD_CONTROL_NEW, $this->buildDevice22Payload(true), $proto, $keyMode, false);
+                    $attempts[] = $this->attemptSpec('device22-nodps', self::CMD_CONTROL_NEW, $this->buildDevice22Payload(false), $proto, $keyMode, false);
+                    $attempts[] = $this->attemptSpec('device22-uid', self::CMD_CONTROL_NEW, $this->buildDevice22Payload(true, true), $proto, $keyMode, false);
                 }
             }
 
@@ -286,11 +294,11 @@ final class TuyaLocalClient
         }
 
         $proto = trim($proto);
-        if (in_array($proto, ['3.3', '3.4', '3.5'], true)) {
+        if (in_array($proto, ['3.2', '3.3', '3.4', '3.5'], true)) {
             return $proto;
         }
 
-        if (preg_match('/3\.[345]/', $proto, $matches)) {
+        if (preg_match('/3\.[2345]/', $proto, $matches)) {
             return $matches[0];
         }
 
@@ -385,8 +393,26 @@ final class TuyaLocalClient
         if ($proto === '3.4') {
             return self::PROTOCOL_HEADER_34;
         }
+        if ($proto === '3.2') {
+            return self::PROTOCOL_HEADER_32;
+        }
 
         return self::PROTOCOL_HEADER_33;
+    }
+
+    private function sendHeartbeat($socket, string $key, string $proto): void
+    {
+        $this->log('Sende Heartbeat (0x09) vor Abfrage');
+        $payload = $this->encrypt('{}', $key);
+        $packet = $this->packMessage(self::CMD_HEART_BEAT, $payload, null);
+        $this->log('Heartbeat hex=' . $this->hexPreview($packet, 48));
+        @socket_write($socket, $packet, strlen($packet));
+        usleep(100000);
+        $response = $this->readResponse($socket, null);
+        if ($response !== null) {
+            $this->log(sprintf('Heartbeat Antwort %d Bytes', strlen($response)));
+        }
+        $this->seqNo = 0;
     }
 
     private function wrapWirePayload(string $encrypted, int $command, string $proto): string
@@ -400,7 +426,7 @@ final class TuyaLocalClient
 
     private function needsProtocolHeader(int $command): bool
     {
-        if (in_array($command, [self::CMD_STATUS, self::CMD_DP_QUERY_NEW, self::CMD_SESS_KEY_NEG_START, self::CMD_SESS_KEY_NEG_RESP, self::CMD_SESS_KEY_NEG_FINISH], true)) {
+        if (in_array($command, [self::CMD_STATUS, self::CMD_DP_QUERY_NEW, self::CMD_HEART_BEAT, self::CMD_SESS_KEY_NEG_START, self::CMD_SESS_KEY_NEG_RESP, self::CMD_SESS_KEY_NEG_FINISH], true)) {
             return false;
         }
 
@@ -718,7 +744,7 @@ final class TuyaLocalClient
             return 'Gerät schloss Verbindung ohne Antwort (' . socket_strerror($meta) . ')';
         }
 
-        return 'Gerät schloss Verbindung ohne Antwort (0 Bytes — LAN evtl. deaktiviert oder falsches Protokoll)';
+        return 'Gerät schloss Verbindung ohne Antwort (0 Bytes — ggf. Cloud-Fallback nutzen)';
     }
 
     /**

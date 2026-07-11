@@ -11,7 +11,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 16;
+    private const MODULE_BUILD = 17;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -28,11 +28,17 @@ class TuyaWaterQuality extends IPSModuleStrict
     private const BUF_DEVICES = 'CloudDevices';
     private const BUF_STATUS = 'CloudCouplingStatus';
 
+    private const DATA_SOURCE_LAN = 'lan';
+    private const DATA_SOURCE_CLOUD = 'cloud';
+    private const DATA_SOURCE_LAN_THEN_CLOUD = 'lan_then_cloud';
+
     public function Create(): void
     {
         parent::Create();
 
         $this->RegisterPropertyBoolean('Active', true);
+        $this->RegisterPropertyString('DataSource', self::DATA_SOURCE_LAN_THEN_CLOUD);
+        $this->RegisterPropertyBoolean('KeepCloudSession', true);
         $this->RegisterPropertyString('CloudUserCode', '');
         $this->RegisterPropertyString('CloudSelectedDevice', '');
         $this->RegisterPropertyString('Host', '');
@@ -114,26 +120,35 @@ class TuyaWaterQuality extends IPSModuleStrict
         $host = trim($this->ReadPropertyString('Host'));
         $deviceId = trim($this->ReadPropertyString('DeviceId'));
         $proto = trim($this->ReadPropertyString('ProtocolVersion'));
+        $dataSource = $this->normalizeDataSource($this->ReadPropertyString('DataSource'));
+        $source = trim((string) $this->GetValue('LastDataSource'));
         $reachable = (bool) $this->GetValue('Reachable');
         $error = trim((string) $this->GetValue('LastError'));
 
         if (!$reachable) {
             return "Aktualisierung fehlgeschlagen\n"
+                . 'Datenquelle: ' . $this->dataSourceLabel($dataSource) . "\n"
                 . 'Host: ' . ($host !== '' ? $host : '(leer)') . "\n"
                 . 'Device ID: ' . ($deviceId !== '' ? $deviceId : '(leer)') . "\n"
                 . 'Protokoll: ' . ($proto !== '' ? $proto : '3.3') . "\n"
                 . 'Fehler: ' . ($error !== '' ? $error : 'unbekannt') . "\n\n"
                 . "Tipps:\n"
-                . "- Host per „LAN-Scan (IP)“ prüfen\n"
-                . "- Protokollversion 3.3 / 3.4 / 3.5 testen\n"
+                . "- Bei LAN-Problemen: Datenquelle „LAN, sonst Cloud“ oder „Nur Cloud“\n"
+                . "- Cloud-Session: QR-Login erneut, KeepCloudSession aktiv lassen\n"
+                . "- Host per „LAN-Scan (IP)“ prüfen oder tinytuya-Test vom Symcon-Server\n"
                 . "- Details: Instanz → Zahnrad → Debug aktivieren → Meldungen";
         }
 
         $lines = [
             'Aktualisierung OK',
-            'Host: ' . $host,
-            'Erreichbar: ja',
+            'Daten via ' . ($source !== '' ? $source : 'LAN'),
+            'Host: ' . ($host !== '' ? $host : '(Cloud)'),
+            'Erreichbar: ' . ($reachable ? 'ja' : 'nein'),
         ];
+
+        if ($source === 'Cloud' && $dataSource === self::DATA_SOURCE_LAN_THEN_CLOUD) {
+            $lines[1] = 'Daten via Cloud (LAN nicht erreichbar)';
+        }
 
         $tds = $this->GetValue('MeasuredTds');
         $temp = $this->GetValue('MeasuredWaterTemp');
@@ -322,7 +337,13 @@ class TuyaWaterQuality extends IPSModuleStrict
         ]);
         $this->applyPendingCloudCoupling();
         $this->persistInstanceConfiguration();
-        $this->CloudLogout();
+
+        if (!$this->ReadPropertyBoolean('KeepCloudSession')) {
+            $this->CloudLogout();
+        } else {
+            $this->setCloudStatus('Gerät übernommen — Cloud-Session bleibt für Fallback aktiv');
+        }
+
         $this->UpdateValues();
 
         $hostHint = $host !== '' ? $host : '(IP fehlt — LAN-Scan klicken)';
@@ -429,7 +450,9 @@ class TuyaWaterQuality extends IPSModuleStrict
         $lines[] = '- IP-Symcon und Sensor in verschiedenen VLANs/Subnetzen';
         $lines[] = '- Firewall blockiert UDP 6666, 6667, 7000';
         $lines[] = '- Gerät sendet nur auf Anfrage (Port 7000) — erneut versuchen';
-        $lines[] = '- LAN-Steuerung in Tuya Smart deaktiviert';
+        $lines[] = '- Keine Tuya-Antwort auf Port 6668 trotz offenem TCP → ggf. Datenquelle „LAN, sonst Cloud“ wählen';
+        $lines[] = '';
+        $lines[] = 'Hinweis: Bei YINMIK/szjcy-Sensoren fehlen oft App-Einstellungen für LAN — das ist normal.';
         $lines[] = '';
         $lines[] = '→ Host manuell eintragen (z. B. ' . ($hintIp !== '' ? $hintIp : '172.18.x.x') . '), Protokoll 3.3 wählen';
         if ($targetDeviceId !== '') {
@@ -445,32 +468,83 @@ class TuyaWaterQuality extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active')) {
             $this->SetValue('Reachable', false);
             $this->SetValue('LastError', 'Modul inaktiv');
+            $this->SetValue('LastDataSource', '');
 
             return;
         }
 
-        $host = trim($this->ReadPropertyString('Host'));
+        $dataSource = $this->normalizeDataSource($this->ReadPropertyString('DataSource'));
         $deviceId = trim($this->ReadPropertyString('DeviceId'));
-        $localKey = trim($this->ReadPropertyString('LocalKey'));
+        $mapping = TuyaWaterQualityMapping::parse($this->ReadPropertyString('DpMapping'));
 
-        if ($host === '' || $deviceId === '' || $localKey === '') {
-            $this->SetValue('Reachable', false);
-            $this->SetValue('LastError', 'Host, Device ID oder Local Key fehlt');
-            $this->SetStatus(self::IS_INVALID_CONFIG);
-            $this->debugLocal('Update', 'Abbruch: unvollständige Konfiguration (host/devId/key)');
+        if ($deviceId === '') {
+            $this->setUpdateFailure('Device ID fehlt', self::IS_INVALID_CONFIG);
 
             return;
+        }
+
+        $lanResult = null;
+        if ($dataSource === self::DATA_SOURCE_LAN || $dataSource === self::DATA_SOURCE_LAN_THEN_CLOUD) {
+            $lanResult = $this->fetchLanStatus($deviceId, $mapping);
+            if ($lanResult['ok']) {
+                $this->applyMeasurementResult($lanResult['dps'], $mapping, 'LAN', true);
+
+                return;
+            }
+        }
+
+        if ($dataSource === self::DATA_SOURCE_CLOUD || $dataSource === self::DATA_SOURCE_LAN_THEN_CLOUD) {
+            $cloudResult = $this->fetchCloudStatus($deviceId);
+            if ($cloudResult['ok']) {
+                $this->applyMeasurementResult($cloudResult['dps'], $mapping, 'Cloud', true);
+
+                return;
+            }
+
+            if ($dataSource === self::DATA_SOURCE_CLOUD) {
+                $this->setUpdateFailure($cloudResult['error'], self::IS_UNREACHABLE);
+
+                return;
+            }
+
+            $lanError = is_array($lanResult) ? trim((string) ($lanResult['error'] ?? '')) : 'LAN nicht versucht';
+            $cloudError = trim((string) ($cloudResult['error'] ?? ''));
+            $this->setUpdateFailure(
+                'LAN: ' . ($lanError !== '' ? $lanError : 'fehlgeschlagen')
+                . ' | Cloud: ' . ($cloudError !== '' ? $cloudError : 'fehlgeschlagen'),
+                self::IS_UNREACHABLE,
+            );
+
+            return;
+        }
+
+        $this->setUpdateFailure(
+            is_array($lanResult) ? (string) ($lanResult['error'] ?? 'LAN-Abfrage fehlgeschlagen') : 'LAN-Abfrage fehlgeschlagen',
+            self::IS_UNREACHABLE,
+        );
+    }
+
+    /**
+     * @param array<string, array{dp: int, scale: float}> $mapping
+     * @return array{ok: bool, dps: array<string|int, mixed>, error: string}
+     */
+    private function fetchLanStatus(string $deviceId, array $mapping): array
+    {
+        $host = trim($this->ReadPropertyString('Host'));
+        $localKey = trim($this->ReadPropertyString('LocalKey'));
+
+        if ($host === '' || $localKey === '') {
+            return ['ok' => false, 'dps' => [], 'error' => 'Host oder Local Key fehlt'];
         }
 
         $this->debugLocal('Update', sprintf(
-            'Abfrage starten host=%s devId=%s proto=%s keyLen=%d',
+            'LAN-Abfrage host=%s devId=%s proto=%s keyLen=%d',
             $host,
             $deviceId,
             $this->ReadPropertyString('ProtocolVersion'),
             strlen($localKey),
         ));
 
-        $mapping = TuyaWaterQualityMapping::parse($this->ReadPropertyString('DpMapping'));
         $dpKeys = $this->extractDpQueryKeys($mapping);
         $scanProto = $this->discoverProtocolForDevice($deviceId);
 
@@ -484,18 +558,46 @@ class TuyaWaterQuality extends IPSModuleStrict
             $dpKeys,
             $scanProto
         );
-        $result = $client->fetchStatus($host);
-        if (!$result['ok']) {
-            $this->SetValue('Reachable', false);
-            $this->SetValue('LastError', $result['error']);
-            $this->SetStatus(self::IS_UNREACHABLE);
-            $this->debugLocal('Update', 'Fehler: ' . $result['error']);
 
-            return;
+        return $client->fetchStatus($host);
+    }
+
+    /**
+     * @return array{ok: bool, dps: array<string|int, mixed>, online: bool, error: string}
+     */
+    private function fetchCloudStatus(string $deviceId): array
+    {
+        $session = $this->loadCloudSession();
+        if ($session === null) {
+            return [
+                'ok' => false,
+                'dps' => [],
+                'online' => false,
+                'error' => 'Keine Cloud-Session — QR-Login erneut durchführen (KeepCloudSession aktiv lassen)',
+            ];
         }
 
-        $values = TuyaWaterQualityMapping::apply($result['dps'], $mapping);
-        $this->debugLocal('Update', 'Mapping angewendet: ' . json_encode($values, JSON_UNESCAPED_UNICODE));
+        $this->debugLocal('Update', 'Cloud-Abfrage devId=' . $deviceId);
+
+        $sharing = new TuyaCloudSharing();
+        $result = $sharing->fetchDeviceStatus($session, $deviceId);
+        $this->saveCloudSession($session);
+
+        return $result;
+    }
+
+    /**
+     * @param array<string|int, mixed> $dps
+     * @param array<string, array{dp: int, scale: float}> $mapping
+     */
+    private function applyMeasurementResult(array $dps, array $mapping, string $sourceLabel, bool $reachable): void
+    {
+        $values = TuyaWaterQualityMapping::apply($dps, $mapping);
+        $this->debugLocal('Update', sprintf(
+            'Mapping (%s) angewendet: %s',
+            $sourceLabel,
+            json_encode($values, JSON_UNESCAPED_UNICODE),
+        ));
 
         if ($values['ph'] !== null) {
             $this->SetValue('MeasuredPh', $values['ph']);
@@ -513,12 +615,43 @@ class TuyaWaterQuality extends IPSModuleStrict
             $this->SetValue('MeasuredWaterTemp', $values['temperature']);
         }
 
-        $this->SetValue('Reachable', true);
+        $this->SetValue('Reachable', $reachable);
+        $this->SetValue('LastDataSource', $sourceLabel);
         $this->SetValue('LastError', '');
         $this->SetValue('LastUpdate', time());
-        $this->SetValue('RawDps', json_encode($result['dps'], JSON_UNESCAPED_UNICODE) ?: '{}');
+        $this->SetValue('RawDps', json_encode($dps, JSON_UNESCAPED_UNICODE) ?: '{}');
         $this->SetStatus(self::IS_ACTIVE);
-        $this->debugLocal('Update', 'Erfolg, DPS=' . (json_encode($result['dps'], JSON_UNESCAPED_UNICODE) ?: '{}'));
+        $this->debugLocal('Update', sprintf('Erfolg via %s, DPS=%s', $sourceLabel, json_encode($dps, JSON_UNESCAPED_UNICODE) ?: '{}'));
+    }
+
+    private function setUpdateFailure(string $error, int $status): void
+    {
+        $this->SetValue('Reachable', false);
+        $this->SetValue('LastDataSource', '');
+        $this->SetValue('LastError', $error);
+        $this->SetStatus($status);
+        $this->debugLocal('Update', 'Fehler: ' . $error);
+    }
+
+    private function normalizeDataSource(string $source): string
+    {
+        $source = strtolower(trim($source));
+        if (in_array($source, [self::DATA_SOURCE_LAN, self::DATA_SOURCE_CLOUD, self::DATA_SOURCE_LAN_THEN_CLOUD], true)) {
+            return $source;
+        }
+
+        return self::DATA_SOURCE_LAN_THEN_CLOUD;
+    }
+
+    /**
+     * @param array<string, mixed> $session
+     */
+    private function saveCloudSession(array $session): void
+    {
+        $encoded = json_encode($session, JSON_UNESCAPED_UNICODE);
+        if (is_string($encoded)) {
+            $this->SetBuffer(self::BUF_SESSION, $encoded);
+        }
     }
 
     private function debugLocal(string $category, string $message): void
@@ -755,7 +888,7 @@ class TuyaWaterQuality extends IPSModuleStrict
             return null;
         }
 
-        if (preg_match('/(3\.[345])/', $version, $matches)) {
+        if (preg_match('/(3\.[2345])/', $version, $matches)) {
             return $matches[1];
         }
 
@@ -797,11 +930,13 @@ class TuyaWaterQuality extends IPSModuleStrict
         $this->RegisterVariableBoolean('Reachable', 'Erreichbar', '~Switch', $pos++);
         $this->RegisterVariableInteger('LastUpdate', 'Letzte Aktualisierung', '~UnixTimestamp', $pos++);
         $this->RegisterVariableString('LastError', 'Letzter Fehler', $textPres, $pos++);
+        $this->RegisterVariableString('LastDataSource', 'Datenquelle (letzte Abfrage)', $textPres, $pos++);
         $this->RegisterVariableString('RawDps', 'Roh-DPS (Debug)', $textPres, $pos++);
 
         $this->DisableAction('Reachable');
         $this->DisableAction('LastUpdate');
         $this->DisableAction('LastError');
+        $this->DisableAction('LastDataSource');
         $this->DisableAction('RawDps');
     }
 
@@ -853,17 +988,45 @@ class TuyaWaterQuality extends IPSModuleStrict
             return;
         }
 
-        $host = trim($this->ReadPropertyString('Host'));
         $deviceId = trim($this->ReadPropertyString('DeviceId'));
+        if ($deviceId === '') {
+            $this->SetStatus(self::IS_INVALID_CONFIG);
+
+            return;
+        }
+
+        $dataSource = $this->normalizeDataSource($this->ReadPropertyString('DataSource'));
+        if ($dataSource === self::DATA_SOURCE_CLOUD) {
+            if ($this->loadCloudSession() === null) {
+                $this->SetStatus(self::IS_INVALID_CONFIG);
+
+                return;
+            }
+
+            $this->SetStatus(self::IS_ACTIVE);
+
+            return;
+        }
+
+        $host = trim($this->ReadPropertyString('Host'));
         $localKey = trim($this->ReadPropertyString('LocalKey'));
 
-        if ($host === '' || $deviceId === '' || $localKey === '') {
+        if ($host === '' || $localKey === '') {
             $this->SetStatus(self::IS_INVALID_CONFIG);
 
             return;
         }
 
         $this->SetStatus(self::IS_ACTIVE);
+    }
+
+    private function dataSourceLabel(string $dataSource): string
+    {
+        return match ($dataSource) {
+            self::DATA_SOURCE_LAN => 'Nur LAN',
+            self::DATA_SOURCE_CLOUD => 'Nur Cloud',
+            default => 'LAN, sonst Cloud',
+        };
     }
 
     private function buildSummary(): string

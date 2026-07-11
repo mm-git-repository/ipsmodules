@@ -90,9 +90,13 @@ final class TuyaWaterQualityMapping
         foreach ($mapping as $ident => $cfg) {
             $dp = (string) $cfg['dp'];
             if (!array_key_exists($dp, $dps) && !array_key_exists((int) $dp, $dps)) {
-                continue;
+                if (!array_key_exists($ident, $dps)) {
+                    continue;
+                }
+                $raw = $dps[$ident];
+            } else {
+                $raw = $dps[$dp] ?? $dps[(int) $dp] ?? null;
             }
-            $raw = $dps[$dp] ?? $dps[(int) $dp] ?? null;
             if ($raw === null || $raw === '' || !is_numeric($raw)) {
                 continue;
             }

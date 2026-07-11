@@ -11,6 +11,25 @@
             "caption": "Aktiv"
         },
         {
+            "type": "Select",
+            "name": "DataSource",
+            "caption": "Datenquelle",
+            "options": [
+                {
+                    "label": "Nur LAN",
+                    "value": "lan"
+                },
+                {
+                    "label": "Nur Cloud",
+                    "value": "cloud"
+                },
+                {
+                    "label": "LAN, sonst Cloud",
+                    "value": "lan_then_cloud"
+                }
+            ]
+        },
+        {
             "type": "ExpansionPanel",
             "caption": "Tuya-Kopplung (einmalig)",
             "expanded": false,
@@ -35,6 +54,11 @@
                             "value": ""
                         }
                     ]
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "KeepCloudSession",
+                    "caption": "Cloud-Session nach Übernahme behalten (für Cloud-Fallback)"
                 }
             ]
         },
@@ -58,6 +82,10 @@
             "name": "ProtocolVersion",
             "caption": "Tuya-Protokollversion",
             "options": [
+                {
+                    "label": "3.2",
+                    "value": "3.2"
+                },
                 {
                     "label": "3.3",
                     "value": "3.3"
@@ -118,7 +146,7 @@
         },
         {
             "type": "Label",
-            "caption": "Kopplung: User Code → QR-Code anzeigen → scannen → Auf Anmeldung warten → Gerät wählen → „Gerät übernehmen & speichern“. Local Key erscheint danach im Feld oben."
+            "caption": "Kopplung: User Code → QR-Code anzeigen → scannen → Auf Anmeldung warten → Gerät wählen → „Gerät übernehmen & speichern“. Local Key erscheint danach im Feld oben. Für Cloud-Fallback: „Cloud-Session behalten“ aktiv lassen."
         }
     ],
     "status": [

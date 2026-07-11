@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * Tuya Cloud Sharing API (Home Assistant QR flow) — nur für Einrichtung / Local Key.
+ * Tuya Cloud Sharing API (Home Assistant QR flow) — Einrichtung, Local Key und Cloud-Status.
  */
 final class TuyaCloudSharing
 {
@@ -174,6 +174,108 @@ final class TuyaCloudSharing
         }
 
         return ['ok' => true, 'devices' => $devices, 'error' => ''];
+    }
+
+    /**
+     * @param array<string, mixed> $session
+     * @return array{ok: bool, dps: array<string|int, mixed>, online: bool, error: string}
+     */
+    public function fetchDeviceStatus(array &$session, string $deviceId): array
+    {
+        $deviceId = trim($deviceId);
+        if ($deviceId === '') {
+            return ['ok' => false, 'dps' => [], 'online' => false, 'error' => 'Device ID fehlt'];
+        }
+
+        $api = $this->createCustomerApi($session);
+        if ($api === null) {
+            return ['ok' => false, 'dps' => [], 'online' => false, 'error' => 'Cloud-Session unvollständig'];
+        }
+
+        $response = $api->get('/v1.0/m/life/ha/devices/detail', ['devIds' => $deviceId]);
+        $session['token_info'] = $api->getTokenInfo();
+        if ($response === null || !($response['success'] ?? false)) {
+            $msg = is_array($response) ? (string) ($response['msg'] ?? $response['errorMsg'] ?? 'Cloud-Abfrage fehlgeschlagen') : 'Cloud-Abfrage fehlgeschlagen';
+
+            return ['ok' => false, 'dps' => [], 'online' => false, 'error' => $msg];
+        }
+
+        $items = self::normalizeResultList($response['result'] ?? null);
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $id = (string) ($item['id'] ?? $item['devId'] ?? '');
+            if ($id !== $deviceId) {
+                continue;
+            }
+
+            $dps = self::statusListToDps($item['status'] ?? []);
+            if ($dps === []) {
+                return [
+                    'ok' => false,
+                    'dps' => [],
+                    'online' => (bool) ($item['online'] ?? false),
+                    'error' => 'Cloud-Antwort ohne Status-Daten',
+                ];
+            }
+
+            return [
+                'ok' => true,
+                'dps' => $dps,
+                'online' => (bool) ($item['online'] ?? false),
+                'error' => '',
+            ];
+        }
+
+        return ['ok' => false, 'dps' => [], 'online' => false, 'error' => 'Gerät nicht in Cloud-Antwort gefunden'];
+    }
+
+    /**
+     * @param mixed $status
+     * @return array<string|int, mixed>
+     */
+    public static function statusListToDps(mixed $status): array
+    {
+        $dps = [];
+
+        if (!is_array($status)) {
+            return $dps;
+        }
+
+        if ($status !== [] && !self::isListArray($status)) {
+            foreach ($status as $key => $value) {
+                if (is_numeric($key)) {
+                    $dps[(string) $key] = $value;
+                }
+            }
+
+            return $dps;
+        }
+
+        foreach ($status as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $value = $item['value'] ?? null;
+            if ($value === null) {
+                continue;
+            }
+
+            $dpId = $item['dpId'] ?? $item['dp_id'] ?? null;
+            if ($dpId !== null && is_numeric($dpId)) {
+                $dps[(string) $dpId] = $value;
+                continue;
+            }
+
+            $code = (string) ($item['code'] ?? '');
+            if ($code !== '' && ctype_digit($code)) {
+                $dps[$code] = $value;
+            }
+        }
+
+        return $dps;
     }
 
     /**
@@ -432,6 +534,14 @@ final class TuyaCloudCustomerApi
         }
 
         return $decoded;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getTokenInfo(): array
+    {
+        return $this->tokenInfo;
     }
 
     private function refreshAccessTokenIfNeeded(): void
