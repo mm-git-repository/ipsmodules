@@ -253,6 +253,58 @@
     min-width: 0;
 }
 
+.wwhl-auto-pv-gate {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    margin-left: auto;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.25;
+    border: 1px solid rgba(128, 128, 128, 0.3);
+    background: rgba(128, 128, 128, 0.08);
+}
+
+.wwhl-auto-pv-gate.open {
+    border-color: rgba(22, 163, 74, 0.45);
+    background: rgba(22, 163, 74, 0.12);
+}
+
+.wwhl-auto-pv-gate.closed {
+    border-color: rgba(220, 38, 38, 0.35);
+    background: rgba(220, 38, 38, 0.08);
+}
+
+.wwhl-auto-pv-gate-label {
+    font-size: 10px;
+    font-weight: 600;
+    opacity: 0.8;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.wwhl-auto-pv-gate-state {
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.wwhl-auto-pv-gate.open .wwhl-auto-pv-gate-state {
+    color: #16a34a;
+}
+
+.wwhl-auto-pv-gate.closed .wwhl-auto-pv-gate-state {
+    color: #dc2626;
+}
+
+.wwhl-auto-pv-gate-watts {
+    font-size: 11px;
+    opacity: 0.85;
+    white-space: nowrap;
+}
+
 .wwhl-auto-msg {
     margin-top: 8px;
     font-size: 13px;

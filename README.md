@@ -8,7 +8,7 @@ Eine IP-Symcon-Bibliothek kann **mehrere Module** enthalten. Symcon erkennt sie 
 |--------|-------|--------------|
 | `PIXOOEnergyViewer/` | PIXOO Energy Viewer | SMA/Home-Manager-Werte auf Pixoo-Display |
 | `WifiWhirl/` | WifiWhirl | Bestway-Whirlpool per HTTP (Polling) |
-| `TuyaWaterQuality/` | Yieryi Wasserqualität | Yieryi/Tuya-Sensor (pH, ORP, EC, TDS) per LAN |
+| `TuyaWaterQuality/` | Yieryi Wasserqualität | Yieryi/Tuya-Sensor (pH, ORP, EC, TDS) per LAN — **[Einrichtungsanleitung](TuyaWaterQuality/EINRICHTUNG.md)** |
 
 ## Versionierung
 
