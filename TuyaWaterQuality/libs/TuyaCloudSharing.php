@@ -222,7 +222,7 @@ final class TuyaCloudSharing
                 );
             }
 
-            $specs = $this->fetchDeviceSpecifications($api, $session, $deviceId);
+            $specs = $this->queryDeviceSpecificationsViaApi($api, $session, $deviceId);
 
             return [
                 'ok' => true,
@@ -248,14 +248,14 @@ final class TuyaCloudSharing
             return ['ok' => false, 'status_range' => [], 'codes' => []];
         }
 
-        return $this->fetchDeviceSpecifications($api, $session, $deviceId);
+        return $this->queryDeviceSpecificationsViaApi($api, $session, $deviceId);
     }
 
     /**
      * @param array<string, mixed> $session
      * @return array{ok: bool, status_range: array<string, mixed>, codes: list<string>}
      */
-    private function fetchDeviceSpecifications(TuyaCloudCustomerApi $api, array &$session, string $deviceId): array
+    private function queryDeviceSpecificationsViaApi(TuyaCloudCustomerApi $api, array &$session, string $deviceId): array
     {
         $deviceId = trim($deviceId);
         if ($deviceId === '') {
@@ -341,7 +341,7 @@ final class TuyaCloudSharing
                     ];
                 }
 
-                $specs = $this->fetchDeviceSpecifications($api, $session, $deviceId);
+                $specs = $this->queryDeviceSpecificationsViaApi($api, $session, $deviceId);
 
                 return [
                     'ok' => true,

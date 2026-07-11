@@ -13,7 +13,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 24;
+    private const MODULE_BUILD = 25;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -63,6 +63,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 
     public function ApplyChanges(): void
     {
+        $this->ensureConfigurationDefaults();
         $this->applyPendingCloudCoupling();
 
         parent::ApplyChanges();
@@ -78,6 +79,8 @@ class TuyaWaterQuality extends IPSModuleStrict
 
     public function GetConfigurationForm(): string
     {
+        $this->ensureConfigurationDefaults();
+
         $form = json_decode((string) file_get_contents(__DIR__ . '/form.json'), true);
         if (!is_array($form)) {
             return '{}';
@@ -1308,6 +1311,79 @@ class TuyaWaterQuality extends IPSModuleStrict
         }
 
         $this->SetStatus(self::IS_ACTIVE);
+    }
+
+    public function Migrate(string $JSONData): string
+    {
+        parent::Migrate($JSONData);
+
+        $data = json_decode($JSONData, true);
+        if (!is_array($data)) {
+            return $JSONData;
+        }
+        if (!isset($data['configuration']) || !is_array($data['configuration'])) {
+            $data['configuration'] = [];
+        }
+
+        foreach ($this->migrationDefaults() as $key => $default) {
+            if (!array_key_exists($key, $data['configuration'])) {
+                $data['configuration'][$key] = $default;
+            }
+        }
+
+        $encoded = json_encode($data, JSON_UNESCAPED_UNICODE);
+
+        return is_string($encoded) && $encoded !== '' ? $encoded : $JSONData;
+    }
+
+    /**
+     * Fehlende Konfigurationsschlüssel nach Modul-Update ergänzen.
+     *
+     * @return array<string, bool|int|string>
+     */
+    private function migrationDefaults(): array
+    {
+        return [
+            'Active' => true,
+            'DataSource' => self::DATA_SOURCE_LAN_THEN_CLOUD,
+            'KeepCloudSession' => true,
+            'CloudUserCode' => '',
+            'CloudSelectedDevice' => '',
+            'OpenApiAccessId' => '',
+            'OpenApiAccessSecret' => '',
+            'OpenApiRegion' => 'eu',
+            'Host' => '',
+            'DeviceId' => '',
+            'LocalKey' => '',
+            'ProtocolVersion' => '3.3',
+            'UpdateIntervalSeconds' => self::UPDATE_INTERVAL_DEFAULT_SEC,
+            'DpMapping' => TuyaWaterQualityMapping::DEFAULT_JSON,
+        ];
+    }
+
+    private function ensureConfigurationDefaults(): void
+    {
+        if (!function_exists('IPS_GetConfiguration') || !function_exists('IPS_SetProperty')) {
+            return;
+        }
+
+        $raw = IPS_GetConfiguration($this->InstanceID);
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            return;
+        }
+
+        $configuration = $data['configuration'] ?? $data;
+        if (!is_array($configuration)) {
+            return;
+        }
+
+        foreach ($this->migrationDefaults() as $key => $default) {
+            if (array_key_exists($key, $configuration)) {
+                continue;
+            }
+            IPS_SetProperty($this->InstanceID, $key, $default);
+        }
     }
 
     private function dataSourceLabel(string $dataSource): string
