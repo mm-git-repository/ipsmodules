@@ -11,7 +11,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 7;
+    private const MODULE_BUILD = 8;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -23,6 +23,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 
     private const BUF_QR_TOKEN = 'CloudQrToken';
     private const BUF_QR_IMAGE = 'CloudQrImageDataUri';
+    private const BUF_PENDING_CLOUD = 'PendingCloudApply';
     private const BUF_SESSION = 'CloudSession';
     private const BUF_DEVICES = 'CloudDevices';
     private const BUF_STATUS = 'CloudCouplingStatus';
@@ -49,6 +50,8 @@ class TuyaWaterQuality extends IPSModuleStrict
 
     public function ApplyChanges(): void
     {
+        $this->applyPendingCloudCoupling();
+
         parent::ApplyChanges();
 
         $this->ensureProfiles();
@@ -241,7 +244,6 @@ class TuyaWaterQuality extends IPSModuleStrict
         }
 
         if (!$this->setInstanceProperty('DeviceId', $deviceId)
-            || !$this->setInstanceProperty('LocalKey', $localKey)
             || !$this->setInstanceProperty('DpMapping', $mapping)) {
             return 'Eigenschaften konnten nicht gesetzt werden.';
         }
@@ -250,16 +252,23 @@ class TuyaWaterQuality extends IPSModuleStrict
             $this->setInstanceProperty('Host', $host);
         }
 
+        $this->storePendingCloudApply([
+            'DeviceId' => $deviceId,
+            'LocalKey' => $localKey,
+            'Host' => $host,
+            'DpMapping' => $mapping,
+        ]);
+        $this->setInstanceProperty('LocalKey', $localKey);
+
         $this->CloudLogout();
 
         $hostHint = $host !== '' ? $host : '(IP fehlt — LAN-Scan oder Router prüfen)';
 
         return sprintf(
-            "Gerät übernommen: %s\nDevice ID: %s\nHost: %s\nDP-Mapping: %s\n\n→ Jetzt „Übernehmen“ klicken und „Jetzt aktualisieren“ testen.",
+            "Gerät übernommen: %s\nDevice ID: %s\nLocal Key: gesetzt (wird beim Übernehmen gespeichert)\nHost: %s\n\n→ Jetzt „Übernehmen“ klicken.\n(Hinweis: Passwortfeld bleibt leer — das ist normal.)",
             $name,
             $deviceId,
             $hostHint,
-            $productId !== '' ? $productId : 'Standard/YINMIK',
         );
     }
 
@@ -505,6 +514,49 @@ class TuyaWaterQuality extends IPSModuleStrict
         }
 
         return (bool) IPS_SetProperty($this->InstanceID, $name, $value);
+    }
+
+    /**
+     * @param array{DeviceId: string, LocalKey: string, Host: string, DpMapping: string} $data
+     */
+    private function storePendingCloudApply(array $data): void
+    {
+        $encoded = json_encode($data, JSON_UNESCAPED_UNICODE);
+        $this->SetBuffer(self::BUF_PENDING_CLOUD, is_string($encoded) ? $encoded : '');
+        $this->setCloudStatus('Gerät bereit — bitte „Übernehmen“ klicken (Local Key wird gespeichert)');
+    }
+
+    private function applyPendingCloudCoupling(): void
+    {
+        $raw = trim((string) $this->GetBuffer(self::BUF_PENDING_CLOUD));
+        if ($raw === '') {
+            return;
+        }
+
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            $this->SetBuffer(self::BUF_PENDING_CLOUD, '');
+
+            return;
+        }
+
+        $deviceId = trim((string) ($data['DeviceId'] ?? ''));
+        $localKey = trim((string) ($data['LocalKey'] ?? ''));
+        if ($deviceId === '' || $localKey === '') {
+            return;
+        }
+
+        $this->setInstanceProperty('DeviceId', $deviceId);
+        $this->setInstanceProperty('LocalKey', $localKey);
+        $this->setInstanceProperty('DpMapping', trim((string) ($data['DpMapping'] ?? TuyaWaterQualityMapping::DEFAULT_JSON)));
+
+        $host = trim((string) ($data['Host'] ?? ''));
+        if ($host !== '') {
+            $this->setInstanceProperty('Host', $host);
+        }
+
+        $this->SetBuffer(self::BUF_PENDING_CLOUD, '');
+        $this->setCloudStatus('Gerät übernommen — Konfiguration gespeichert');
     }
 
     /**

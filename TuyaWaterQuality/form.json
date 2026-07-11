@@ -51,7 +51,7 @@
         {
             "type": "PasswordTextBox",
             "name": "LocalKey",
-            "caption": "Tuya Local Key"
+            "caption": "Tuya Local Key (bleibt nach Cloud-Übernahme leer sichtbar — wird beim Übernehmen gespeichert)"
         },
         {
             "type": "Select",
