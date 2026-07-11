@@ -42,7 +42,7 @@ Expansion **„Tuya-Kopplung (einmalig)“** in der Instanz:
 | Schritt | Aktion |
 |---------|--------|
 | 1 | **User Code** aus Tuya Smart: *Ich → Einstellungen → Konto und Sicherheit → User Code* eintragen → **Übernehmen** |
-| 2 | **QR-Code anzeigen** → Popup mit QR → in Tuya Smart scannen (*+* → Scannen) |
+| 2 | **QR-Code anzeigen** → Browser mit QR-Bild öffnet sich (IP-Symcon unterstützt kein HTML im Dialog) |
 | 3 | **Auf Anmeldung warten** (bis zu ~1 Minute Wartezeit pro Klick) |
 | 4 | **Gerät aus Cloud-Liste** wählen (z. B. YINMIK Water Quality Tester) |
 | 5 | **Gerät übernehmen** → Felder Device ID, Local Key, Host, DP-Mapping werden gesetzt |

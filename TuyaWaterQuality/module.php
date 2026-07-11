@@ -11,7 +11,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 5;
+    private const MODULE_BUILD = 6;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -22,6 +22,7 @@ class TuyaWaterQuality extends IPSModuleStrict
     private const UPDATE_INTERVAL_MIN_SEC = 15;
 
     private const BUF_QR_TOKEN = 'CloudQrToken';
+    private const BUF_QR_IMAGE = 'CloudQrImageDataUri';
     private const BUF_SESSION = 'CloudSession';
     private const BUF_DEVICES = 'CloudDevices';
     private const BUF_STATUS = 'CloudCouplingStatus';
@@ -110,7 +111,7 @@ class TuyaWaterQuality extends IPSModuleStrict
         $result = $sharing->requestQrToken($userCode);
         if (!$result['ok']) {
             $this->setCloudStatus('QR-Fehler: ' . $result['error']);
-            echo htmlspecialchars($result['error'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            echo $result['error'];
 
             return;
         }
@@ -119,7 +120,15 @@ class TuyaWaterQuality extends IPSModuleStrict
         $this->setCloudStatus('QR bereit — in Tuya Smart scannen, danach „Auf Anmeldung warten“');
 
         $payload = TuyaCloudSharing::QR_LOGIN_PREFIX . $result['token'];
-        echo TuyaQrImage::popupHtml($payload);
+        $dataUri = TuyaQrImage::fetchPngDataUri($payload);
+        if ($dataUri !== null) {
+            $this->SetBuffer(self::BUF_QR_IMAGE, $dataUri);
+        } else {
+            $this->SetBuffer(self::BUF_QR_IMAGE, '');
+        }
+
+        // IPS öffnet https-URLs aus Button-echo im Browser (kein HTML im Dialog).
+        echo TuyaQrImage::chartUrl($payload);
     }
 
     public function CloudPollLogin(): string
@@ -257,6 +266,7 @@ class TuyaWaterQuality extends IPSModuleStrict
     public function CloudLogout(): string
     {
         $this->SetBuffer(self::BUF_QR_TOKEN, '');
+        $this->SetBuffer(self::BUF_QR_IMAGE, '');
         $this->SetBuffer(self::BUF_SESSION, '');
         $this->SetBuffer(self::BUF_DEVICES, '');
         $this->setCloudStatus('Cloud-Session beendet');
@@ -387,6 +397,8 @@ class TuyaWaterQuality extends IPSModuleStrict
             $options[] = ['label' => $label, 'value' => $id];
         }
 
+        $qrImage = trim((string) $this->GetBuffer(self::BUF_QR_IMAGE));
+
         foreach ($form['elements'] ?? [] as $idx => $element) {
             if (($element['type'] ?? '') !== 'ExpansionPanel') {
                 continue;
@@ -395,14 +407,48 @@ class TuyaWaterQuality extends IPSModuleStrict
                 continue;
             }
 
-            foreach ($element['items'] ?? [] as $itemIdx => $item) {
+            $items = [];
+            $hasQrImage = false;
+
+            foreach ($element['items'] ?? [] as $item) {
+                if (($item['name'] ?? '') === 'CloudQrImage') {
+                    continue;
+                }
+
                 if (($item['name'] ?? '') === 'CloudCouplingStatus') {
-                    $form['elements'][$idx]['items'][$itemIdx]['caption'] = $status;
+                    $item['caption'] = $status;
                 }
                 if (($item['name'] ?? '') === 'CloudSelectedDevice') {
-                    $form['elements'][$idx]['items'][$itemIdx]['options'] = $options;
+                    $item['options'] = $options;
+                }
+
+                $items[] = $item;
+
+                if (($item['name'] ?? '') === 'CloudCouplingStatus' && $qrImage !== '') {
+                    $items[] = [
+                        'type' => 'Image',
+                        'name' => 'CloudQrImage',
+                        'caption' => 'QR-Code (Tuya Smart scannen)',
+                        'image' => $qrImage,
+                        'width' => '280px',
+                        'center' => true,
+                    ];
+                    $hasQrImage = true;
                 }
             }
+
+            if (!$hasQrImage && $qrImage !== '') {
+                array_unshift($items, [
+                    'type' => 'Image',
+                    'name' => 'CloudQrImage',
+                    'caption' => 'QR-Code (Tuya Smart scannen)',
+                    'image' => $qrImage,
+                    'width' => '280px',
+                    'center' => true,
+                ]);
+            }
+
+            $form['elements'][$idx]['items'] = $items;
         }
 
         return $form;
