@@ -11,7 +11,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 14;
+    private const MODULE_BUILD = 15;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -379,16 +379,27 @@ class TuyaWaterQuality extends IPSModuleStrict
 
         $lines = [];
         $matchedIp = '';
+        $matchedVersion = '';
         foreach ($found as $entry) {
             $line = sprintf('%s — %s (v%s)', $entry['ip'], $entry['id'], $entry['version']);
             $lines[] = $line;
             if ($targetDeviceId !== '' && $entry['id'] === $targetDeviceId) {
                 $matchedIp = $entry['ip'];
+                $matchedVersion = (string) $entry['version'];
             }
         }
 
+        $applied = [];
         if ($matchedIp !== '' && $this->setInstanceProperty('Host', $matchedIp)) {
-            array_unshift($lines, 'Host gesetzt: ' . $matchedIp . ' (→ Übernehmen)');
+            $applied[] = 'Host=' . $matchedIp;
+        }
+        $normalizedVersion = $this->normalizeDiscoveredProtocol($matchedVersion);
+        if ($normalizedVersion !== null && $this->setInstanceProperty('ProtocolVersion', $normalizedVersion)) {
+            $applied[] = 'Protokoll=' . $normalizedVersion;
+        }
+        if ($applied !== []) {
+            $this->persistInstanceConfiguration();
+            array_unshift($lines, 'Übernommen: ' . implode(', ', $applied));
         }
 
         return "Gefundene Geräte:\n" . implode("\n", $lines);
@@ -426,6 +437,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 
         $mapping = TuyaWaterQualityMapping::parse($this->ReadPropertyString('DpMapping'));
         $dpKeys = $this->extractDpQueryKeys($mapping);
+        $scanProto = $this->discoverProtocolForDevice($deviceId);
 
         $client = new TuyaLocalClient(
             $deviceId,
@@ -434,7 +446,8 @@ class TuyaWaterQuality extends IPSModuleStrict
             function (string $message): void {
                 $this->debugLocal('LAN', $message);
             },
-            $dpKeys
+            $dpKeys,
+            $scanProto
         );
         $result = $client->fetchStatus($host);
         if (!$result['ok']) {
@@ -732,6 +745,37 @@ class TuyaWaterQuality extends IPSModuleStrict
         socket_close($socket);
 
         return array_values($found);
+    }
+
+    private function discoverProtocolForDevice(string $deviceId): ?string
+    {
+        if ($deviceId === '') {
+            return null;
+        }
+
+        foreach ($this->udpDiscoverDevices(2) as $entry) {
+            if (($entry['id'] ?? '') === $deviceId) {
+                $version = $this->normalizeDiscoveredProtocol((string) ($entry['version'] ?? ''));
+
+                return $version;
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizeDiscoveredProtocol(string $version): ?string
+    {
+        $version = trim($version);
+        if ($version === '' || $version === '?') {
+            return null;
+        }
+
+        if (preg_match('/(3\.[345])/', $version, $matches)) {
+            return $matches[1];
+        }
+
+        return null;
     }
 
     private function ensureProfiles(): void
