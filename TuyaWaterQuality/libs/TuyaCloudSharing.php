@@ -127,11 +127,11 @@ final class TuyaCloudSharing
         }
 
         $devices = [];
-        foreach ($homesResponse['result'] ?? [] as $home) {
+        foreach (self::normalizeResultList($homesResponse['result'] ?? null) as $home) {
             if (!is_array($home)) {
                 continue;
             }
-            $homeId = (string) ($home['ownerId'] ?? $home['homeId'] ?? '');
+            $homeId = (string) ($home['ownerId'] ?? $home['homeId'] ?? $home['id'] ?? '');
             if ($homeId === '') {
                 continue;
             }
@@ -141,7 +141,7 @@ final class TuyaCloudSharing
                 continue;
             }
 
-            foreach ($devResponse['result'] ?? [] as $item) {
+            foreach (self::normalizeResultList($devResponse['result'] ?? null) as $item) {
                 if (!is_array($item)) {
                     continue;
                 }
@@ -164,10 +164,52 @@ final class TuyaCloudSharing
         }
 
         if ($devices === []) {
-            return ['ok' => false, 'devices' => [], 'error' => 'Keine Geräte mit Local Key gefunden'];
+            $resultType = gettype($homesResponse['result'] ?? null);
+
+            return [
+                'ok' => false,
+                'devices' => [],
+                'error' => 'Keine Geräte mit Local Key gefunden (API result: ' . $resultType . ')',
+            ];
         }
 
         return ['ok' => true, 'devices' => $devices, 'error' => ''];
+    }
+
+    /**
+     * @return list<mixed>
+     */
+    private static function normalizeResultList(mixed $result): array
+    {
+        if (is_array($result)) {
+            if ($result !== [] && !self::isListArray($result)) {
+                foreach (['list', 'devices', 'homes', 'result'] as $key) {
+                    if (isset($result[$key]) && is_array($result[$key])) {
+                        return array_values($result[$key]);
+                    }
+                }
+            }
+
+            return array_values($result);
+        }
+
+        if (is_string($result) && $result !== '') {
+            $decoded = json_decode($result, true);
+            if (is_array($decoded)) {
+                return self::normalizeResultList($decoded);
+            }
+        }
+
+        return [];
+    }
+
+    private static function isListArray(array $array): bool
+    {
+        if ($array === []) {
+            return true;
+        }
+
+        return array_keys($array) === range(0, count($array) - 1);
     }
 
     /**
@@ -367,6 +409,9 @@ final class TuyaCloudCustomerApi
 
         if (isset($decoded['result']) && is_string($decoded['result']) && $decoded['result'] !== '') {
             $plain = $this->aesGcmDecrypt($decoded['result'], $secret);
+            if ($plain === null) {
+                $plain = $this->aesGcmDecryptConcatBase64($decoded['result'], $secret);
+            }
             if ($plain !== null) {
                 $parsed = json_decode($plain, true);
                 $decoded['result'] = is_array($parsed) ? $parsed : $plain;
@@ -514,7 +559,7 @@ final class TuyaCloudCustomerApi
         $tag = '';
         $cipher = openssl_encrypt(
             $rawData,
-            'aes-256-gcm',
+            'aes-128-gcm',
             $secret,
             OPENSSL_RAW_DATA,
             $nonce,
@@ -543,7 +588,41 @@ final class TuyaCloudCustomerApi
 
         $plain = openssl_decrypt(
             $cipherText,
-            'aes-256-gcm',
+            'aes-128-gcm',
+            $secret,
+            OPENSSL_RAW_DATA,
+            $nonce,
+            $tag,
+        );
+
+        return is_string($plain) ? $plain : null;
+    }
+
+    /** Fallback: base64(nonce) + base64(ciphertext) wie Request-Format. */
+    private function aesGcmDecryptConcatBase64(string $cipherData, string $secret): ?string
+    {
+        $nonceB64Len = 16;
+        if (strlen($cipherData) <= $nonceB64Len) {
+            return null;
+        }
+
+        $nonce = base64_decode(substr($cipherData, 0, $nonceB64Len), true);
+        $cipherB64 = substr($cipherData, $nonceB64Len);
+        if ($nonce === false || strlen($nonce) !== 12 || $cipherB64 === '') {
+            return null;
+        }
+
+        $raw = base64_decode($cipherB64, true);
+        if ($raw === false || strlen($raw) < 16) {
+            return null;
+        }
+
+        $tag = substr($raw, -16);
+        $cipherText = substr($raw, 0, -16);
+
+        $plain = openssl_decrypt(
+            $cipherText,
+            'aes-128-gcm',
             $secret,
             OPENSSL_RAW_DATA,
             $nonce,
@@ -583,7 +662,7 @@ final class TuyaCloudCustomerApi
                 $signStr .= $item . '=' . $val . '||';
             }
         }
-        if (str_ends_with($signStr, '||')) {
+        if (strlen($signStr) >= 2 && substr($signStr, -2) === '||') {
             $signStr = substr($signStr, 0, -2);
         }
 
