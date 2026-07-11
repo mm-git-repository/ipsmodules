@@ -10,6 +10,29 @@ final class TuyaWaterQualityMapping
     /** Standard-Mapping (8-in-1 / PH-W218) — nach Geräte-Test anpassen. */
     public const DEFAULT_JSON = '{"ph":{"dp":106,"scale":0.01},"temperature":{"dp":8,"scale":0.1},"tds":{"dp":111,"scale":1},"ec":{"dp":116,"scale":1},"orp":{"dp":131,"scale":1}}';
 
+    /** YINMIK Water Quality Tester (szjcy, product u5xgcpcngk3pfxb4). */
+    public const YINMIK_SZJCY_JSON = '{"tds":{"dp":1,"scale":0.001},"temperature":{"dp":2,"scale":0.1}}';
+
+    public static function presetForProductId(string $productId): string
+    {
+        $productId = strtolower(trim($productId));
+        if ($productId === 'u5xgcpcngk3pfxb4') {
+            return self::YINMIK_SZJCY_JSON;
+        }
+
+        return self::DEFAULT_JSON;
+    }
+
+    public static function presetForCategory(string $category): string
+    {
+        $category = strtolower(trim($category));
+        if ($category === 'szjcy') {
+            return self::YINMIK_SZJCY_JSON;
+        }
+
+        return self::DEFAULT_JSON;
+    }
+
     /**
      * @return array<string, array{dp: int, scale: float}>
      */

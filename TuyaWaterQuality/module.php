@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/libs/TuyaLocalClient.php';
 require_once __DIR__ . '/libs/TuyaWaterQualityMapping.php';
+require_once __DIR__ . '/libs/TuyaCloudSharing.php';
+require_once __DIR__ . '/libs/TuyaQrImage.php';
 
 class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 4;
+    private const MODULE_BUILD = 5;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -19,11 +21,18 @@ class TuyaWaterQuality extends IPSModuleStrict
     private const UPDATE_INTERVAL_DEFAULT_SEC = 60;
     private const UPDATE_INTERVAL_MIN_SEC = 15;
 
+    private const BUF_QR_TOKEN = 'CloudQrToken';
+    private const BUF_SESSION = 'CloudSession';
+    private const BUF_DEVICES = 'CloudDevices';
+    private const BUF_STATUS = 'CloudCouplingStatus';
+
     public function Create(): void
     {
         parent::Create();
 
         $this->RegisterPropertyBoolean('Active', true);
+        $this->RegisterPropertyString('CloudUserCode', '');
+        $this->RegisterPropertyString('CloudSelectedDevice', '');
         $this->RegisterPropertyString('Host', '');
         $this->RegisterPropertyString('DeviceId', '');
         $this->RegisterPropertyString('LocalKey', '');
@@ -67,6 +76,8 @@ class TuyaWaterQuality extends IPSModuleStrict
             }
         }
 
+        $form = $this->injectCloudFormElements($form);
+
         return json_encode($form, JSON_UNESCAPED_UNICODE);
     }
 
@@ -78,6 +89,215 @@ class TuyaWaterQuality extends IPSModuleStrict
     public function RequestAction(string $Ident, mixed $Value): void
     {
         parent::RequestAction($Ident, $Value);
+    }
+
+    public function CloudShowQr(): void
+    {
+        if (!extension_loaded('openssl')) {
+            echo 'OpenSSL-PHP-Erweiterung fehlt (für Geräteliste nach Login nötig).';
+
+            return;
+        }
+
+        $userCode = trim($this->ReadPropertyString('CloudUserCode'));
+        if ($userCode === '') {
+            echo 'Bitte zuerst den User Code eintragen und Übernehmen klicken.';
+
+            return;
+        }
+
+        $sharing = new TuyaCloudSharing();
+        $result = $sharing->requestQrToken($userCode);
+        if (!$result['ok']) {
+            $this->setCloudStatus('QR-Fehler: ' . $result['error']);
+            echo htmlspecialchars($result['error'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+            return;
+        }
+
+        $this->SetBuffer(self::BUF_QR_TOKEN, $result['token']);
+        $this->setCloudStatus('QR bereit — in Tuya Smart scannen, danach „Auf Anmeldung warten“');
+
+        $payload = TuyaCloudSharing::QR_LOGIN_PREFIX . $result['token'];
+        echo TuyaQrImage::popupHtml($payload);
+    }
+
+    public function CloudPollLogin(): string
+    {
+        if (!extension_loaded('openssl')) {
+            return 'OpenSSL-PHP-Erweiterung fehlt.';
+        }
+
+        $userCode = trim($this->ReadPropertyString('CloudUserCode'));
+        $qrToken = trim((string) $this->GetBuffer(self::BUF_QR_TOKEN));
+
+        if ($userCode === '') {
+            return 'User Code fehlt — eintragen und Übernehmen.';
+        }
+        if ($qrToken === '') {
+            return 'Kein QR-Token — zuerst „QR-Code anzeigen“ klicken.';
+        }
+
+        $sharing = new TuyaCloudSharing();
+        $maxAttempts = 30;
+        for ($attempt = 0; $attempt < $maxAttempts; $attempt++) {
+            $login = $sharing->pollLoginResult($qrToken, $userCode);
+            if ($login['ok']) {
+                $this->SetBuffer(self::BUF_SESSION, json_encode($login['session'], JSON_UNESCAPED_UNICODE) ?: '{}');
+                $this->setCloudStatus('Cloud verbunden — lade Geräteliste …');
+
+                $devices = $sharing->fetchDevices($login['session']);
+                if (!$devices['ok']) {
+                    $this->setCloudStatus('Login OK, Geräte: ' . $devices['error']);
+
+                    return 'Angemeldet, aber Geräteliste fehlgeschlagen: ' . $devices['error'];
+                }
+
+                $this->storeCloudDevices($devices['devices']);
+                $count = count($devices['devices']);
+                $this->setCloudStatus(sprintf('Cloud verbunden — %d Gerät(e) gefunden', $count));
+
+                return sprintf(
+                    "Anmeldung erfolgreich.\n%d Gerät(e) geladen.\nGerät wählen → „Gerät übernehmen“ → Übernehmen.",
+                    $count,
+                );
+            }
+
+            if ($attempt < $maxAttempts - 1) {
+                sleep(2);
+            }
+        }
+
+        $this->setCloudStatus('Warte auf QR-Scan in Tuya Smart …');
+
+        return 'Noch nicht angemeldet — QR in Tuya Smart scannen und erneut „Auf Anmeldung warten“ klicken.';
+    }
+
+    public function CloudFetchDevices(): string
+    {
+        $session = $this->loadCloudSession();
+        if ($session === null) {
+            return 'Keine Cloud-Session — zuerst QR-Login abschließen.';
+        }
+
+        $sharing = new TuyaCloudSharing();
+        $devices = $sharing->fetchDevices($session);
+        if (!$devices['ok']) {
+            $this->setCloudStatus('Geräteliste: ' . $devices['error']);
+
+            return $devices['error'];
+        }
+
+        $this->storeCloudDevices($devices['devices']);
+        $count = count($devices['devices']);
+        $this->setCloudStatus(sprintf('Cloud verbunden — %d Gerät(e) gefunden', $count));
+
+        return sprintf('%d Gerät(e) geladen.', $count);
+    }
+
+    public function CloudApplyDevice(): string
+    {
+        $selectedId = trim($this->ReadPropertyString('CloudSelectedDevice'));
+        if ($selectedId === '') {
+            return 'Kein Gerät ausgewählt.';
+        }
+
+        $devices = $this->loadCloudDevices();
+        $device = null;
+        foreach ($devices as $entry) {
+            if (($entry['id'] ?? '') === $selectedId) {
+                $device = $entry;
+                break;
+            }
+        }
+
+        if ($device === null) {
+            return 'Ausgewähltes Gerät nicht in Cloud-Liste — erneut „Auf Anmeldung warten“.';
+        }
+
+        $deviceId = (string) ($device['id'] ?? '');
+        $localKey = (string) ($device['local_key'] ?? '');
+        $host = trim((string) ($device['ip'] ?? ''));
+        $productId = (string) ($device['product_id'] ?? '');
+        $category = (string) ($device['category'] ?? '');
+        $name = (string) ($device['name'] ?? $deviceId);
+
+        if ($deviceId === '' || $localKey === '') {
+            return 'Gerät ohne Device ID oder Local Key.';
+        }
+
+        $mapping = TuyaWaterQualityMapping::presetForProductId($productId);
+        if ($mapping === TuyaWaterQualityMapping::DEFAULT_JSON && $category !== '') {
+            $mapping = TuyaWaterQualityMapping::presetForCategory($category);
+        }
+
+        if (!$this->setInstanceProperty('DeviceId', $deviceId)
+            || !$this->setInstanceProperty('LocalKey', $localKey)
+            || !$this->setInstanceProperty('DpMapping', $mapping)) {
+            return 'Eigenschaften konnten nicht gesetzt werden.';
+        }
+
+        if ($host !== '') {
+            $this->setInstanceProperty('Host', $host);
+        }
+
+        $this->CloudLogout();
+
+        $hostHint = $host !== '' ? $host : '(IP fehlt — LAN-Scan oder Router prüfen)';
+
+        return sprintf(
+            "Gerät übernommen: %s\nDevice ID: %s\nHost: %s\nDP-Mapping: %s\n\n→ Jetzt „Übernehmen“ klicken und „Jetzt aktualisieren“ testen.",
+            $name,
+            $deviceId,
+            $hostHint,
+            $productId !== '' ? $productId : 'Standard/YINMIK',
+        );
+    }
+
+    public function CloudLogout(): string
+    {
+        $this->SetBuffer(self::BUF_QR_TOKEN, '');
+        $this->SetBuffer(self::BUF_SESSION, '');
+        $this->SetBuffer(self::BUF_DEVICES, '');
+        $this->setCloudStatus('Cloud-Session beendet');
+
+        return 'Cloud-Session gelöscht (Local Key bleibt in den Feldern bis Übernehmen).';
+    }
+
+    public function LanDiscover(): string
+    {
+        if (!function_exists('socket_create')) {
+            return 'PHP socket-Erweiterung fehlt.';
+        }
+
+        $targetDeviceId = trim($this->ReadPropertyString('DeviceId'));
+        if ($targetDeviceId === '') {
+            $selected = trim($this->ReadPropertyString('CloudSelectedDevice'));
+            if ($selected !== '') {
+                $targetDeviceId = $selected;
+            }
+        }
+
+        $found = $this->udpDiscoverDevices(3);
+        if ($found === []) {
+            return "Kein Tuya-Gerät per UDP gefunden.\nAlternativ: python -m tinytuya scan\noder feste IP im Router setzen.";
+        }
+
+        $lines = [];
+        $matchedIp = '';
+        foreach ($found as $entry) {
+            $line = sprintf('%s — %s (v%s)', $entry['ip'], $entry['id'], $entry['version']);
+            $lines[] = $line;
+            if ($targetDeviceId !== '' && $entry['id'] === $targetDeviceId) {
+                $matchedIp = $entry['ip'];
+            }
+        }
+
+        if ($matchedIp !== '' && $this->setInstanceProperty('Host', $matchedIp)) {
+            array_unshift($lines, 'Host gesetzt: ' . $matchedIp . ' (→ Übernehmen)');
+        }
+
+        return "Gefundene Geräte:\n" . implode("\n", $lines);
     }
 
     public function UpdateValues(): void
@@ -140,6 +360,169 @@ class TuyaWaterQuality extends IPSModuleStrict
         $this->SetValue('LastUpdate', time());
         $this->SetValue('RawDps', json_encode($result['dps'], JSON_UNESCAPED_UNICODE) ?: '{}');
         $this->SetStatus(self::IS_ACTIVE);
+    }
+
+    /**
+     * @param array<string, mixed> $form
+     * @return array<string, mixed>
+     */
+    private function injectCloudFormElements(array $form): array
+    {
+        $status = trim((string) $this->GetBuffer(self::BUF_STATUS));
+        if ($status === '') {
+            $status = 'Status: nicht verbunden';
+        }
+
+        $options = [
+            ['label' => '(zuerst QR-Login und Geräteliste laden)', 'value' => ''],
+        ];
+        foreach ($this->loadCloudDevices() as $device) {
+            $id = (string) ($device['id'] ?? '');
+            if ($id === '') {
+                continue;
+            }
+            $name = (string) ($device['name'] ?? $id);
+            $ip = trim((string) ($device['ip'] ?? ''));
+            $label = $ip !== '' ? $name . ' (' . $ip . ')' : $name;
+            $options[] = ['label' => $label, 'value' => $id];
+        }
+
+        foreach ($form['elements'] ?? [] as $idx => $element) {
+            if (($element['type'] ?? '') !== 'ExpansionPanel') {
+                continue;
+            }
+            if (($element['caption'] ?? '') !== 'Tuya-Kopplung (einmalig)') {
+                continue;
+            }
+
+            foreach ($element['items'] ?? [] as $itemIdx => $item) {
+                if (($item['name'] ?? '') === 'CloudCouplingStatus') {
+                    $form['elements'][$idx]['items'][$itemIdx]['caption'] = $status;
+                }
+                if (($item['name'] ?? '') === 'CloudSelectedDevice') {
+                    $form['elements'][$idx]['items'][$itemIdx]['options'] = $options;
+                }
+            }
+        }
+
+        return $form;
+    }
+
+    private function setCloudStatus(string $status): void
+    {
+        $this->SetBuffer(self::BUF_STATUS, $status);
+    }
+
+    /**
+     * @param list<array<string, mixed>> $devices
+     */
+    private function storeCloudDevices(array $devices): void
+    {
+        $encoded = json_encode($devices, JSON_UNESCAPED_UNICODE);
+        $this->SetBuffer(self::BUF_DEVICES, is_string($encoded) ? $encoded : '[]');
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function loadCloudDevices(): array
+    {
+        $raw = (string) $this->GetBuffer(self::BUF_DEVICES);
+        if ($raw === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function loadCloudSession(): ?array
+    {
+        $raw = (string) $this->GetBuffer(self::BUF_SESSION);
+        if ($raw === '') {
+            return null;
+        }
+
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    private function setInstanceProperty(string $name, string $value): bool
+    {
+        if (!function_exists('IPS_SetProperty')) {
+            return false;
+        }
+
+        return (bool) IPS_SetProperty($this->InstanceID, $name, $value);
+    }
+
+    /**
+     * Vereinfachter Tuya-UDP-Discovery (Broadcast Port 6666).
+     *
+     * @return list<array{id: string, ip: string, version: string}>
+     */
+    private function udpDiscoverDevices(int $timeoutSec): array
+    {
+        $socket = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+        if ($socket === false) {
+            return [];
+        }
+
+        socket_set_option($socket, SOL_SOCKET, SO_BROADCAST, 1);
+        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => $timeoutSec, 'usec' => 0]);
+
+        $payload = json_encode([
+            'from' => 'app',
+            'id' => 'scan',
+            'method' => 'discovery',
+            'params' => [],
+            't' => (int) (microtime(true) * 1000),
+            'version' => '1.0',
+        ], JSON_UNESCAPED_UNICODE);
+
+        if (!is_string($payload)) {
+            socket_close($socket);
+
+            return [];
+        }
+
+        @socket_sendto($socket, $payload, strlen($payload), 0, '255.255.255.255', 6666);
+        @socket_sendto($socket, $payload, strlen($payload), 0, '255.255.255.255', 6667);
+
+        $found = [];
+        $deadline = time() + $timeoutSec;
+        while (time() < $deadline) {
+            $buf = '';
+            $from = '';
+            $port = 0;
+            $bytes = @socket_recvfrom($socket, $buf, 4096, 0, $from, $port);
+            if ($bytes === false || $bytes <= 0) {
+                continue;
+            }
+
+            $decoded = json_decode($buf, true);
+            if (!is_array($decoded)) {
+                continue;
+            }
+
+            $id = (string) ($decoded['gwId'] ?? $decoded['devId'] ?? $decoded['id'] ?? '');
+            if ($id === '') {
+                continue;
+            }
+
+            $ip = (string) ($decoded['ip'] ?? $from);
+            $version = (string) ($decoded['version'] ?? $decoded['ver'] ?? '?');
+            $found[$id] = ['id' => $id, 'ip' => $ip, 'version' => $version];
+        }
+
+        socket_close($socket);
+
+        return array_values($found);
     }
 
     private function ensureProfiles(): void

@@ -23,7 +23,15 @@
             "Modulversion": "Module version",
             "Inaktiv": "Inactive",
             "Konfiguration unvollständig": "Configuration incomplete",
-            "Gerät nicht erreichbar": "Device unreachable"
+            "Gerät nicht erreichbar": "Device unreachable",
+            "Tuya-Kopplung (einmalig)": "Tuya pairing (one-time)",
+            "User Code (Tuya Smart → Ich → Einstellungen → Konto und Sicherheit)": "User code (Tuya Smart → Me → Settings → Account and security)",
+            "Gerät aus Cloud-Liste": "Device from cloud list",
+            "QR-Code anzeigen": "Show QR code",
+            "Auf Anmeldung warten": "Wait for login",
+            "Gerät übernehmen": "Apply device",
+            "LAN-Scan (IP)": "LAN scan (IP)",
+            "Cloud-Session beenden": "End cloud session"
         }
     }
 }

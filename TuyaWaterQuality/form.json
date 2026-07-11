@@ -11,6 +11,34 @@
             "caption": "Aktiv"
         },
         {
+            "type": "ExpansionPanel",
+            "caption": "Tuya-Kopplung (einmalig)",
+            "expanded": false,
+            "items": [
+                {
+                    "type": "Label",
+                    "name": "CloudCouplingStatus",
+                    "caption": "Status: nicht verbunden"
+                },
+                {
+                    "type": "ValidationTextBox",
+                    "name": "CloudUserCode",
+                    "caption": "User Code (Tuya Smart → Ich → Einstellungen → Konto und Sicherheit)"
+                },
+                {
+                    "type": "Select",
+                    "name": "CloudSelectedDevice",
+                    "caption": "Gerät aus Cloud-Liste",
+                    "options": [
+                        {
+                            "label": "(zuerst QR-Login und Geräteliste laden)",
+                            "value": ""
+                        }
+                    ]
+                }
+            ]
+        },
+        {
             "type": "ValidationTextBox",
             "name": "Host",
             "caption": "Geräte-IP (LAN)"
@@ -60,12 +88,37 @@
     "actions": [
         {
             "type": "Button",
+            "caption": "QR-Code anzeigen",
+            "onClick": "echo TWQT_CloudShowQr($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Auf Anmeldung warten",
+            "onClick": "echo TWQT_CloudPollLogin($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Gerät übernehmen",
+            "onClick": "echo TWQT_CloudApplyDevice($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "LAN-Scan (IP)",
+            "onClick": "echo TWQT_LanDiscover($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Cloud-Session beenden",
+            "onClick": "echo TWQT_CloudLogout($id);"
+        },
+        {
+            "type": "Button",
             "caption": "Jetzt aktualisieren",
             "onClick": "TWQT_Refresh($id); echo 'OK';"
         },
         {
             "type": "Label",
-            "caption": "Hinweis: Local Key und DP-Mapping nach Geräte-Lieferung mit Tuya Smart / tinytuya verifizieren."
+            "caption": "Kopplung: User Code → QR scannen in Tuya Smart → Auf Anmeldung warten → Gerät wählen → Übernehmen. Danach nur lokaler Betrieb (Port 6668)."
         }
     ],
     "status": [
