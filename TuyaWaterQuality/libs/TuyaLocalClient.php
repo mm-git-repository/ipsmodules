@@ -23,7 +23,8 @@ final class TuyaLocalClient
     private const CMD_CONTROL_NEW = 0x0000000D;
     private const CMD_DP_QUERY_NEW = 0x00000010;
     private const DEFAULT_PORT = 6668;
-    private const SOCKET_TIMEOUT_SEC = 5;
+    private const SOCKET_TIMEOUT_SEC = 3;
+    private const SOCKET_TIMEOUT_QUICK_SEC = 2;
     private const SEND_WAIT_USEC = 150000;
     /** @var string */
     private const LOCAL_NONCE = '0123456789abcdef';
@@ -84,7 +85,7 @@ final class TuyaLocalClient
     /**
      * @return array{ok: bool, dps: array<string|int, mixed>, error: string}
      */
-    public function fetchStatus(string $host): array
+    public function fetchStatus(string $host, bool $quickPoll = false): array
     {
         if ($this->deviceId === '' || $this->localKey === '') {
             return ['ok' => false, 'dps' => [], 'error' => 'Device ID oder Local Key fehlt'];
@@ -100,7 +101,7 @@ final class TuyaLocalClient
         }
 
         $this->log(sprintf(
-            'Start host=%s:%d devId=%s proto=%s scanProto=%s keyLen=%d device22=%s',
+            'Start host=%s:%d devId=%s proto=%s scanProto=%s keyLen=%d device22=%s quick=%s',
             $host,
             self::DEFAULT_PORT,
             $this->deviceId,
@@ -108,35 +109,53 @@ final class TuyaLocalClient
             $this->discoveredProtocol ?? '-',
             strlen($this->localKey),
             $this->isDevice22() ? 'yes' : 'no',
+            $quickPoll ? 'yes' : 'no',
         ));
 
-        $attempts = $this->buildFetchAttempts();
+        $attempts = $this->buildFetchAttempts($quickPoll);
         $lastError = 'Keine Antwort vom Gerät';
+        $zeroByteDisconnects = 0;
 
         foreach ($attempts as $attempt) {
-            $result = $this->fetchStatusAttempt($host, $attempt);
+            $result = $this->fetchStatusAttempt($host, $attempt, $quickPoll);
             if ($result['ok']) {
                 return $result;
             }
             $lastError = $result['error'];
+            if ($this->isZeroByteDisconnectError($lastError)) {
+                $zeroByteDisconnects++;
+                $abortAfter = $quickPoll ? 1 : 2;
+                if ($zeroByteDisconnects >= $abortAfter) {
+                    $this->log('Abbruch nach 0-Bytes-Antwort — vermutlich kein Tuya-LAN am Gerät');
+                    break;
+                }
+            }
         }
 
         return ['ok' => false, 'dps' => [], 'error' => $lastError . ' — Keine Tuya-Antwort auf Port 6668; ggf. Cloud-Fallback aktivieren'];
+    }
+
+    private function isZeroByteDisconnectError(string $error): bool
+    {
+        return str_contains($error, '0 Bytes')
+            || str_contains($error, 'ohne Antwort')
+            || str_contains($error, 'Header unvollständig');
     }
 
     /**
      * @param array{mode: string, command: int, json: string, proto: string, keyMode: string, session: bool} $attempt
      * @return array{ok: bool, dps: array<string|int, mixed>, error: string}
      */
-    private function fetchStatusAttempt(string $host, array $attempt): array
+    private function fetchStatusAttempt(string $host, array $attempt, bool $quickPoll = false): array
     {
         $socket = @socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         if ($socket === false) {
             return ['ok' => false, 'dps' => [], 'error' => 'Socket konnte nicht erstellt werden'];
         }
 
-        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => self::SOCKET_TIMEOUT_SEC, 'usec' => 0]);
-        socket_set_option($socket, SOL_SOCKET, SO_SNDTIMEO, ['sec' => self::SOCKET_TIMEOUT_SEC, 'usec' => 0]);
+        $timeoutSec = $quickPoll ? self::SOCKET_TIMEOUT_QUICK_SEC : self::SOCKET_TIMEOUT_SEC;
+        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => $timeoutSec, 'usec' => 0]);
+        socket_set_option($socket, SOL_SOCKET, SO_SNDTIMEO, ['sec' => $timeoutSec, 'usec' => 0]);
 
         $connected = @socket_connect($socket, $host, self::DEFAULT_PORT);
         if (!$connected) {
@@ -209,9 +228,10 @@ final class TuyaLocalClient
 
             $response = $this->readResponse($socket, $hmacKey);
             if ($response === null) {
-                $this->log($this->describeEmptyRead($socket));
+                $emptyMsg = $this->describeEmptyRead($socket);
+                $this->log($emptyMsg);
 
-                return ['ok' => false, 'dps' => [], 'error' => 'Keine Antwort vom Gerät (' . $attempt['mode'] . ')'];
+                return ['ok' => false, 'dps' => [], 'error' => $emptyMsg . ' (' . $attempt['mode'] . ')'];
             }
 
             $this->log(sprintf('Empfangen %d Bytes, hex=%s', strlen($response), $this->hexPreview($response)));
@@ -240,8 +260,27 @@ final class TuyaLocalClient
     /**
      * @return list<array{mode: string, command: int, json: string, proto: string, keyMode: string, session: bool}>
      */
-    private function buildFetchAttempts(): array
+    private function buildFetchAttempts(bool $quickPoll = false): array
     {
+        if ($quickPoll && $this->isDevice22()) {
+            $proto = in_array($this->protocolVersion, ['3.2', '3.3'], true)
+                ? $this->protocolVersion
+                : '3.3';
+            $attempts = [];
+            foreach ($this->keyModes() as $keyMode) {
+                $attempts[] = $this->attemptSpec(
+                    'device22',
+                    self::CMD_CONTROL_NEW,
+                    $this->buildDevice22Payload(true),
+                    $proto,
+                    $keyMode,
+                    false,
+                );
+            }
+
+            return $attempts;
+        }
+
         $attempts = [];
         $keyModes = $this->keyModes();
         $configuredProto = $this->protocolVersion;

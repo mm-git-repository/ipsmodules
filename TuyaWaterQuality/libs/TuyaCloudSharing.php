@@ -159,6 +159,7 @@ final class TuyaCloudSharing
                     'product_id' => (string) ($item['product_id'] ?? $item['productId'] ?? ''),
                     'category' => (string) ($item['category'] ?? ''),
                     'online' => (bool) ($item['online'] ?? false),
+                    'status' => $item['status'] ?? [],
                 ];
             }
         }
@@ -197,7 +198,7 @@ final class TuyaCloudSharing
         if ($response === null || !($response['success'] ?? false)) {
             $msg = is_array($response) ? (string) ($response['msg'] ?? $response['errorMsg'] ?? 'Cloud-Abfrage fehlgeschlagen') : 'Cloud-Abfrage fehlgeschlagen';
 
-            return ['ok' => false, 'dps' => [], 'online' => false, 'error' => $msg];
+            return $this->fetchDeviceStatusViaHomes($api, $session, $deviceId, $msg);
         }
 
         $items = self::normalizeResultList($response['result'] ?? null);
@@ -229,6 +230,67 @@ final class TuyaCloudSharing
         }
 
         return ['ok' => false, 'dps' => [], 'online' => false, 'error' => 'Gerät nicht in Cloud-Antwort gefunden'];
+    }
+
+    /**
+     * @return array{ok: bool, dps: array<string|int, mixed>, online: bool, error: string}
+     */
+    private function fetchDeviceStatusViaHomes(
+        TuyaCloudCustomerApi $api,
+        array &$session,
+        string $deviceId,
+        string $previousError,
+    ): array {
+        $homesResponse = $api->get('/v1.0/m/life/users/homes');
+        $session['token_info'] = $api->getTokenInfo();
+        if ($homesResponse === null || !($homesResponse['success'] ?? false)) {
+            return ['ok' => false, 'dps' => [], 'online' => false, 'error' => $previousError];
+        }
+
+        foreach (self::normalizeResultList($homesResponse['result'] ?? null) as $home) {
+            if (!is_array($home)) {
+                continue;
+            }
+            $homeId = (string) ($home['ownerId'] ?? $home['homeId'] ?? $home['id'] ?? '');
+            if ($homeId === '') {
+                continue;
+            }
+
+            $devResponse = $api->get('/v1.0/m/life/ha/home/devices', ['homeId' => $homeId]);
+            $session['token_info'] = $api->getTokenInfo();
+            if ($devResponse === null || !($devResponse['success'] ?? false)) {
+                continue;
+            }
+
+            foreach (self::normalizeResultList($devResponse['result'] ?? null) as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                $id = (string) ($item['id'] ?? $item['devId'] ?? '');
+                if ($id !== $deviceId) {
+                    continue;
+                }
+
+                $dps = self::statusListToDps($item['status'] ?? []);
+                if ($dps === []) {
+                    return [
+                        'ok' => false,
+                        'dps' => [],
+                        'online' => (bool) ($item['online'] ?? false),
+                        'error' => $previousError . ' (Homes-Liste ohne Status)',
+                    ];
+                }
+
+                return [
+                    'ok' => true,
+                    'dps' => $dps,
+                    'online' => (bool) ($item['online'] ?? false),
+                    'error' => '',
+                ];
+            }
+        }
+
+        return ['ok' => false, 'dps' => [], 'online' => false, 'error' => $previousError];
     }
 
     /**

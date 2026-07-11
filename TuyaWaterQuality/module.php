@@ -12,7 +12,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 18;
+    private const MODULE_BUILD = 20;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -308,6 +308,10 @@ class TuyaWaterQuality extends IPSModuleStrict
         $deviceId = (string) ($device['id'] ?? '');
         $localKey = (string) ($device['local_key'] ?? '');
         $host = trim((string) ($device['ip'] ?? ''));
+        $cloudReportedHost = $host;
+        if ($host !== '' && !$this->isPrivateLanHost($host)) {
+            $host = '';
+        }
         $productId = (string) ($device['product_id'] ?? '');
         $category = (string) ($device['category'] ?? '');
         $name = (string) ($device['name'] ?? $deviceId);
@@ -348,6 +352,9 @@ class TuyaWaterQuality extends IPSModuleStrict
         $this->UpdateValues();
 
         $hostHint = $host !== '' ? $host : '(IP fehlt — LAN-Scan klicken)';
+        if ($cloudReportedHost !== '' && $host === '') {
+            $hostHint = 'Cloud-IP ' . $cloudReportedHost . ' ist keine LAN-Adresse — bitte 172.18.x.x manuell eintragen';
+        }
         $reachable = $this->GetValue('Reachable') ? 'ja' : 'nein';
         $lastError = trim((string) $this->GetValue('LastError'));
 
@@ -495,6 +502,10 @@ class TuyaWaterQuality extends IPSModuleStrict
         }
 
         if ($dataSource === self::DATA_SOURCE_CLOUD || $dataSource === self::DATA_SOURCE_LAN_THEN_CLOUD) {
+            if ($lanResult !== null && !($lanResult['ok'] ?? false)) {
+                $this->debugLocal('Update', 'LAN fehlgeschlagen — starte Cloud-Fallback');
+            }
+
             $cloudResult = $this->fetchCloudStatus($deviceId);
             if ($cloudResult['ok']) {
                 $this->applyMeasurementResult($cloudResult['dps'], $mapping, 'Cloud', true);
@@ -538,6 +549,14 @@ class TuyaWaterQuality extends IPSModuleStrict
             return ['ok' => false, 'dps' => [], 'error' => 'Host oder Local Key fehlt'];
         }
 
+        if (!$this->isPrivateLanHost($host)) {
+            return [
+                'ok' => false,
+                'dps' => [],
+                'error' => 'Host ' . $host . ' ist keine lokale IP (Tuya-Cloud-WAN) — LAN übersprungen',
+            ];
+        }
+
         $this->debugLocal('Update', sprintf(
             'LAN-Abfrage host=%s devId=%s proto=%s keyLen=%d',
             $host,
@@ -547,7 +566,6 @@ class TuyaWaterQuality extends IPSModuleStrict
         ));
 
         $dpKeys = $this->extractDpQueryKeys($mapping);
-        $scanProto = $this->discoverProtocolForDevice($deviceId);
 
         $client = new TuyaLocalClient(
             $deviceId,
@@ -557,10 +575,10 @@ class TuyaWaterQuality extends IPSModuleStrict
                 $this->debugLocal('LAN', $message);
             },
             $dpKeys,
-            $scanProto
+            null
         );
 
-        return $client->fetchStatus($host);
+        return $client->fetchStatus($host, true);
     }
 
     /**
@@ -584,7 +602,57 @@ class TuyaWaterQuality extends IPSModuleStrict
         $result = $sharing->fetchDeviceStatus($session, $deviceId);
         $this->saveCloudSession($session);
 
+        if (!$result['ok']) {
+            $this->debugLocal('Update', 'Cloud detail fehlgeschlagen: ' . $result['error']);
+            $cached = $this->fetchCloudStatusFromCache($deviceId);
+            if ($cached['ok']) {
+                $this->debugLocal('Update', 'Cloud-Fallback aus Geräteliste OK');
+
+                return $cached;
+            }
+        }
+
         return $result;
+    }
+
+    /**
+     * @return array{ok: bool, dps: array<string|int, mixed>, online: bool, error: string}
+     */
+    private function fetchCloudStatusFromCache(string $deviceId): array
+    {
+        foreach ($this->loadCloudDevices() as $device) {
+            if (($device['id'] ?? '') !== $deviceId) {
+                continue;
+            }
+
+            $dps = TuyaCloudSharing::statusListToDps($device['status'] ?? []);
+            if ($dps === []) {
+                break;
+            }
+
+            return [
+                'ok' => true,
+                'dps' => $dps,
+                'online' => (bool) ($device['online'] ?? false),
+                'error' => '',
+            ];
+        }
+
+        return ['ok' => false, 'dps' => [], 'online' => false, 'error' => 'Kein Status in Cloud-Geräteliste'];
+    }
+
+    private function isPrivateLanHost(string $host): bool
+    {
+        $host = trim($host);
+        if ($host === '' || !filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            return false;
+        }
+
+        return filter_var(
+            $host,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE,
+        ) === false;
     }
 
     /**
@@ -833,7 +901,7 @@ class TuyaWaterQuality extends IPSModuleStrict
         $this->setInstanceProperty('DpMapping', trim((string) ($data['DpMapping'] ?? TuyaWaterQualityMapping::DEFAULT_JSON)));
 
         $host = trim((string) ($data['Host'] ?? ''));
-        if ($host !== '') {
+        if ($host !== '' && $this->isPrivateLanHost($host)) {
             $this->setInstanceProperty('Host', $host);
         }
 
