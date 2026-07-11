@@ -72,6 +72,15 @@ final class TuyaWaterQualityMapping
         return $result;
     }
 
+    /** Cloud-Status-Codes (Tuya HA API) → Messgröße. */
+    private const CLOUD_CODE_ALIASES = [
+        'tds' => ['tds', 'tds_in', 'tds_out', 'tdslife'],
+        'temperature' => ['temperature', 'temp', 'temp_current', 'temp_current_f'],
+        'ph' => ['ph', 'ph_value'],
+        'ec' => ['ec', 'conductivity', 'ec_value'],
+        'orp' => ['orp', 'orp_value'],
+    ];
+
     /**
      * @param array<string|int, mixed> $dps
      * @param array<string, array{dp: int, scale: float}> $mapping
@@ -88,21 +97,67 @@ final class TuyaWaterQualityMapping
         ];
 
         foreach ($mapping as $ident => $cfg) {
-            $dp = (string) $cfg['dp'];
-            if (!array_key_exists($dp, $dps) && !array_key_exists((int) $dp, $dps)) {
-                if (!array_key_exists($ident, $dps)) {
-                    continue;
-                }
-                $raw = $dps[$ident];
-            } else {
-                $raw = $dps[$dp] ?? $dps[(int) $dp] ?? null;
-            }
+            $raw = self::pickRawValue($ident, $dps, $cfg);
             if ($raw === null || $raw === '' || !is_numeric($raw)) {
                 continue;
             }
-            $values[$ident] = round(((float) $raw) * $cfg['scale'], 3);
+
+            $scale = self::resolveScale($ident, $dps, $cfg['scale']);
+            $values[$ident] = round(((float) $raw) * $scale, 3);
         }
 
         return $values;
+    }
+
+    /**
+     * @param array<string|int, mixed> $dps
+     * @param array{dp: int, scale: float} $cfg
+     */
+    private static function pickRawValue(string $ident, array $dps, array $cfg): mixed
+    {
+        $dp = (string) $cfg['dp'];
+        if (array_key_exists($dp, $dps)) {
+            return $dps[$dp];
+        }
+        if (array_key_exists((int) $dp, $dps)) {
+            return $dps[(int) $dp];
+        }
+        if (array_key_exists($ident, $dps)) {
+            return $dps[$ident];
+        }
+
+        foreach (self::CLOUD_CODE_ALIASES[$ident] ?? [] as $code) {
+            if (array_key_exists($code, $dps)) {
+                return $dps[$code];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Cloud liefert bei szjcy oft bereits skalierte Werte (tds_in, temp_current).
+     *
+     * @param array<string|int, mixed> $dps
+     */
+    private static function resolveScale(string $ident, array $dps, float $cfgScale): float
+    {
+        foreach (self::CLOUD_CODE_ALIASES[$ident] ?? [] as $code) {
+            if (!array_key_exists($code, $dps)) {
+                continue;
+            }
+
+            if ($ident === 'tds' && in_array($code, ['tds_in', 'tds_out', 'tdslife'], true)) {
+                return 1.0;
+            }
+            if ($ident === 'temperature' && in_array($code, ['temp_current', 'temp'], true)) {
+                return 1.0;
+            }
+            if ($ident === 'temperature' && $code === 'temp_current_f') {
+                return 1.0;
+            }
+        }
+
+        return $cfgScale;
     }
 }

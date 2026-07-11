@@ -211,14 +211,15 @@ final class TuyaCloudSharing
                 continue;
             }
 
-            $dps = self::statusListToDps($item['status'] ?? []);
+            $statusRaw = self::extractStatusPayload($item);
+            $dps = self::statusListToDps($statusRaw);
             if ($dps === []) {
-                return [
-                    'ok' => false,
-                    'dps' => [],
-                    'online' => (bool) ($item['online'] ?? false),
-                    'error' => 'Cloud-Antwort ohne Status-Daten',
-                ];
+                return $this->fetchDeviceStatusViaHomes(
+                    $api,
+                    $session,
+                    $deviceId,
+                    $this->formatEmptyStatusError($statusRaw),
+                );
             }
 
             return [
@@ -271,7 +272,7 @@ final class TuyaCloudSharing
                     continue;
                 }
 
-                $dps = self::statusListToDps($item['status'] ?? []);
+                $dps = self::statusListToDps(self::extractStatusPayload($item));
                 if ($dps === []) {
                     return [
                         'ok' => false,
@@ -293,6 +294,38 @@ final class TuyaCloudSharing
         return ['ok' => false, 'dps' => [], 'online' => false, 'error' => $previousError];
     }
 
+    private static function formatEmptyStatusError(mixed $statusRaw): string
+    {
+        $preview = json_encode($statusRaw, JSON_UNESCAPED_UNICODE);
+        if (!is_string($preview)) {
+            $preview = gettype($statusRaw);
+        }
+        if (strlen($preview) > 240) {
+            $preview = substr($preview, 0, 240) . '…';
+        }
+
+        return 'Cloud-Antwort ohne Status-Daten (raw: ' . $preview . ')';
+    }
+
+    /**
+     * @param array<string, mixed> $item
+     * @return mixed
+     */
+    private static function extractStatusPayload(array $item): mixed
+    {
+        foreach (['status', 'statusList', 'dps', 'state'] as $key) {
+            if (!isset($item[$key])) {
+                continue;
+            }
+            $payload = $item[$key];
+            if (is_array($payload) && $payload !== []) {
+                return $payload;
+            }
+        }
+
+        return $item['status'] ?? [];
+    }
+
     /**
      * @param mixed $status
      * @return array<string|int, mixed>
@@ -307,7 +340,7 @@ final class TuyaCloudSharing
 
         if ($status !== [] && !self::isListArray($status)) {
             foreach ($status as $key => $value) {
-                if (is_numeric($key)) {
+                if (is_string($key) || is_int($key)) {
                     $dps[(string) $key] = $value;
                 }
             }
@@ -320,19 +353,22 @@ final class TuyaCloudSharing
                 continue;
             }
 
-            $value = $item['value'] ?? null;
-            if ($value === null) {
+            if (!array_key_exists('value', $item)) {
+                continue;
+            }
+
+            $value = $item['value'];
+            if (is_array($value) || is_object($value)) {
                 continue;
             }
 
             $dpId = $item['dpId'] ?? $item['dp_id'] ?? null;
             if ($dpId !== null && is_numeric($dpId)) {
                 $dps[(string) $dpId] = $value;
-                continue;
             }
 
             $code = (string) ($item['code'] ?? '');
-            if ($code !== '' && ctype_digit($code)) {
+            if ($code !== '') {
                 $dps[$code] = $value;
             }
         }
@@ -349,8 +385,12 @@ final class TuyaCloudSharing
             if ($result !== [] && !self::isListArray($result)) {
                 foreach (['list', 'devices', 'homes', 'result'] as $key) {
                     if (isset($result[$key]) && is_array($result[$key])) {
-                        return array_values($result[$key]);
+                        return self::normalizeResultList($result[$key]);
                     }
+                }
+
+                if (isset($result['id']) || isset($result['devId'])) {
+                    return [$result];
                 }
             }
 

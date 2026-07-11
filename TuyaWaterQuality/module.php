@@ -12,7 +12,7 @@ class TuyaWaterQuality extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 20;
+    private const MODULE_BUILD = 21;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -610,6 +610,9 @@ class TuyaWaterQuality extends IPSModuleStrict
 
                 return $cached;
             }
+            $this->debugLocal('Update', 'Cloud-Cache: ' . $cached['error']);
+        } else {
+            $this->debugLocal('Update', 'Cloud-DPS: ' . (json_encode($result['dps'], JSON_UNESCAPED_UNICODE) ?: '{}'));
         }
 
         return $result;
