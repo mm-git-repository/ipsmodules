@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 20;
+    private const MODULE_BUILD = 21;
 
     private const IS_CREATING = 101;
     private const IS_ACTIVE = 102;
@@ -316,6 +316,8 @@ class WifiWhirl extends IPSModuleStrict
         if ($restoredFromBackup > 0) {
             if ($invokeParent) {
                 parent::ApplyChanges();
+            } else {
+                $this->applyRestoredConfiguration();
             }
             $this->SendDebug(
                 'Konfiguration',
@@ -323,6 +325,7 @@ class WifiWhirl extends IPSModuleStrict
                 0,
             );
         }
+        $this->syncAutomationEnabledFromPersisted();
 
         $this->sanitizeConfigurationProperties();
 
@@ -428,7 +431,7 @@ class WifiWhirl extends IPSModuleStrict
             $this->SetValue($Ident, $Value);
         }
 
-        if ($this->ReadPropertyBoolean('AutomationEnabled') && in_array($Ident, self::MANUAL_OVERRIDE_IDENTS, true)) {
+        if ($this->readAutomationEnabledProperty() && in_array($Ident, self::MANUAL_OVERRIDE_IDENTS, true)) {
             $this->applyManualOverride($Ident);
             $this->syncAutomationManualPauseVariable();
         }
@@ -522,12 +525,14 @@ class WifiWhirl extends IPSModuleStrict
         $this->markConfigValidationGrace();
         $restored = $this->restoreFromPersistentBackup();
         if ($restored > 0) {
+            $this->applyRestoredConfiguration();
             $this->SendDebug(
                 'Konfiguration',
                 $restored . ' Einstellung(en) aus Backup wiederhergestellt (StartupGuard).',
                 0,
             );
         }
+        $this->syncAutomationEnabledFromPersisted();
         if ($this->handlePostKernelRestartIfNeeded()) {
             $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
 
@@ -559,7 +564,7 @@ class WifiWhirl extends IPSModuleStrict
         $surplusW = $this->readPvSurplusW();
         $this->SetValue('AutomationPvSurplus', $surplusW);
 
-        if (!$this->ReadPropertyBoolean('AutomationEnabled')) {
+        if (!$this->readAutomationEnabledProperty()) {
             $this->SetValue('AutomationStatus', 'Automatisierung deaktiviert');
             $this->SetValue('AutomationPvGateOpen', false);
             $this->SetValue('AutomationPumpDesired', false);
@@ -697,7 +702,7 @@ class WifiWhirl extends IPSModuleStrict
 
     private function handleAutomationEnabledTransition(): void
     {
-        $enabled = $this->ReadPropertyBoolean('AutomationEnabled');
+        $enabled = $this->readAutomationEnabledProperty();
         $raw = $this->GetBuffer('AutoWasAutomationEnabled');
         if ($raw === false || $raw === '') {
             $this->SetBuffer('AutoWasAutomationEnabled', $enabled ? '1' : '0');
@@ -821,7 +826,7 @@ class WifiWhirl extends IPSModuleStrict
         ?array $heaterPropertyRows = null,
     ): array {
         return [
-            'enabled' => $enabled ?? $this->ReadPropertyBoolean('AutomationEnabled'),
+            'enabled' => $enabled ?? $this->readAutomationEnabledProperty(),
             'status' => $this->getAutomationStatusSafe(),
             'pumpRules' => WifiWhirlRuleEditor::editorRowsFromProperty(
                 $pumpPropertyRows ?? $this->readRulesPropertyRaw('AutomationPumpRules'),
@@ -1123,7 +1128,7 @@ class WifiWhirl extends IPSModuleStrict
         $interval = max(self::AUTOMATION_INTERVAL_MIN_SEC, (int) $this->ReadPropertyInteger('AutomationIntervalSec'));
         if (
             $this->ReadPropertyBoolean('Active')
-            && $this->ReadPropertyBoolean('AutomationEnabled')
+            && $this->readAutomationEnabledProperty()
             && $this->readHostProperty() !== ''
         ) {
             $this->SetTimerInterval('Automation', $interval * 1000);
@@ -1427,6 +1432,72 @@ class WifiWhirl extends IPSModuleStrict
         return '';
     }
 
+    private function readAutomationEnabledProperty(): bool
+    {
+        if ($this->ReadPropertyBoolean('AutomationEnabled')) {
+            return true;
+        }
+
+        if ($this->readAutomationEnabledFromPersistedOnly()) {
+            return true;
+        }
+
+        $backup = $this->loadPersistentConfigurationBackup();
+        if (
+            $backup !== null
+            && array_key_exists('AutomationEnabled', $backup)
+            && (bool) $backup['AutomationEnabled']
+        ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function readAutomationEnabledFromPersistedOnly(): bool
+    {
+        $persisted = $this->getPersistedConfigurationValues();
+        if ($persisted !== null && array_key_exists('AutomationEnabled', $persisted)) {
+            return (bool) $persisted['AutomationEnabled'];
+        }
+
+        return false;
+    }
+
+    private function syncAutomationEnabledFromPersisted(): bool
+    {
+        if ($this->ReadPropertyBoolean('AutomationEnabled')) {
+            return false;
+        }
+        if (!$this->readAutomationEnabledFromPersistedOnly()) {
+            return false;
+        }
+        if (!function_exists('IPS_SetProperty')) {
+            return false;
+        }
+
+        IPS_SetProperty($this->InstanceID, 'AutomationEnabled', true);
+        $this->applyRestoredConfiguration();
+        $this->configureAutomationTimer();
+        $this->handleAutomationEnabledTransition();
+        $this->SendDebug(
+            'Konfiguration',
+            'AutomationEnabled aus persistierter Konfiguration reaktiviert (Runtime war false).',
+            0,
+        );
+
+        return true;
+    }
+
+    private function applyRestoredConfiguration(): void
+    {
+        if (!function_exists('IPS_ApplyChanges')) {
+            return;
+        }
+
+        IPS_ApplyChanges($this->InstanceID);
+    }
+
     private function readPvSurplusVarId(): int
     {
         $current = 0;
@@ -1497,6 +1568,12 @@ class WifiWhirl extends IPSModuleStrict
                     continue;
                 }
             }
+            if ($key === 'AutomationEnabled') {
+                $enabled = (bool) $config[$key];
+                if (!$enabled && $this->readAutomationEnabledFromPersistedOnly()) {
+                    continue;
+                }
+            }
             if (($key === 'AutomationPumpRules' || $key === 'AutomationHeaterRules')
                 && $this->isEmptyRuleList($config[$key])
             ) {
@@ -1537,7 +1614,7 @@ class WifiWhirl extends IPSModuleStrict
         foreach (self::PERSISTENT_CONFIGURATION_KEYS as $key) {
             $config[$key] = match ($key) {
                 'Host' => $this->readHostProperty(),
-                'AutomationEnabled' => $this->ReadPropertyBoolean('AutomationEnabled'),
+                'AutomationEnabled' => $this->readAutomationEnabledProperty(),
                 'AutomationPumpRules' => $this->readRulesPropertyRaw('AutomationPumpRules'),
                 'AutomationHeaterRules' => $this->readRulesPropertyRaw('AutomationHeaterRules'),
                 'PvSurplusVar' => $this->readPvSurplusVarId(),
@@ -1750,7 +1827,7 @@ class WifiWhirl extends IPSModuleStrict
             $current = $this->ReadPropertyBoolean('AutomationEnabled');
             $storedBool = (bool) $stored;
 
-            return $current !== $storedBool;
+            return !$current && $storedBool;
         }
 
         return false;
@@ -2002,12 +2079,14 @@ class WifiWhirl extends IPSModuleStrict
 
         $restored = $this->restoreFromPersistentBackup();
         if ($restored > 0) {
+            $this->applyRestoredConfiguration();
             $this->SendDebug(
                 'Konfiguration',
                 $restored . ' Einstellung(en) nach IPS-Neustart aus Backup geladen.',
                 0,
             );
         }
+        $this->syncAutomationEnabledFromPersisted();
         $this->configureTimer();
         $this->configureAutomationTimer();
         $this->RunAutomation();
@@ -2037,7 +2116,7 @@ class WifiWhirl extends IPSModuleStrict
         if ($this->GetTimerInterval('Update') <= 0) {
             return true;
         }
-        if ($this->ReadPropertyBoolean('AutomationEnabled') && $this->GetTimerInterval('Automation') <= 0) {
+        if ($this->readAutomationEnabledProperty() && $this->GetTimerInterval('Automation') <= 0) {
             return true;
         }
 
