@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 22;
+    private const MODULE_BUILD = 23;
 
     private const IS_CREATING = 101;
     private const IS_ACTIVE = 102;
@@ -673,12 +673,27 @@ class WifiWhirl extends IPSModuleStrict
 
         IPS_Sleep(250);
         $this->UpdateValues();
+
+        $driftMessages = $this->detectAutomationStateDrift(
+            $rules,
+            $now,
+            $result['pump'],
+            $result['heater'],
+            $result['pumpWindowActive'],
+            $result['heaterWindowActive'],
+        );
+        if ($driftMessages !== []) {
+            $status .= ' | ' . implode(' | ', $driftMessages);
+            $this->SetValue('AutomationStatus', $status);
+        }
+
         $this->syncAutomationManualPauseVariable();
     }
 
     public function ClearAutomationOverride(): string
     {
         $this->clearAutomationOverrideBuffers();
+        $this->resetAutomationLastCommandBuffers();
         $this->RunAutomation();
         $this->syncAutomationManualPauseVariable();
 
@@ -689,6 +704,67 @@ class WifiWhirl extends IPSModuleStrict
     {
         $this->SetBuffer('AutoOverridePumpUntil', '0');
         $this->SetBuffer('AutoOverrideHeaterUntil', '0');
+    }
+
+    private function resetAutomationLastCommandBuffers(): void
+    {
+        $this->SetBuffer('AutoLastPump', '0');
+        $this->SetBuffer('AutoLastHeater', '0');
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rules
+     * @return list<string>
+     */
+    private function detectAutomationStateDrift(
+        array $rules,
+        DateTimeImmutable $now,
+        bool $desiredPump,
+        bool $desiredHeater,
+        bool $pumpWindowActive,
+        bool $heaterWindowActive,
+    ): array {
+        $nowUnix = (int) $now->getTimestamp();
+        $messages = [];
+
+        if ($pumpWindowActive && !$this->isManualOverrideActive('pump', $nowUnix)) {
+            $actualPump = $this->readAutomationSwitchValue('Pump');
+            if ($actualPump !== null && $actualPump !== $desiredPump) {
+                $end = WifiWhirlAutomation::activeWindowEndUnix($rules, WifiWhirlAutomation::TYPE_PUMP, $now);
+                if ($end !== null && $end > $nowUnix) {
+                    $this->SetBuffer('AutoOverridePumpUntil', (string) $end);
+                    $this->SetBuffer('AutoLastPump', $actualPump ? '1' : '0');
+                    $messages[] = $desiredPump
+                        ? 'Pumpe: Soll an, Ist aus — Pause bis ' . date('H:i', $end)
+                        : 'Pumpe: Soll aus, Ist an — Pause bis ' . date('H:i', $end);
+                }
+            }
+        }
+
+        if ($heaterWindowActive && !$this->isManualOverrideActive('heater', $nowUnix)) {
+            $actualHeater = $this->readAutomationSwitchValue('Heater');
+            if ($actualHeater !== null && $actualHeater !== $desiredHeater) {
+                $end = WifiWhirlAutomation::activeWindowEndUnix($rules, WifiWhirlAutomation::TYPE_HEATER, $now);
+                if ($end !== null && $end > $nowUnix) {
+                    $this->SetBuffer('AutoOverrideHeaterUntil', (string) $end);
+                    $this->SetBuffer('AutoLastHeater', $actualHeater ? '1' : '0');
+                    $messages[] = $desiredHeater
+                        ? 'Heizung: Soll an, Ist aus — Pause bis ' . date('H:i', $end)
+                        : 'Heizung: Soll aus, Ist an — Pause bis ' . date('H:i', $end);
+                }
+            }
+        }
+
+        return $messages;
+    }
+
+    private function readAutomationSwitchValue(string $ident): ?bool
+    {
+        try {
+            return (bool) $this->GetValue($ident);
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     private function prepareAutomationResume(): void
