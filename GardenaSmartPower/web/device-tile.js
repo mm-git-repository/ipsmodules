@@ -33,10 +33,11 @@
         html += '<button type="button" class="gs-btn primary" data-on="1">Einschalten</button>';
         html += '<button type="button" class="gs-btn danger" data-on="0">Ausschalten</button>';
         html += '</div>';
-        html += '<div class="gs-section"><h4>IPS-Zeitpläne</h4><pre class="gs-sched">' +
-            esc((state.ipsSchedules || []).join('\n') || '(keine)') + '</pre></div>';
-        html += '<div class="gs-section"><h4>Geräte-App (read-only)</h4><pre class="gs-sched">' +
-            esc(state.deviceSchedules || '(keine)') + '</pre></div>';
+        html += '<div class="gs-section"><h4>Geräte-Zeitpläne (read-only)</h4>';
+        if (state.scheduleHint) {
+            html += '<p class="gs-hint">' + esc(state.scheduleHint) + '</p>';
+        }
+        html += '<pre class="gs-sched">' + esc(state.deviceSchedules || '(keine)') + '</pre></div>';
         html += '<div class="gs-msg"></div>';
         root.innerHTML = html;
         root.querySelectorAll('[data-on]').forEach(function (btn) {

@@ -80,3 +80,37 @@
 .gs-msg { margin-top: 8px; font-size: 13px; min-height: 1.2em; }
 .gs-msg.ok { color: #2f9e44; }
 .gs-msg.err { color: #c92a2a; }
+.gs-hint {
+    font-size: 12px;
+    opacity: 0.75;
+    margin: 0 0 8px;
+}
+.gs-sched-table-wrap {
+    overflow-x: auto;
+    margin-bottom: 8px;
+}
+.gs-sched-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.gs-sched-table th,
+.gs-sched-table td {
+    border: 1px solid rgba(128,128,128,0.25);
+    padding: 4px 6px;
+    text-align: center;
+}
+.gs-sched-table input[type="text"],
+.gs-sched-table input[type="number"] {
+    width: 100%;
+    min-width: 52px;
+    border: 1px solid rgba(128,128,128,0.35);
+    border-radius: 4px;
+    padding: 2px 4px;
+    font: inherit;
+    background: transparent;
+    color: inherit;
+}
+.gs-sched-table .gs-slot { font-weight: 600; }
+.gs-sched-table .gs-empty { text-align: left; opacity: 0.7; padding: 8px; }
+.gs-sched-editor .gs-actions { margin-top: 4px; }

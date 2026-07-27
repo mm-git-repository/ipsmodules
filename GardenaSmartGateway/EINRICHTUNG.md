@@ -29,17 +29,42 @@ systemctl start websocketd
 
 | Modul | Rolle |
 |-------|--------|
-| Gardena Smart Gateway | WSS-Client, Discovery, Scan-Button, Zeitplan-Übersicht (read-only) |
-| Gardena Smart Valve | Water / Dual / Pipeline — Steuerung + IPS-Zeitpläne + Web-Kachel |
-| Gardena Smart Power | Power Adapter — Schalten + IPS-Zeitpläne + Web-Kachel |
+| Gardena Smart Gateway | WSS-Client, Discovery, Scan-Button, Zeitplan-Übersicht (Geräte-Master) |
+| Gardena Smart Valve | Water / Dual / Pipeline — Steuerung + Geräte-Zeitpläne editieren (Gen2) + Web-Kachel |
+| Gardena Smart Power | Power Adapter — Schalten, Geräte-Zeitpläne read-only (Gen1) + Web-Kachel |
 | Gardena Smart Sensor | Sensor / Sensor II — Messwerte + Web-Kachel |
+
+## Geräte-Zeitpläne (Gateway/Cloud als Master)
+
+- **Gen2** (z. B. Dual Water Control 2814): Zeitpläne liegen am Gerät. IPS liest sie beim Poll und kann sie per WSS **`write`** auf `schedule/{slot}/*` zurückschreiben.
+- Bearbeitung in **Instanz-Konfiguration** (Liste „Geräte-Zeitpläne“) oder **Web-Kachel** → Button **An Gerät speichern**
+- Nach dem Speichern: Gateway-Refresh; Änderungen erscheinen typischerweise auch in der Gardena-App (über `cloudadapter`, nicht garantiert offline)
+- **Gen1** (ältere Water Control, Power): Binärformat — IPS zeigt read-only; Bearbeitung nur in der Gardena-App. Power: optional **Sonnen-Zeitplan löschen** (leeres `sun_schedule_config`)
+
+### PoC (Gen2, bestätigt)
+
+Am Dual 2814 funktioniert z. B.:
+
+```json
+{
+  "op": "write",
+  "entity": {
+    "device": "<deviceId>",
+    "service": "lwm2mserver",
+    "path": "schedule/0/start_offset_seconds"
+  },
+  "payload": { "vi": 21600 }
+}
+```
+
+Änderungen überleben Gateway-Reconnect und sind in der App sichtbar.
 
 ## Hinweise
 
 - `websocketd` ist experimentell; nach Firmware-Updates ggf. erneut aktivieren
 - Dual Water Control = **eine** Valve-Instanz mit Ventil A und B
 - Geräte hängen **logisch** am Gateway (`GatewayInstanceID` + Objektbaum-Parent), ohne Symcon-Datenfluss/Splitter
-- Geräte-App-Zeitpläne werden **nur gelesen** angezeigt; IPS-Zeitpläne am Child sind der empfohlene Master
+- Parallelbearbeitung in IPS und Gardena-App kann Pläne überschreiben — UI zeigt „Zuletzt gespeichert von IPS“
 - Pump / Mäher: noch nicht im MVP
 
 ## Protokoll (Kurz)
@@ -48,3 +73,4 @@ systemctl start websocketd
 - Auth: HTTP Basic `_ : PASSWORD`
 - Discovery: JSON-Array mit `op=read` auf `devices` für `lemonbeatd` und `lwm2mserver`
 - Gen2-Ventil: `execute` auf `actuator/{id}/start|stop` mit Payload `as: ["18", "<seconds>"]`
+- Gen2-Zeitplan: `write` auf `schedule/{id}/actuator`, `start_offset_seconds`, `end_offset_seconds`, `repetition_type`, `repetition_value`, …

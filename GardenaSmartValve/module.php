@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartGuids.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartDevices.php';
+require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartSchedules.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartChildTrait.php';
 
 class GardenaSmartValve extends IPSModuleStrict
@@ -11,7 +12,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 2;
+    private const MODULE_BUILD = 3;
 
     public function Create(): void
     {
@@ -23,11 +24,11 @@ class GardenaSmartValve extends IPSModuleStrict
         $this->RegisterPropertyInteger('Generation', 2);
         $this->RegisterPropertyInteger('ValveCount', 2);
         $this->RegisterPropertyInteger('DefaultDurationSec', 1800);
-        $this->RegisterPropertyBoolean('ScheduleEnabled', false);
-        $this->RegisterPropertyString('ScheduleRules', '[]');
+        $this->RegisterPropertyString('DeviceScheduleRules', '[]');
 
         $this->RegisterAttributeString('DeviceAppSchedules', '');
-        $this->RegisterAttributeString('LastDesired', '{}');
+        $this->RegisterAttributeString('ScheduleLastSavedBy', '');
+        $this->RegisterAttributeString('ScheduleLastSavedAt', '');
 
         $this->ensureProfiles();
         $this->RegisterVariableBoolean('Online', 'Online', '', 1);
@@ -37,13 +38,11 @@ class GardenaSmartValve extends IPSModuleStrict
         $this->RegisterVariableBoolean('ValveBOpen', 'Ventil B offen', '', 11);
         $this->RegisterVariableString('ValveAName', 'Ventil A Name', '', 12);
         $this->RegisterVariableString('ValveBName', 'Ventil B Name', '', 13);
-        $this->RegisterVariableString('DeviceSchedules', 'Geräte-App-Zeitpläne', '', 20);
+        $this->RegisterVariableString('DeviceSchedules', 'Geräte-Zeitpläne', '', 20);
         $this->RegisterVariableString('ModuleVersion', 'Modulversion', '', 999);
 
         $this->EnableAction('ValveAOpen');
         $this->EnableAction('ValveBOpen');
-
-        $this->RegisterTimer('Schedule', 0, 'GSVAL_RunSchedule($_IPS[\'TARGET\']);');
 
         if (method_exists($this, 'SetVisualizationType')) {
             $this->SetVisualizationType(1);
@@ -55,8 +54,6 @@ class GardenaSmartValve extends IPSModuleStrict
         parent::ApplyChanges();
         $this->SetValue('ModuleVersion', self::MODULE_VERSION . ' (Build ' . self::MODULE_BUILD . ')');
         $this->SetStatus($this->getGatewayInstanceId() > 0 ? 102 : 104);
-        $interval = $this->ReadPropertyBoolean('ScheduleEnabled') ? 60000 : 0;
-        $this->SetTimerInterval('Schedule', $interval);
         $this->notifyGatewaySchedules();
         $this->SetSummary($this->ReadPropertyString('DeviceId'));
     }
@@ -91,6 +88,8 @@ class GardenaSmartValve extends IPSModuleStrict
     public function GetVisualizationTile(): string
     {
         $valveCount = max(1, $this->ReadPropertyInteger('ValveCount'));
+        $generation = $this->ReadPropertyInteger('Generation');
+        $rules = $this->loadDeviceScheduleRules();
         $initial = [
             'name' => IPS_GetName($this->InstanceID),
             'online' => (bool) $this->GetValue('Online'),
@@ -105,8 +104,10 @@ class GardenaSmartValve extends IPSModuleStrict
                 'name' => (string) $this->GetValue('ValveBName'),
                 'open' => (bool) $this->GetValue('ValveBOpen'),
             ],
-            'deviceSchedules' => (string) $this->GetValue('DeviceSchedules'),
-            'ipsSchedules' => $this->activeScheduleLines($this->loadScheduleRules()),
+            'scheduleRules' => $rules,
+            'scheduleWritable' => GardenaSmartSchedules::supportsDeviceScheduleWrite($generation, 'valve'),
+            'scheduleLastSavedBy' => $this->ReadAttributeString('ScheduleLastSavedBy'),
+            'scheduleLastSavedAt' => $this->ReadAttributeString('ScheduleLastSavedAt'),
             'defaultDuration' => $this->ReadPropertyInteger('DefaultDurationSec'),
             'instanceId' => $this->InstanceID,
         ];
@@ -154,6 +155,12 @@ class GardenaSmartValve extends IPSModuleStrict
 
             return;
         }
+        if ($Ident === 'SaveDeviceSchedules') {
+            $json = is_string($Value) ? $Value : json_encode($Value, JSON_UNESCAPED_UNICODE);
+            echo $this->SaveDeviceSchedules($json ?: null);
+
+            return;
+        }
         parent::RequestAction($Ident, $Value);
     }
 
@@ -193,46 +200,41 @@ class GardenaSmartValve extends IPSModuleStrict
         return 'OK';
     }
 
-    public function RunSchedule(): void
+    public function SaveDeviceSchedules(?string $rulesJson = null): string
     {
-        if (!$this->ReadPropertyBoolean('ScheduleEnabled')) {
-            return;
+        $generation = $this->ReadPropertyInteger('Generation');
+        if (!GardenaSmartSchedules::supportsDeviceScheduleWrite($generation, 'valve')) {
+            return 'Fehler: Geräte-Zeitpläne können für Gen1 nur in der Gardena-App bearbeitet werden';
         }
-        $rules = $this->loadScheduleRules();
-        $now = time();
-        $desired = [];
-        $ruleForValve = [];
-        foreach ($rules as $rule) {
-            if (!is_array($rule)) {
-                continue;
+        if ($rulesJson !== null && $rulesJson !== '') {
+            $rules = json_decode($rulesJson, true);
+            if (!is_array($rules)) {
+                return 'Fehler: Ungültige Zeitplan-Daten';
             }
-            $valve = (int) ($rule['valve'] ?? 0);
-            if ($this->isNowInRule($rule, $now)) {
-                $desired[$valve] = true;
-                $ruleForValve[$valve] = $rule;
-            } elseif (!isset($desired[$valve])) {
-                $desired[$valve] = false;
-            }
+            $this->saveDeviceScheduleRules($rules);
+        } else {
+            $rules = $this->loadDeviceScheduleRules();
         }
-        $lastRaw = $this->ReadAttributeString('LastDesired');
-        $last = json_decode($lastRaw, true);
-        if (!is_array($last)) {
-            $last = [];
+        if ($rules === []) {
+            return 'Fehler: Keine Zeitplan-Einträge zum Speichern';
         }
-        foreach ($desired as $valve => $wantOpen) {
-            $prev = $last[(string) $valve] ?? null;
-            if ($prev === $wantOpen) {
-                continue;
-            }
-            if ($wantOpen) {
-                $duration = $this->durationFromRule($ruleForValve[$valve] ?? null);
-                $this->StartValve($valve, $duration);
-            } else {
-                $this->StopValve($valve);
-            }
-            $last[(string) $valve] = $wantOpen;
+        $result = $this->sendCommandToGateway([
+            'action' => 'writeSchedulesGen2',
+            'deviceId' => $this->ReadPropertyString('DeviceId'),
+            'rules' => $rules,
+        ]);
+        if (empty($result['ok'])) {
+            return 'Fehler: ' . (string) ($result['error'] ?? 'unbekannt');
         }
-        $this->WriteAttributeString('LastDesired', json_encode($last) ?: '{}');
+        $this->WriteAttributeString('ScheduleLastSavedBy', 'IPS');
+        $this->WriteAttributeString('ScheduleLastSavedAt', date('c'));
+        $lines = $this->deviceScheduleLines($rules);
+        $text = $lines === [] ? '(keine)' : implode("\n", $lines);
+        $this->SetValue('DeviceSchedules', $text);
+        $this->WriteAttributeString('DeviceAppSchedules', $text);
+        $this->notifyGatewaySchedules();
+
+        return 'OK — Zeitpläne am Gerät gespeichert';
     }
 
     /** @param array<string, mixed> $data */
@@ -262,11 +264,18 @@ class GardenaSmartValve extends IPSModuleStrict
         $generation = $this->ReadPropertyInteger('Generation');
         if ($generation >= 2) {
             $this->applyGen2Valves($data);
+            $rules = GardenaSmartSchedules::parseGen2Rules($data);
+            if ($rules !== []) {
+                $this->saveDeviceScheduleRules($rules);
+                $lines = GardenaSmartSchedules::formatRulesLines($rules);
+            } else {
+                $lines = GardenaSmartDevices::formatDeviceSchedules($data);
+            }
         } else {
             $this->applyGen1Valves($data);
+            $lines = GardenaSmartDevices::formatDeviceSchedules($data);
         }
 
-        $lines = GardenaSmartDevices::formatDeviceSchedules($data);
         $text = $lines === [] ? '(keine)' : implode("\n", $lines);
         $this->SetValue('DeviceSchedules', $text);
         $this->WriteAttributeString('DeviceAppSchedules', $text);
@@ -289,9 +298,7 @@ class GardenaSmartValve extends IPSModuleStrict
                 $this->SetValue($prefix . 'Name', $name);
             }
             $state = GardenaSmartDevices::fieldValue($act['state'] ?? null);
-            // state: 0 idle/closed typical; treat non-zero as open if available
             $open = is_numeric($state) ? ((int) $state !== 0) : false;
-            // Prefer timeslot RUNNING mapping when present
             if (isset($data['timeslot']) && is_array($data['timeslot'])) {
                 $running = false;
                 foreach ($data['timeslot'] as $tid => $ts) {
@@ -300,7 +307,7 @@ class GardenaSmartValve extends IPSModuleStrict
                     }
                     $st = (int) (GardenaSmartDevices::fieldValue($ts['state'] ?? null) ?? -1);
                     $actId = (int) (GardenaSmartDevices::fieldValue($ts['actuator'] ?? null) ?? -1);
-                    if ($actId === $id && $st === 5) { // RUNNING
+                    if ($actId === $id && $st === 5) {
                         $running = true;
                         break;
                     }
@@ -326,24 +333,6 @@ class GardenaSmartValve extends IPSModuleStrict
         if (is_numeric($t2)) {
             $this->SetValue('ValveBOpen', ((int) $t2) > 0);
         }
-    }
-
-    private function durationFromRule(?array $rule): int
-    {
-        if ($rule === null) {
-            return 0;
-        }
-        $start = $this->parseHm((string) ($rule['start'] ?? ''));
-        $end = $this->parseHm((string) ($rule['end'] ?? ''));
-        if ($start === null || $end === null) {
-            return 0;
-        }
-        $mins = $end - $start;
-        if ($mins <= 0) {
-            $mins += 24 * 60;
-        }
-
-        return max(60, $mins * 60);
     }
 
     private function ensureProfiles(): void

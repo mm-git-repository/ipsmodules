@@ -47,19 +47,20 @@
             "minimum": 60
         },
         {
-            "type": "CheckBox",
-            "name": "ScheduleEnabled",
-            "caption": "IPS-Zeitpläne aktiv"
+            "type": "Label",
+            "name": "ScheduleHint",
+            "caption": "Geräte-Zeitpläne (Gen2): Master am Gateway/Cloud. IPS speichert nur eine lokale Kopie zum Bearbeiten."
         },
         {
             "type": "List",
-            "name": "ScheduleRules",
-            "caption": "IPS-Bewässerungs-Zeitpläne",
+            "name": "DeviceScheduleRules",
+            "caption": "Geräte-Zeitpläne",
             "rowCount": 5,
-            "add": true,
-            "delete": true,
+            "add": false,
+            "delete": false,
             "columns": [
                 { "caption": "Aktiv", "name": "active", "width": "50px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
+                { "caption": "Slot", "name": "slot", "width": "45px", "edit": { "type": "ValidationTextBox" }, "add": "0", "save": true },
                 { "caption": "Ventil", "name": "valve", "width": "60px", "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 5, "digits": 0 }, "add": 0, "save": true },
                 { "caption": "Start", "name": "start", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "06:00", "save": true },
                 { "caption": "Ende", "name": "end", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "06:30", "save": true },
@@ -74,6 +75,11 @@
         }
     ],
     "actions": [
+        {
+            "type": "Button",
+            "caption": "An Gerät speichern",
+            "onClick": "echo GSVAL_SaveDeviceSchedules($id);"
+        },
         {
             "type": "Button",
             "caption": "Ventil A starten",

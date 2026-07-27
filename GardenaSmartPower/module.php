@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartGuids.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartDevices.php';
+require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartSchedules.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartChildTrait.php';
 
 class GardenaSmartPower extends IPSModuleStrict
@@ -11,7 +12,7 @@ class GardenaSmartPower extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 2;
+    private const MODULE_BUILD = 3;
 
     public function Create(): void
     {
@@ -23,18 +24,14 @@ class GardenaSmartPower extends IPSModuleStrict
         $this->RegisterPropertyInteger('Generation', 1);
         $this->RegisterPropertyInteger('ValveCount', 0);
         $this->RegisterPropertyInteger('DefaultDurationSec', 86400);
-        $this->RegisterPropertyBoolean('ScheduleEnabled', false);
-        $this->RegisterPropertyString('ScheduleRules', '[]');
-        $this->RegisterAttributeString('LastDesired', '');
 
         $this->RegisterVariableBoolean('Online', 'Online', '', 1);
         $this->RegisterVariableBoolean('OutputOn', 'Ausgang ein', '', 10);
         $this->RegisterVariableInteger('PowerTimer', 'Power-Timer (s)', '', 11);
-        $this->RegisterVariableString('DeviceSchedules', 'Geräte-App-Zeitpläne', '', 20);
+        $this->RegisterVariableString('DeviceSchedules', 'Geräte-Zeitpläne', '', 20);
         $this->RegisterVariableString('ModuleVersion', 'Modulversion', '', 999);
         $this->EnableAction('OutputOn');
 
-        $this->RegisterTimer('Schedule', 0, 'GSPWR_RunSchedule($_IPS[\'TARGET\']);');
         if (method_exists($this, 'SetVisualizationType')) {
             $this->SetVisualizationType(1);
         }
@@ -45,7 +42,6 @@ class GardenaSmartPower extends IPSModuleStrict
         parent::ApplyChanges();
         $this->SetValue('ModuleVersion', self::MODULE_VERSION . ' (Build ' . self::MODULE_BUILD . ')');
         $this->SetStatus($this->getGatewayInstanceId() > 0 ? 102 : 104);
-        $this->SetTimerInterval('Schedule', $this->ReadPropertyBoolean('ScheduleEnabled') ? 60000 : 0);
         $this->notifyGatewaySchedules();
         $this->SetSummary($this->ReadPropertyString('DeviceId'));
     }
@@ -87,7 +83,7 @@ class GardenaSmartPower extends IPSModuleStrict
         $lines = GardenaSmartDevices::formatDeviceSchedules($data);
         $raw = $data['lemonbeat']['0']['sun_schedule_config']['vo'] ?? null;
         if (is_string($raw) && $raw !== '' && $lines === []) {
-            $lines[] = 'sun_schedule_config vorhanden (' . strlen($raw) . ' bytes b64)';
+            $lines[] = 'sun_schedule_config vorhanden (' . strlen($raw) . ' bytes, nur Gardena-App)';
         }
         $this->SetValue('DeviceSchedules', $lines === [] ? '(keine)' : implode("\n", $lines));
     }
@@ -100,7 +96,8 @@ class GardenaSmartPower extends IPSModuleStrict
             'online' => (bool) $this->GetValue('Online'),
             'outputOn' => (bool) $this->GetValue('OutputOn'),
             'deviceSchedules' => (string) $this->GetValue('DeviceSchedules'),
-            'ipsSchedules' => $this->activeScheduleLines($this->loadScheduleRules()),
+            'scheduleWritable' => false,
+            'scheduleHint' => 'Gen1 Power: Zeitpläne nur in der Gardena-App bearbeitbar (Binärformat). IPS zeigt den aktuellen Stand.',
             'instanceId' => $this->InstanceID,
         ]);
     }
@@ -134,24 +131,18 @@ class GardenaSmartPower extends IPSModuleStrict
         return 'OK';
     }
 
-    public function RunSchedule(): void
+    public function ClearDeviceSchedules(): string
     {
-        if (!$this->ReadPropertyBoolean('ScheduleEnabled')) {
-            return;
+        $result = $this->sendCommandToGateway([
+            'action' => 'clearSunScheduleGen1',
+            'deviceId' => $this->ReadPropertyString('DeviceId'),
+        ]);
+        if (empty($result['ok'])) {
+            return 'Fehler: ' . (string) ($result['error'] ?? 'unbekannt');
         }
-        $want = false;
-        foreach ($this->loadScheduleRules() as $rule) {
-            if (is_array($rule) && $this->isNowInRule($rule, time())) {
-                $want = true;
-                break;
-            }
-        }
-        $last = $this->ReadAttributeString('LastDesired');
-        $prev = $last === '' ? null : ($last === '1');
-        if ($prev === $want) {
-            return;
-        }
-        $this->SetPower($want);
-        $this->WriteAttributeString('LastDesired', $want ? '1' : '0');
+        $this->SetValue('DeviceSchedules', '(keine)');
+        $this->notifyGatewaySchedules();
+
+        return 'OK — Sonnen-Zeitplan am Gerät gelöscht';
     }
 }

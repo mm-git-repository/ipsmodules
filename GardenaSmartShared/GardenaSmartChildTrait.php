@@ -11,7 +11,7 @@ trait GardenaSmartChildTrait
     {
         $gatewayId = $this->getGatewayInstanceId();
         if ($gatewayId > 0 && IPS_InstanceExists($gatewayId)) {
-            @GSGW_RefreshIpsScheduleOverview($gatewayId);
+            @GSGW_RefreshScheduleOverview($gatewayId);
         }
     }
 
@@ -41,75 +41,28 @@ trait GardenaSmartChildTrait
     }
 
     /** @return list<array<string, mixed>> */
-    protected function loadScheduleRules(): array
+    protected function loadDeviceScheduleRules(): array
     {
-        $raw = $this->ReadPropertyString('ScheduleRules');
+        $raw = $this->ReadPropertyString('DeviceScheduleRules');
         $rules = json_decode($raw, true);
 
         return is_array($rules) ? $rules : [];
+    }
+
+    protected function saveDeviceScheduleRules(array $rules): void
+    {
+        $this->SetPropertyString('DeviceScheduleRules', json_encode($rules, JSON_UNESCAPED_UNICODE) ?: '[]');
     }
 
     /**
      * @param list<array<string, mixed>> $rules
      * @return list<string>
      */
-    protected function activeScheduleLines(array $rules): array
+    protected function deviceScheduleLines(array $rules): array
     {
-        $lines = [];
-        $map = ['mo' => 'Mo', 'tu' => 'Di', 'we' => 'Mi', 'th' => 'Do', 'fr' => 'Fr', 'sa' => 'Sa', 'so' => 'So'];
-        foreach ($rules as $rule) {
-            if (!is_array($rule) || empty($rule['active'])) {
-                continue;
-            }
-            $days = [];
-            foreach ($map as $k => $label) {
-                if (!empty($rule[$k])) {
-                    $days[] = $label;
-                }
-            }
-            $valve = isset($rule['valve']) ? ('V' . $rule['valve'] . ' ') : '';
-            $lines[] = trim($valve . ($rule['start'] ?? '?') . '–' . ($rule['end'] ?? '?') . ' ' . implode(',', $days));
-        }
+        require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartSchedules.php';
 
-        return $lines;
-    }
-
-    protected function isNowInRule(array $rule, int $nowTs): bool
-    {
-        if (empty($rule['active'])) {
-            return false;
-        }
-        $w = (int) date('N', $nowTs);
-        $dayKeys = [1 => 'mo', 2 => 'tu', 3 => 'we', 4 => 'th', 5 => 'fr', 6 => 'sa', 7 => 'so'];
-        $key = $dayKeys[$w] ?? 'mo';
-        if (empty($rule[$key])) {
-            return false;
-        }
-        $start = $this->parseHm((string) ($rule['start'] ?? '00:00'));
-        $end = $this->parseHm((string) ($rule['end'] ?? '00:00'));
-        if ($start === null || $end === null) {
-            return false;
-        }
-        $minutes = ((int) date('G', $nowTs)) * 60 + (int) date('i', $nowTs);
-        if ($end <= $start) {
-            return $minutes >= $start || $minutes < $end;
-        }
-
-        return $minutes >= $start && $minutes < $end;
-    }
-
-    protected function parseHm(string $hm): ?int
-    {
-        if (!preg_match('/^(\d{1,2}):(\d{2})$/', trim($hm), $m)) {
-            return null;
-        }
-        $h = (int) $m[1];
-        $min = (int) $m[2];
-        if ($h > 23 || $min > 59) {
-            return null;
-        }
-
-        return $h * 60 + $min;
+        return GardenaSmartSchedules::formatRulesLines($rules);
     }
 
     protected function buildVisualizationHtml(string $webDir, string $prefix, array $initial): string

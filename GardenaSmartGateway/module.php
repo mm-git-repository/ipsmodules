@@ -5,11 +5,12 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartGuids.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartDevices.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartClient.php';
+require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartSchedules.php';
 
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 2;
+    private const MODULE_BUILD = 3;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -195,7 +196,6 @@ class GardenaSmartGateway extends IPSModuleStrict
             $devices = $this->refreshDeviceCache();
             $this->pushStateToChildren($devices);
             $this->rebuildScheduleOverview($devices);
-            $this->rebuildIpsScheduleOverview();
             $this->SetValue('Reachable', true);
             $this->SetValue('LastError', '');
             $this->SetValue('DeviceCount', count($devices));
@@ -209,11 +209,19 @@ class GardenaSmartGateway extends IPSModuleStrict
     }
 
     /**
-     * Called by children after IPS schedule property changes.
+     * Called by children after device schedule save or property change.
      */
-    public function RefreshIpsScheduleOverview(): void
+    public function RefreshScheduleOverview(): void
     {
-        $this->rebuildIpsScheduleOverview();
+        try {
+            $raw = $this->ReadAttributeString('DeviceCache');
+            $devices = json_decode($raw, true);
+            if (is_array($devices)) {
+                $this->rebuildScheduleOverview($devices);
+            }
+        } catch (Throwable) {
+            // ignore
+        }
     }
 
     /** @param array<string, mixed> $command */
@@ -238,6 +246,12 @@ class GardenaSmartGateway extends IPSModuleStrict
                 : $client->setWateringTimerGen1($deviceId, $valveId, 0),
             'powerOn' => $client->setPowerTimer($deviceId, $duration > 0 ? $duration : 86400),
             'powerOff' => $client->setPowerTimer($deviceId, 0),
+            'writeSchedulesGen2' => $client->writeGen2Schedules(
+                $deviceId,
+                is_array($command['rules'] ?? null) ? $command['rules'] : []
+            ),
+            'clearSchedulesGen1' => $client->clearGen1ScheduleConfig($deviceId),
+            'clearSunScheduleGen1' => $client->clearGen1SunScheduleConfig($deviceId),
             default => throw new RuntimeException('Unbekannte Aktion: ' . $action),
         };
 
@@ -290,97 +304,34 @@ class GardenaSmartGateway extends IPSModuleStrict
     /** @param array<string, array<string, mixed>> $devices */
     private function rebuildScheduleOverview(array $devices): void
     {
-        $lines = [];
+        $lines = ['Geräte-Zeitpläne (Master am Gateway/Cloud):'];
+        $any = false;
         foreach ($devices as $deviceId => $data) {
             $model = GardenaSmartDevices::extractModelNumber($data);
             $info = GardenaSmartDevices::info($model);
             $name = GardenaSmartDevices::extractDisplayName($data, $info['name']);
-            $sched = GardenaSmartDevices::formatDeviceSchedules($data);
+            $generation = (int) ($info['generation'] ?? 1);
+            if ($generation >= 2 && ($info['kind'] ?? '') === 'valve') {
+                $rules = GardenaSmartSchedules::parseGen2Rules($data);
+                $sched = GardenaSmartSchedules::formatRulesLines($rules);
+            } else {
+                $sched = GardenaSmartDevices::formatDeviceSchedules($data);
+            }
             if ($sched === []) {
-                $lines[] = $name . ' (' . $deviceId . '): keine Geräte-App-Zeitpläne';
                 continue;
             }
-            $lines[] = $name . ' — Geräte-App:';
+            $any = true;
+            $lines[] = $name . ' (' . $deviceId . '):';
             foreach ($sched as $line) {
                 $lines[] = '  · ' . $line;
             }
         }
-        $ips = trim((string) $this->GetValue('ScheduleOverview'));
-        // Keep device-app section; IPS section rebuilt separately and merged.
+        if (!$any) {
+            $lines[] = '  · (keine Zeitpläne am Gerät)';
+        }
         $deviceBlock = implode("\n", $lines);
         $this->SetValue('ScheduleOverview', $deviceBlock);
         $this->WriteAttributeString('DeviceScheduleBlock', $deviceBlock);
-        $this->rebuildIpsScheduleOverview();
-    }
-
-    private function rebuildIpsScheduleOverview(): void
-    {
-        $deviceBlock = '';
-        try {
-            $deviceBlock = $this->ReadAttributeString('DeviceScheduleBlock');
-        } catch (Throwable) {
-            $deviceBlock = '';
-        }
-        $ipsLines = ['IPS-Zeitpläne (Child-Module):'];
-        $any = false;
-        foreach ([GardenaSmartGuids::VALVE, GardenaSmartGuids::POWER, GardenaSmartGuids::SENSOR] as $moduleId) {
-            foreach (IPS_GetInstanceListByModuleID($moduleId) as $childId) {
-                try {
-                    if ((int) IPS_GetProperty($childId, 'GatewayInstanceID') !== $this->InstanceID) {
-                        continue;
-                    }
-                } catch (Throwable) {
-                    continue;
-                }
-                $name = IPS_GetName($childId);
-                try {
-                    $json = (string) IPS_GetProperty($childId, 'ScheduleRules');
-                } catch (Throwable) {
-                    continue;
-                }
-                $rules = json_decode($json, true);
-                if (!is_array($rules) || $rules === []) {
-                    continue;
-                }
-                foreach ($rules as $rule) {
-                    if (!is_array($rule) || empty($rule['active'])) {
-                        continue;
-                    }
-                    $any = true;
-                    $valve = isset($rule['valve']) ? (' V' . $rule['valve']) : '';
-                    $ipsLines[] = sprintf(
-                        '  · %s%s %s–%s %s',
-                        $name,
-                        $valve,
-                        (string) ($rule['start'] ?? '?'),
-                        (string) ($rule['end'] ?? '?'),
-                        $this->daysFromRule($rule)
-                    );
-                }
-            }
-        }
-        if (!$any) {
-            $ipsLines[] = '  · (keine aktiven IPS-Regeln)';
-        }
-        $text = implode("\n", $ipsLines);
-        if ($deviceBlock !== '') {
-            $text .= "\n\nGeräte-App (read-only):\n" . $deviceBlock;
-        }
-        $this->SetValue('ScheduleOverview', $text);
-    }
-
-    /** @param array<string, mixed> $rule */
-    private function daysFromRule(array $rule): string
-    {
-        $map = ['mo' => 'Mo', 'tu' => 'Di', 'we' => 'Mi', 'th' => 'Do', 'fr' => 'Fr', 'sa' => 'Sa', 'so' => 'So'];
-        $parts = [];
-        foreach ($map as $k => $label) {
-            if (!empty($rule[$k])) {
-                $parts[] = $label;
-            }
-        }
-
-        return $parts === [] ? '' : '(' . implode(',', $parts) . ')';
     }
 
     private function findChildByDeviceId(string $deviceId): int

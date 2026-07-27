@@ -150,6 +150,78 @@ final class GardenaSmartClient
     }
 
     /**
+     * Write Gen2 device schedules (lwm2mserver schedule/*).
+     *
+     * @param list<array<string, mixed>> $rules Editor rules from DeviceScheduleRules
+     * @return list<array<string, mixed>>
+     */
+    public function writeGen2Schedules(string $deviceId, array $rules): array
+    {
+        require_once __DIR__ . '/GardenaSmartSchedules.php';
+        $raw = GardenaSmartSchedules::buildGen2WriteRequests($deviceId, $rules);
+        if ($raw === []) {
+            throw new RuntimeException('Keine gültigen Zeitplan-Einträge zum Speichern');
+        }
+        $requests = [];
+        foreach ($raw as $item) {
+            $entity = $item['entity'] ?? [];
+            $requests[] = $this->buildRequest(
+                (string) ($item['op'] ?? 'write'),
+                (string) ($entity['service'] ?? 'lwm2mserver'),
+                (string) ($entity['path'] ?? ''),
+                is_array($item['payload'] ?? null) ? $item['payload'] : null,
+                (string) ($entity['device'] ?? $deviceId)
+            );
+        }
+
+        $replies = $this->exchange($requests);
+        foreach ($replies as $msg) {
+            if (($msg['success'] ?? null) !== true) {
+                $detail = is_string($msg['error'] ?? null) ? (string) $msg['error'] : 'Gateway lehnte Zeitplan-Write ab';
+                throw new RuntimeException($detail);
+            }
+        }
+
+        return $replies;
+    }
+
+    /**
+     * Gen1: clear schedule_config blob (Power/Gen1 valve — write not fully supported).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function clearGen1ScheduleConfig(string $deviceId): array
+    {
+        $req = $this->buildRequest(
+            'write',
+            'lemonbeatd',
+            'lemonbeat/0/schedule_config',
+            ['vo' => ''],
+            $deviceId
+        );
+
+        return $this->exchange([$req]);
+    }
+
+    /**
+     * Gen1 Power: clear sun_schedule_config.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function clearGen1SunScheduleConfig(string $deviceId): array
+    {
+        $req = $this->buildRequest(
+            'write',
+            'lemonbeatd',
+            'lemonbeat/0/sun_schedule_config',
+            ['vo' => ''],
+            $deviceId
+        );
+
+        return $this->exchange([$req]);
+    }
+
+    /**
      * Gen1 watering timer (Water Control / Irrigation / Pump style).
      *
      * @return list<array<string, mixed>>

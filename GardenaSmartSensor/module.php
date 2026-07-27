@@ -22,8 +22,6 @@ class GardenaSmartSensor extends IPSModuleStrict
         $this->RegisterPropertyString('ModelNumber', '');
         $this->RegisterPropertyInteger('Generation', 1);
         $this->RegisterPropertyInteger('ValveCount', 0);
-        $this->RegisterPropertyBoolean('ScheduleEnabled', false);
-        $this->RegisterPropertyString('ScheduleRules', '[]');
 
         $this->ensureProfiles();
         $this->RegisterVariableBoolean('Online', 'Online', '', 1);
@@ -45,7 +43,6 @@ class GardenaSmartSensor extends IPSModuleStrict
         parent::ApplyChanges();
         $this->SetValue('ModuleVersion', self::MODULE_VERSION . ' (Build ' . self::MODULE_BUILD . ')');
         $this->SetStatus($this->getGatewayInstanceId() > 0 ? 102 : 104);
-        $this->notifyGatewaySchedules();
         $this->SetSummary($this->ReadPropertyString('DeviceId'));
     }
 

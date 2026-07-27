@@ -39,34 +39,19 @@
             "minimum": 0
         },
         {
-            "type": "CheckBox",
-            "name": "ScheduleEnabled",
-            "caption": "IPS-Zeitpläne aktiv"
-        },
-        {
-            "type": "List",
-            "name": "ScheduleRules",
-            "caption": "IPS-Schalt-Zeitpläne",
-            "rowCount": 4,
-            "add": true,
-            "delete": true,
-            "columns": [
-                { "caption": "Aktiv", "name": "active", "width": "50px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-                { "caption": "Start", "name": "start", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "18:00", "save": true },
-                { "caption": "Ende", "name": "end", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "23:00", "save": true },
-                { "caption": "Mo", "name": "mo", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-                { "caption": "Di", "name": "tu", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-                { "caption": "Mi", "name": "we", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-                { "caption": "Do", "name": "th", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-                { "caption": "Fr", "name": "fr", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-                { "caption": "Sa", "name": "sa", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-                { "caption": "So", "name": "so", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true }
-            ]
+            "type": "Label",
+            "name": "ScheduleHint",
+            "caption": "Geräte-Zeitpläne (Gen1): Master am Gateway/Cloud. Bearbeitung nur in der Gardena-App — IPS zeigt den Stand read-only. Löschen optional über Button."
         }
     ],
     "actions": [
         { "type": "Button", "caption": "Einschalten", "onClick": "GSPWR_SetPower($id, true); echo 'OK';" },
-        { "type": "Button", "caption": "Ausschalten", "onClick": "GSPWR_SetPower($id, false); echo 'OK';" }
+        { "type": "Button", "caption": "Ausschalten", "onClick": "GSPWR_SetPower($id, false); echo 'OK';" },
+        {
+            "type": "Button",
+            "caption": "Sonnen-Zeitplan löschen",
+            "onClick": "echo GSPWR_ClearDeviceSchedules($id);"
+        }
     ],
     "status": [
         { "code": 102, "icon": "active", "caption": "Aktiv" },

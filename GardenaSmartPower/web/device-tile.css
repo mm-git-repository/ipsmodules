@@ -80,3 +80,8 @@
 .gs-msg { margin-top: 8px; font-size: 13px; min-height: 1.2em; }
 .gs-msg.ok { color: #2f9e44; }
 .gs-msg.err { color: #c92a2a; }
+.gs-hint {
+    font-size: 12px;
+    opacity: 0.75;
+    margin: 0 0 8px;
+}
