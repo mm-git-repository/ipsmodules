@@ -450,8 +450,8 @@ final class GardenaSmartClient
     }
 
     /**
-     * Send writes one-by-one; any JSON frame counts as ACK. Missing ACKs are tolerated (logged).
-     * Reconnects periodically — long sessions on the Gardena gateway often drop.
+     * Send writes one-by-one on a single WSS session.
+     * Reconnect only on EOF / send failure — slot-boundary reconnects overwhelm websocketd.
      *
      * @param list<array<string, mixed>> $requests
      * @return list<array<string, mixed>>
@@ -464,18 +464,26 @@ final class GardenaSmartClient
         $fp = $this->connect();
         $got = [];
         $needReconnect = false;
-        // Fields per slot in buildGen2WriteRequests (actuator, repetition_value, start, end)
         $fieldsPerSlot = 4;
         try {
             foreach ($requests as $idx => $req) {
-                $slotBoundary = ($idx > 0 && ($idx % $fieldsPerSlot) === 0);
-                if ($needReconnect || $slotBoundary) {
+                $path = (string) (($req['entity']['path'] ?? '') ?: '?');
+                $slot = '?';
+                if (preg_match('#schedule/(\d+)/#', $path, $m)) {
+                    $slot = $m[1];
+                }
+                $field = (string) (strrchr($path, '/') ?: $path);
+                $field = ltrim($field, '/');
+                if (($idx % $fieldsPerSlot) === 0) {
+                    $this->log('WSS', sprintf('schedule slot %s start (write %d/%d)', $slot, $idx + 1, count($requests)));
+                }
+                if ($needReconnect) {
+                    $this->log('WSS', 'forced reconnect before ' . $path);
                     $this->closeStream($fp);
-                    usleep(400000);
+                    usleep(1000000);
                     $fp = $this->connect();
                     $needReconnect = false;
                 }
-                $path = (string) (($req['entity']['path'] ?? '') ?: '?');
                 $requireAck = $this->scheduleWriteRequiresAck($path);
                 $acked = false;
                 $lastError = '';
@@ -483,7 +491,14 @@ final class GardenaSmartClient
                 for ($attempt = 1; $attempt <= $attempts; $attempt++) {
                     $this->log(
                         'WSS',
-                        sprintf('write %d/%d try %d %s', $idx + 1, count($requests), $attempt, $path)
+                        sprintf(
+                            'write %d/%d try %d slot=%s field=%s',
+                            $idx + 1,
+                            count($requests),
+                            $attempt,
+                            $slot,
+                            $field
+                        )
                     );
                     try {
                         $this->sendJson($fp, [$req]);
@@ -491,7 +506,7 @@ final class GardenaSmartClient
                         $lastError = $e->getMessage();
                         $this->log('WSS', 'send failed, reconnecting: ' . $lastError);
                         $this->closeStream($fp);
-                        usleep(350000);
+                        usleep(1000000);
                         $fp = $this->connect();
                         continue;
                     }
@@ -535,8 +550,9 @@ final class GardenaSmartClient
                         break;
                     }
                     if ($needReconnect) {
+                        $this->log('WSS', 'reconnect after EOF for ' . $path);
                         $this->closeStream($fp);
-                        usleep(350000);
+                        usleep(1200000);
                         $fp = $this->connect();
                         $needReconnect = false;
                     }
@@ -551,7 +567,7 @@ final class GardenaSmartClient
                     $this->log('WSS', 'write without ACK (optional field, continuing): ' . $path);
                 }
                 if ($idx < count($requests) - 1) {
-                    usleep(180000);
+                    usleep(120000);
                 }
             }
         } finally {
@@ -772,10 +788,11 @@ final class GardenaSmartClient
             ],
         ]);
 
+        $maxAttempts = 6;
         $lastErrno = 0;
         $lastErrstr = '';
         $fp = false;
-        for ($attempt = 1; $attempt <= 4; $attempt++) {
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             // Drain stale OpenSSL errors
             while (openssl_error_string() !== false) {
                 // clear
@@ -802,19 +819,24 @@ final class GardenaSmartClient
             $this->log(
                 'WSS',
                 sprintf(
-                    'connect attempt %d/4 failed errno=%d err=%s ssl=%s',
+                    'connect attempt %d/%d failed errno=%d err=%s ssl=%s',
                     $attempt,
+                    $maxAttempts,
                     $errno,
                     $errstr !== '' ? $errstr : '-',
                     $ssl !== [] ? implode(' | ', $ssl) : '-'
                 )
             );
-            usleep(350000 * $attempt);
+            // errno=0 / empty SSL often means websocketd is still recovering — wait longer
+            $delayUs = ($errno === 0 && $errstr === '')
+                ? (600000 * $attempt)
+                : (350000 * $attempt);
+            usleep($delayUs);
         }
         if ($fp === false) {
             throw new RuntimeException(
-                'TCP/TLS-Verbindung fehlgeschlagen: '
-                . ($lastErrstr !== '' ? $lastErrstr : 'keine Details')
+                'TCP/TLS-Verbindung fehlgeschlagen nach ' . $maxAttempts . ' Versuchen: '
+                . ($lastErrstr !== '' ? $lastErrstr : 'keine Details (websocketd busy?)')
                 . ' (' . $lastErrno . ')'
             );
         }

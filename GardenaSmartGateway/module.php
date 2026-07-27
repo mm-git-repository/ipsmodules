@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 21;
+    private const MODULE_BUILD = 22;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -455,7 +455,8 @@ class GardenaSmartGateway extends IPSModuleStrict
         if ($deviceId === '') {
             throw new RuntimeException('deviceId fehlt');
         }
-        $this->markWssBusy($action === 'writeSchedulesGen2' ? 90 : 30);
+        // Schedule writes keep one WSS session; busy covers write + short settle (not 90s)
+        $this->markWssBusy($action === 'writeSchedulesGen2' ? 45 : 30);
         try {
             $client = $this->createClient();
             $generation = (int) ($command['generation'] ?? 2);
@@ -483,6 +484,7 @@ class GardenaSmartGateway extends IPSModuleStrict
 
             // Refresh after command (schedule writes already took long — softer refresh)
             if ($action === 'writeSchedulesGen2') {
+                $this->debugLog('Schedule', 'active writes OK — settle + verify discover');
                 // Brief settle, then read back from device so IPS matches reality
                 $this->markWssBusy(8);
                 try {
@@ -492,7 +494,7 @@ class GardenaSmartGateway extends IPSModuleStrict
                 }
                 usleep(1200000);
                 try {
-                    $this->markWssBusy(45);
+                    $this->markWssBusy(30);
                     $devices = $this->refreshDeviceCache();
                     $this->pushStateToChildren($devices);
                     $this->rebuildScheduleOverview($devices);
@@ -504,8 +506,8 @@ class GardenaSmartGateway extends IPSModuleStrict
                     $this->SetStatus(self::IS_ACTIVE);
                     $this->SetValue('Reachable', true);
                 }
-                // Cooldown: websocketd needs a moment after many schedule writes
-                $this->markWssBusy(20);
+                // Short cooldown so poll can resume soon
+                $this->markWssBusy(8);
             } else {
                 $this->clearWssBusy();
                 $this->UpdateValues();
@@ -513,8 +515,9 @@ class GardenaSmartGateway extends IPSModuleStrict
 
             return $replies;
         } catch (Throwable $e) {
-            // Cooldown instead of immediate clear — avoids timer painting unreachable
-            $this->markWssBusy(15);
+            $this->debugLog('Command', 'failed action=' . $action . ': ' . $e->getMessage());
+            // Short cooldown — do not leave gateway "busy" for a long time after connect crash
+            $this->markWssBusy($action === 'writeSchedulesGen2' ? 6 : 8);
             throw $e;
         }
     }
