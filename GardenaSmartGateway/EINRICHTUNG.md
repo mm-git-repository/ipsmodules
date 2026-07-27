@@ -90,4 +90,8 @@ Am Dual 2814 funktioniert z. B.:
 - Auth: HTTP Basic `_ : PASSWORD`
 - Discovery: JSON-Array mit `op=read` auf `devices` für `lemonbeatd` und `lwm2mserver`
 - Gen2-Ventil: `execute` auf `actuator/{id}/start|stop` mit Payload `as: ["18", "<seconds>"]`
-- Gen2-Zeitplan: `write` auf `schedule/{id}/actuator`, `start_offset_seconds`, `end_offset_seconds`, `repetition_type`, `repetition_value`, …
+### Gen2-Zeitplan (Write)
+
+- Pro Slot ein JSON-Array (`start_offset_seconds`, `end_offset_seconds`, `actuator`, `repetition_value`, `repetition_type`) — Fire-and-Forget (ACKs oft ausbleibend)
+- **Neue WSS-Verbindung pro Slot** (eine lange Session lässt spätere Slots sonst oft still fallen)
+- Verify per Discover mit Retries (websocketd kurz flaky nach Writes)

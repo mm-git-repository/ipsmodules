@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 23;
+    private const MODULE_BUILD = 24;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -457,7 +457,7 @@ class GardenaSmartGateway extends IPSModuleStrict
         }
         // Schedule writes keep one WSS session; valve start/stop should stay short-lived
         $busySec = match ($action) {
-            'writeSchedulesGen2' => 45,
+            'writeSchedulesGen2' => 25,
             'startValve', 'stopValve', 'powerOn', 'powerOff' => 8,
             default => 20,
         };
@@ -491,28 +491,38 @@ class GardenaSmartGateway extends IPSModuleStrict
             if ($action === 'writeSchedulesGen2') {
                 $this->debugLog('Schedule', 'active writes OK — settle + verify discover');
                 // Brief settle, then read back from device so IPS matches reality
-                $this->markWssBusy(8);
+                $this->markWssBusy(10);
                 try {
                     $this->rebuildUsageOverview();
                 } catch (Throwable) {
                     // ignore
                 }
-                usleep(1200000);
-                try {
-                    $this->markWssBusy(30);
-                    $devices = $this->refreshDeviceCache();
-                    $this->pushStateToChildren($devices);
-                    $this->rebuildScheduleOverview($devices);
-                    $this->markGatewayOnline(count($devices));
-                } catch (Throwable $e) {
+                usleep(1500000);
+                $verified = false;
+                $lastVerifyError = '';
+                for ($attempt = 1; $attempt <= 4; $attempt++) {
+                    try {
+                        $this->markWssBusy(15);
+                        $devices = $this->refreshDeviceCache();
+                        $this->pushStateToChildren($devices);
+                        $this->rebuildScheduleOverview($devices);
+                        $this->markGatewayOnline(count($devices));
+                        $verified = true;
+                        break;
+                    } catch (Throwable $e) {
+                        $lastVerifyError = $e->getMessage();
+                        $this->debugLog('Schedule', 'verify discover attempt ' . $attempt . '/4 failed: ' . $lastVerifyError);
+                        usleep(2000000 * $attempt);
+                    }
+                }
+                if (!$verified) {
                     // Write itself succeeded — do not mark gateway unreachable on verify glitch
-                    $this->debugLog('Schedule', 'verify discover failed: ' . $e->getMessage());
-                    $this->SetValue('LastError', 'Zeitplan geschrieben, Verify-Discover: ' . $e->getMessage());
+                    $this->SetValue('LastError', 'Zeitplan geschrieben, Verify-Discover: ' . $lastVerifyError);
                     $this->SetStatus(self::IS_ACTIVE);
                     $this->SetValue('Reachable', true);
                 }
                 // Short cooldown so poll can resume soon
-                $this->markWssBusy(8);
+                $this->markWssBusy(5);
             } else {
                 // start/stop/power: return immediately — full discover would delay UI/device feedback
                 $this->clearWssBusy();

@@ -384,7 +384,8 @@ final class GardenaSmartClient
 
     /**
      * Write Gen2 device schedules (lwm2mserver schedule/*).
-     * One field per request; accept any gateway frame as ACK (writes often omit success/request_id).
+     * Live probe: one JSON array per slot (fire-and-forget) is reliable (~8–10s for 3 slots).
+     * Waiting for per-field ACKs often times out and overwhelms websocketd.
      *
      * @param list<array<string, mixed>> $rules Editor rules from DeviceScheduleRules
      * @param int $previousMaxSlot Highest previously used slot (for clearing removed entries)
@@ -424,20 +425,22 @@ final class GardenaSmartClient
             'writeGen2 device=' . $deviceId
             . ' activeWrites=' . count($activeReqs)
             . ' clearWrites=' . count($clearReqs)
+            . ' mode=slot-batch-ff'
         );
 
         $previousTimeout = $this->timeoutSec;
         $this->timeoutSec = max($previousTimeout, 8);
         $allReplies = [];
         try {
-            $allReplies = $this->exchangeWritesLoosely($activeReqs);
+            $allReplies = $this->exchangeScheduleSlotBatches($activeReqs);
             $this->assertNoWriteFailures($allReplies);
-            $this->log('Schedule', 'active writes done (acks=' . count($allReplies) . '/' . count($activeReqs) . ')');
+            $this->log('Schedule', 'active slot batches done (frames=' . count($allReplies) . ')');
 
             if ($clearReqs !== []) {
                 try {
-                    $this->exchangeFireAndForget($clearReqs, 2.5);
-                    $this->log('Schedule', 'clear writes sent best-effort (' . count($clearReqs) . ')');
+                    $clearReplies = $this->exchangeScheduleSlotBatches($clearReqs);
+                    $allReplies = array_merge($allReplies, $clearReplies);
+                    $this->log('Schedule', 'clear slot batches done (' . count($clearReqs) . ' fields)');
                 } catch (Throwable $e) {
                     $this->log('Schedule', 'clear writes best-effort failed: ' . $e->getMessage());
                 }
@@ -450,142 +453,77 @@ final class GardenaSmartClient
     }
 
     /**
-     * Send writes one-by-one on a single WSS session.
-     * Reconnect only on EOF / send failure — slot-boundary reconnects overwhelm websocketd.
+     * Send schedule writes as one JSON array per slot.
+     * New WSS connection per slot — a single long session often drops later slots
+     * without error. No ACK required (writes frequently produce zero frames).
      *
      * @param list<array<string, mixed>> $requests
      * @return list<array<string, mixed>>
      */
-    private function exchangeWritesLoosely(array $requests): array
+    private function exchangeScheduleSlotBatches(array $requests): array
     {
         if ($requests === []) {
             return [];
         }
-        $fp = $this->connect();
+
+        $bySlot = [];
+        $order = [];
+        foreach ($requests as $req) {
+            $path = (string) (($req['entity']['path'] ?? '') ?: '');
+            $slot = '_';
+            if (preg_match('#schedule/(\d+)/#', $path, $m)) {
+                $slot = $m[1];
+            }
+            if (!isset($bySlot[$slot])) {
+                $bySlot[$slot] = [];
+                $order[] = $slot;
+            }
+            $bySlot[$slot][] = $req;
+        }
+
         $got = [];
-        $needReconnect = false;
-        $fieldsPerSlot = 4;
-        try {
-            foreach ($requests as $idx => $req) {
-                $path = (string) (($req['entity']['path'] ?? '') ?: '?');
-                $slot = '?';
-                if (preg_match('#schedule/(\d+)/#', $path, $m)) {
-                    $slot = $m[1];
-                }
-                $field = (string) (strrchr($path, '/') ?: $path);
-                $field = ltrim($field, '/');
-                if (($idx % $fieldsPerSlot) === 0) {
-                    $this->log('WSS', sprintf('schedule slot %s start (write %d/%d)', $slot, $idx + 1, count($requests)));
-                }
-                if ($needReconnect) {
-                    $this->log('WSS', 'forced reconnect before ' . $path);
-                    $this->closeStream($fp);
-                    usleep(1000000);
-                    $fp = $this->connect();
-                    $needReconnect = false;
-                }
-                $requireAck = $this->scheduleWriteRequiresAck($path);
-                $acked = false;
-                $lastError = '';
-                $attempts = $requireAck ? 3 : 2;
-                for ($attempt = 1; $attempt <= $attempts; $attempt++) {
-                    $this->log(
-                        'WSS',
-                        sprintf(
-                            'write %d/%d try %d slot=%s field=%s',
-                            $idx + 1,
-                            count($requests),
-                            $attempt,
-                            $slot,
-                            $field
-                        )
-                    );
-                    try {
-                        $this->sendJson($fp, [$req]);
-                    } catch (Throwable $e) {
-                        $lastError = $e->getMessage();
-                        $this->log('WSS', 'send failed, reconnecting: ' . $lastError);
-                        $this->closeStream($fp);
-                        usleep(1000000);
-                        $fp = $this->connect();
+        $slotCount = count($order);
+        foreach ($order as $idx => $slot) {
+            $chunk = $bySlot[$slot];
+            $this->log(
+                'WSS',
+                sprintf('schedule slot %s batch %d/%d fields=%d', $slot, $idx + 1, $slotCount, count($chunk))
+            );
+            $fp = null;
+            try {
+                $fp = $this->connect();
+                $this->sendJson($fp, $chunk);
+                $deadline = microtime(true) + 1.0;
+                while (microtime(true) < $deadline) {
+                    $raw = $this->recvFrame($fp, max(0.1, $deadline - microtime(true)));
+                    if ($raw === null) {
                         continue;
                     }
-                    $waitSec = $requireAck ? min(4.0, (float) $this->timeoutSec) : 1.2;
-                    $deadline = microtime(true) + $waitSec;
-                    $idleAfterAck = null;
-                    $gotAck = false;
-                    while (microtime(true) < $deadline) {
-                        $raw = $this->recvFrame($fp, max(0.15, $deadline - microtime(true)));
-                        if ($raw === null) {
-                            if ($gotAck && $idleAfterAck !== null && (microtime(true) - $idleAfterAck) > 0.25) {
-                                break;
-                            }
-                            $meta = is_resource($fp) ? @stream_get_meta_data($fp) : null;
-                            if (is_array($meta) && !empty($meta['eof'])) {
-                                $this->log('WSS', 'write connection EOF — retry field');
-                                $needReconnect = true;
-                                break;
-                            }
-                            continue;
-                        }
-                        $this->log('WSS', 'write frame preview=' . substr($raw, 0, 220));
-                        $decoded = json_decode($raw, true);
-                        if (!is_array($decoded)) {
-                            continue;
-                        }
-                        foreach ($this->flattenReplyMessages($decoded) as $msg) {
-                            if ($this->isExplicitWriteFailure($msg)) {
-                                $detail = is_string($msg['error'] ?? null)
-                                    ? (string) $msg['error']
-                                    : 'Gateway lehnte Write ab (' . $path . ')';
-                                throw new RuntimeException($detail);
-                            }
-                            $got[] = $msg;
-                            $gotAck = true;
-                            $idleAfterAck = microtime(true);
-                        }
+                    $this->log('WSS', 'slot batch frame preview=' . substr($raw, 0, 200));
+                    $decoded = json_decode($raw, true);
+                    if (!is_array($decoded)) {
+                        continue;
                     }
-                    if ($gotAck) {
-                        $acked = true;
-                        break;
-                    }
-                    if ($needReconnect) {
-                        $this->log('WSS', 'reconnect after EOF for ' . $path);
-                        $this->closeStream($fp);
-                        usleep(1200000);
-                        $fp = $this->connect();
-                        $needReconnect = false;
+                    foreach ($this->flattenReplyMessages($decoded) as $msg) {
+                        if ($this->isExplicitWriteFailure($msg)) {
+                            $detail = is_string($msg['error'] ?? null)
+                                ? (string) $msg['error']
+                                : 'Gateway lehnte Zeitplan-Write ab (slot ' . $slot . ')';
+                            throw new RuntimeException($detail);
+                        }
+                        $got[] = $msg;
                     }
                 }
-                if (!$acked) {
-                    if ($requireAck) {
-                        throw new RuntimeException(
-                            'Zeitplan-Feld ohne Bestätigung: ' . $path
-                            . ($lastError !== '' ? (' (' . $lastError . ')') : '')
-                        );
-                    }
-                    $this->log('WSS', 'write without ACK (optional field, continuing): ' . $path);
-                }
-                if ($idx < count($requests) - 1) {
-                    usleep(120000);
-                }
+            } finally {
+                $this->closeStream($fp);
             }
-        } finally {
-            $this->closeStream($fp);
-            usleep(800000);
+            if ($idx < $slotCount - 1) {
+                usleep(600000);
+            }
         }
+        usleep(400000);
 
         return $got;
-    }
-
-    private function scheduleWriteRequiresAck(string $path): bool
-    {
-        // repetition_type often never emits an update/ACK on Gardena websocketd
-        if (str_contains($path, '/repetition_type')) {
-            return false;
-        }
-
-        return true;
     }
 
     /** @param array<string, mixed> $msg */

@@ -175,19 +175,20 @@ final class GardenaSmartSchedules
             $usedSlots[$slot] = true;
             $maxUsed = max($maxUsed, (int) $slot);
             $fields = [
-                'actuator' => (int) ($rule['valve'] ?? 0),
-                'repetition_value' => self::encodeDays($rule),
+                // Times first — matches live probe; device applies reliably in one slot batch
                 'start_offset_seconds' => $startSec,
                 'end_offset_seconds' => $endSec,
+                'actuator' => (int) ($rule['valve'] ?? 0),
+                'repetition_value' => self::encodeDays($rule),
+                'repetition_type' => self::REPETITION_TYPE_WEEKLY,
             ];
-            // repetition_type (weekly=1) is omitted: many gateways never ACK that path and weekly is implied by repetition_value
             foreach ($fields as $field => $value) {
                 $active[] = self::writeRequest($deviceId, $slot, $field, $value);
             }
         }
 
-        // Clear unused slots that may still hold data (at least 0..3 historically seen on Dual 2814)
-        $clearUntil = max($maxUsed, $previousMaxSlot, 3);
+        // Clear only slots that may still hold data (previous or above max used) — avoid always wiping 0..3
+        $clearUntil = max($maxUsed, $previousMaxSlot);
         $clearUntil = min($clearUntil, self::GEN2_MAX_SLOTS - 1);
         for ($i = 0; $i <= $clearUntil; $i++) {
             $slot = (string) $i;
