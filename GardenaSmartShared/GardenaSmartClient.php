@@ -160,7 +160,7 @@ final class GardenaSmartClient
         try {
             return $this->exchangeOnConnection($fp, $requests);
         } finally {
-            fclose($fp);
+            $this->closeStream($fp);
         }
     }
 
@@ -203,7 +203,7 @@ final class GardenaSmartClient
                 }
             }
         } finally {
-            fclose($fp);
+            $this->closeStream($fp);
         }
 
         return $all;
@@ -463,13 +463,15 @@ final class GardenaSmartClient
         }
         $fp = $this->connect();
         $got = [];
+        $needReconnect = false;
         try {
             foreach ($requests as $idx => $req) {
                 // Fresh connection every 4 writes reduces gateway dropouts
-                if ($idx > 0 && ($idx % 4) === 0) {
-                    fclose($fp);
+                if ($needReconnect || ($idx > 0 && ($idx % 4) === 0)) {
+                    $this->closeStream($fp);
                     usleep(250000);
                     $fp = $this->connect();
+                    $needReconnect = false;
                 }
                 $path = (string) (($req['entity']['path'] ?? '') ?: '?');
                 $this->log('WSS', sprintf('write %d/%d %s', $idx + 1, count($requests), $path));
@@ -477,7 +479,7 @@ final class GardenaSmartClient
                     $this->sendJson($fp, [$req]);
                 } catch (Throwable $e) {
                     $this->log('WSS', 'send failed, reconnecting: ' . $e->getMessage());
-                    @fclose($fp);
+                    $this->closeStream($fp);
                     usleep(300000);
                     $fp = $this->connect();
                     $this->sendJson($fp, [$req]);
@@ -492,9 +494,10 @@ final class GardenaSmartClient
                             break;
                         }
                         // Connection may have closed
-                        $meta = @stream_get_meta_data($fp);
+                        $meta = is_resource($fp) ? @stream_get_meta_data($fp) : null;
                         if (is_array($meta) && !empty($meta['eof'])) {
-                            $this->log('WSS', 'write connection EOF — will reconnect for next field');
+                            $this->log('WSS', 'write connection EOF — reconnect for next field');
+                            $needReconnect = true;
                             break;
                         }
                         continue;
@@ -525,7 +528,7 @@ final class GardenaSmartClient
                 }
             }
         } finally {
-            @fclose($fp);
+            $this->closeStream($fp);
             // Let websocketd / lwm2m settle before verify-discover
             usleep(800000);
         }
@@ -586,7 +589,7 @@ final class GardenaSmartClient
                 $this->log('WSS', 'forget frame preview=' . substr($raw, 0, 180));
             }
         } finally {
-            fclose($fp);
+            $this->closeStream($fp);
         }
     }
 
@@ -805,13 +808,33 @@ final class GardenaSmartClient
             }
         }
         if (!preg_match('#^HTTP/1\.[01] 101#', $response)) {
-            fclose($fp);
+            $this->closeStream($fp);
             $this->log('WSS', 'handshake failed: ' . trim(strtok($response, "\r\n") ?: 'keine Antwort'));
             throw new RuntimeException('WebSocket-Handshake fehlgeschlagen: ' . trim(strtok($response, "\r\n") ?: 'keine Antwort'));
         }
         $this->log('WSS', 'connected wss://' . $this->host . ':' . $this->port);
 
         return $fp;
+    }
+
+    /**
+     * Safe fclose for PHP 8+: closing an already-closed stream throws TypeError (@ does not suppress it).
+     *
+     * @param resource|null $fp
+     */
+    private function closeStream(&$fp): void
+    {
+        if (!is_resource($fp)) {
+            $fp = null;
+
+            return;
+        }
+        try {
+            fclose($fp);
+        } catch (Throwable) {
+            // already closed / invalid
+        }
+        $fp = null;
     }
 
     /** @param resource $fp */
