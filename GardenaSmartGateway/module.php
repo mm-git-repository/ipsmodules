@@ -293,8 +293,19 @@ class GardenaSmartGateway extends IPSModuleStrict
             default => throw new RuntimeException('Unbekannte Aktion: ' . $action),
         };
 
-        // Refresh after command
-        $this->UpdateValues();
+        // Refresh after command (schedule writes already took long — softer refresh)
+        if ($action === 'writeSchedulesGen2') {
+            try {
+                $devices = $this->refreshDeviceCache();
+                $this->pushStateToChildren($devices);
+                $this->rebuildScheduleOverview($devices);
+                $this->rebuildUsageOverview();
+            } catch (Throwable $e) {
+                $this->SetValue('LastError', $e->getMessage());
+            }
+        } else {
+            $this->UpdateValues();
+        }
 
         return $replies;
     }

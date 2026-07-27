@@ -164,9 +164,6 @@ final class GardenaSmartSchedules
                 'actuator' => (int) ($rule['valve'] ?? 0),
                 'start_offset_seconds' => $startSec,
                 'end_offset_seconds' => $endSec,
-                'start_offset_from' => 0,
-                'end_offset_from' => 0,
-                'pre_offset' => 0,
                 'repetition_type' => self::REPETITION_TYPE_WEEKLY,
                 'repetition_value' => self::encodeDays($rule),
             ];
@@ -180,14 +177,10 @@ final class GardenaSmartSchedules
             if (isset($usedSlots[$slot])) {
                 continue;
             }
+            // Minimal clear — enough to disable unused Gen2 slots
             foreach ([
-                'actuator' => 0,
                 'start_offset_seconds' => 0,
                 'end_offset_seconds' => 0,
-                'start_offset_from' => 0,
-                'end_offset_from' => 0,
-                'pre_offset' => 0,
-                'repetition_type' => self::REPETITION_TYPE_WEEKLY,
                 'repetition_value' => 0,
             ] as $field => $value) {
                 $requests[] = self::writeRequest($deviceId, $slot, $field, $value);

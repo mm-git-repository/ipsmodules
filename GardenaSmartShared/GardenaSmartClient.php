@@ -174,15 +174,30 @@ final class GardenaSmartClient
             );
         }
 
-        $replies = $this->exchange($requests);
-        foreach ($replies as $msg) {
-            if (($msg['success'] ?? null) !== true) {
-                $detail = is_string($msg['error'] ?? null) ? (string) $msg['error'] : 'Gateway lehnte Zeitplan-Write ab';
-                throw new RuntimeException($detail);
+        // Gateway/websocketd is slow with large write batches — chunk + longer timeout
+        $previousTimeout = $this->timeoutSec;
+        $this->timeoutSec = max($previousTimeout, 25);
+        $allReplies = [];
+        try {
+            foreach (array_chunk($requests, 4) as $chunk) {
+                $replies = $this->exchange($chunk);
+                foreach ($replies as $msg) {
+                    if (($msg['success'] ?? null) !== true) {
+                        $detail = is_string($msg['error'] ?? null)
+                            ? (string) $msg['error']
+                            : 'Gateway lehnte Zeitplan-Write ab';
+                        throw new RuntimeException($detail);
+                    }
+                    $allReplies[] = $msg;
+                }
+                // brief pause between chunks to avoid gateway overload
+                usleep(150000);
             }
+        } finally {
+            $this->timeoutSec = $previousTimeout;
         }
 
-        return $replies;
+        return $allReplies;
     }
 
     /**
