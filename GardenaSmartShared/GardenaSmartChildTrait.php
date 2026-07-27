@@ -43,6 +43,18 @@ trait GardenaSmartChildTrait
     /** @return list<array<string, mixed>> */
     protected function loadDeviceScheduleRules(): array
     {
+        // Live attribute is readable immediately (Property needs ApplyChanges)
+        try {
+            $attr = $this->ReadAttributeString('DeviceScheduleRulesData');
+            if (is_string($attr) && $attr !== '') {
+                $rules = json_decode($attr, true);
+                if (is_array($rules)) {
+                    return $rules;
+                }
+            }
+        } catch (Throwable) {
+            // attribute may be missing on older Power instances
+        }
         try {
             $raw = $this->ReadPropertyString('DeviceScheduleRules');
         } catch (Throwable) {
@@ -56,7 +68,39 @@ trait GardenaSmartChildTrait
     protected function saveDeviceScheduleRules(array $rules): void
     {
         $json = json_encode($rules, JSON_UNESCAPED_UNICODE) ?: '[]';
-        @IPS_SetProperty($this->InstanceID, 'DeviceScheduleRules', $json);
+        try {
+            $this->WriteAttributeString('DeviceScheduleRulesData', $json);
+        } catch (Throwable) {
+            // ignore if attribute not registered
+        }
+        // Keep property in sync for the configuration form (applied on next ApplyChanges)
+        try {
+            @IPS_SetProperty($this->InstanceID, 'DeviceScheduleRules', $json);
+        } catch (Throwable) {
+            // ignore
+        }
+    }
+
+    /** After form ApplyChanges: property is authoritative — copy into live attribute. */
+    protected function syncScheduleRulesFromProperty(): void
+    {
+        try {
+            $raw = $this->ReadPropertyString('DeviceScheduleRules');
+        } catch (Throwable) {
+            return;
+        }
+        if (!is_string($raw) || $raw === '') {
+            return;
+        }
+        $rules = json_decode($raw, true);
+        if (!is_array($rules)) {
+            return;
+        }
+        try {
+            $this->WriteAttributeString('DeviceScheduleRulesData', json_encode($rules, JSON_UNESCAPED_UNICODE) ?: '[]');
+        } catch (Throwable) {
+            // ignore
+        }
     }
 
     /**

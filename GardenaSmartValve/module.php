@@ -13,7 +13,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 20;
+    private const MODULE_BUILD = 21;
     /** Default manual start + new schedule entry duration (30 min). */
     private const DEFAULT_WATERING_DURATION_SEC = 1800;
 
@@ -41,6 +41,7 @@ class GardenaSmartValve extends IPSModuleStrict
         }
 
         $this->RegisterAttributeString('DeviceAppSchedules', '');
+        $this->RegisterAttributeString('DeviceScheduleRulesData', '');
         $this->RegisterAttributeString('ScheduleLastSavedBy', '');
         $this->RegisterAttributeString('ScheduleLastSavedAt', '');
         $this->RegisterAttributeString('UsageState', '{}');
@@ -76,6 +77,8 @@ class GardenaSmartValve extends IPSModuleStrict
     public function ApplyChanges(): void
     {
         parent::ApplyChanges();
+        // Form list edits land in the property — mirror into live attribute for tile/pull
+        $this->syncScheduleRulesFromProperty();
         $this->SetValue('ModuleVersion', self::MODULE_VERSION . ' (Build ' . self::MODULE_BUILD . ')');
         $this->SetStatus($this->getGatewayInstanceId() > 0 ? 102 : 104);
         $this->notifyGatewaySchedules();
@@ -111,6 +114,8 @@ class GardenaSmartValve extends IPSModuleStrict
                         $form['elements'][$idx]['columns'][$cIdx]['add'] = $end;
                     }
                 }
+                // Show live rules (attribute), not stale pre-ApplyChanges property
+                $form['elements'][$idx]['values'] = $this->loadDeviceScheduleRules();
             }
         }
         if ($this->ReadPropertyInteger('ValveCount') < 2) {
@@ -352,7 +357,7 @@ class GardenaSmartValve extends IPSModuleStrict
 
     public function PushDeviceSchedules(): string
     {
-        return $this->SaveDeviceSchedules($this->ReadPropertyString('DeviceScheduleRules'));
+        return $this->SaveDeviceSchedules($this->loadDeviceScheduleRules());
     }
 
     /**
@@ -391,7 +396,8 @@ class GardenaSmartValve extends IPSModuleStrict
             $rules = GardenaSmartSchedules::parseGen2Rules($data);
             // Explicit overwrite — also clears local rows when device has none
             $this->saveDeviceScheduleRules($rules);
-            // Do NOT IPS_ApplyChanges here: breaks visualization RequestAction and can surface as cryptic errors
+            // Do NOT IPS_ApplyChanges here: breaks visualization RequestAction
+            // Live rules are in attribute DeviceScheduleRulesData (readable immediately)
             $lines = $this->deviceScheduleLines($rules);
         } else {
             $lines = GardenaSmartDevices::formatDeviceSchedules($data);
@@ -403,6 +409,11 @@ class GardenaSmartValve extends IPSModuleStrict
         $this->WriteAttributeString('ScheduleLastSavedBy', 'Gerät');
         $this->WriteAttributeString('ScheduleLastSavedAt', date('c'));
         $this->notifyGatewaySchedules();
+        try {
+            $this->ReloadForm();
+        } catch (Throwable) {
+            // optional — form may not be open
+        }
 
         $message = $generation >= 2
             ? ('OK — ' . count($rules) . ' Zeitplan(e) vom Gerät nach IPS übernommen (überschrieben)')
