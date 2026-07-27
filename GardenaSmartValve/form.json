@@ -77,7 +77,7 @@
         {
             "type": "Button",
             "caption": "An Gerät speichern",
-            "onClick": "echo GSVAL_SaveDeviceSchedules($id, $DeviceScheduleRules);"
+            "onClick": "IPS_ApplyChanges($id); echo GSVAL_PushDeviceSchedules($id);"
         },
         {
             "type": "Button",

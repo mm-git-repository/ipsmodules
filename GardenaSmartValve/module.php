@@ -12,7 +12,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 5;
+    private const MODULE_BUILD = 6;
 
     public function Create(): void
     {
@@ -201,13 +201,23 @@ class GardenaSmartValve extends IPSModuleStrict
         return 'OK';
     }
 
-    public function SaveDeviceSchedules(string $rulesJson = ''): string
+    /**
+     * Form-Button: Liste zuerst übernehmen, dann vom Property ans Gerät schreiben.
+     */
+    public function PushDeviceSchedules(): string
+    {
+        return $this->SaveDeviceSchedules($this->ReadPropertyString('DeviceScheduleRules'));
+    }
+
+    public function SaveDeviceSchedules(mixed $rulesJson = null): string
     {
         $generation = $this->ReadPropertyInteger('Generation');
         if (!GardenaSmartSchedules::supportsDeviceScheduleWrite($generation, 'valve')) {
             return 'Fehler: Geräte-Zeitpläne können für Gen1 nur in der Gardena-App bearbeitet werden';
         }
-        if ($rulesJson !== '') {
+        if (is_array($rulesJson)) {
+            $rules = $rulesJson;
+        } elseif (is_string($rulesJson) && $rulesJson !== '') {
             $rules = json_decode($rulesJson, true);
             if (!is_array($rules)) {
                 return 'Fehler: Ungültige Zeitplan-Daten';
