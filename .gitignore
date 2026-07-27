@@ -1,4 +1,1 @@
-tools/schedule_baseline.json
-tools/__pycache__/
-tools/*.pyc
 .env
