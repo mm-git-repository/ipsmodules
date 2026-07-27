@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 19;
+    private const MODULE_BUILD = 20;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;

@@ -35,7 +35,6 @@
     });
 
     var html = '';
-    html += '<div class="gs-usage-head"><div class="gs-usage-title">Wasserverbrauch</div></div>';
     html += '<div class="gs-usage-totals">';
     html += totalBox('Heute', totals.today);
     html += totalBox('Woche', totals.week);

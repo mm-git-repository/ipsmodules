@@ -17,20 +17,6 @@
 }
 .gs-usage * { box-sizing: border-box; }
 
-.gs-usage-head {
-    flex: 0 0 auto;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 10px 20px;
-}
-.gs-usage-title {
-    font-size: 1.45rem;
-    font-weight: 650;
-    letter-spacing: 0.01em;
-}
-
 .gs-usage-totals {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
