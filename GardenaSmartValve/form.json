@@ -49,18 +49,17 @@
         {
             "type": "Label",
             "name": "ScheduleHint",
-            "caption": "Geräte-Zeitpläne (Gen2): Master am Gateway/Cloud. IPS speichert nur eine lokale Kopie zum Bearbeiten."
+            "caption": "Geräte-Zeitpläne (Gen2): max. 4 Einträge. Hinzufügen/Entfernen/Ändern möglich. Slots werden automatisch vergeben. Speichern schreibt aufs Gerät."
         },
         {
             "type": "List",
             "name": "DeviceScheduleRules",
             "caption": "Geräte-Zeitpläne",
             "rowCount": 5,
-            "add": false,
-            "delete": false,
+            "add": true,
+            "delete": true,
             "columns": [
                 { "caption": "Aktiv", "name": "active", "width": "50px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-                { "caption": "Slot", "name": "slot", "width": "45px", "edit": { "type": "ValidationTextBox" }, "add": "0", "save": true },
                 { "caption": "Ventil", "name": "valve", "width": "60px", "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 5, "digits": 0 }, "add": 0, "save": true },
                 { "caption": "Start", "name": "start", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "06:00", "save": true },
                 { "caption": "Ende", "name": "end", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "06:30", "save": true },

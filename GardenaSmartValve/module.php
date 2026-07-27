@@ -12,7 +12,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 4;
+    private const MODULE_BUILD = 5;
 
     public function Create(): void
     {
@@ -106,6 +106,7 @@ class GardenaSmartValve extends IPSModuleStrict
             ],
             'scheduleRules' => $rules,
             'scheduleWritable' => GardenaSmartSchedules::supportsDeviceScheduleWrite($generation, 'valve'),
+            'scheduleMaxSlots' => GardenaSmartSchedules::GEN2_MAX_SLOTS,
             'scheduleLastSavedBy' => $this->ReadAttributeString('ScheduleLastSavedBy'),
             'scheduleLastSavedAt' => $this->ReadAttributeString('ScheduleLastSavedAt'),
             'defaultDuration' => $this->ReadPropertyInteger('DefaultDurationSec'),
@@ -211,13 +212,15 @@ class GardenaSmartValve extends IPSModuleStrict
             if (!is_array($rules)) {
                 return 'Fehler: Ungültige Zeitplan-Daten';
             }
-            $this->saveDeviceScheduleRules($rules);
         } else {
             $rules = $this->loadDeviceScheduleRules();
         }
-        if ($rules === []) {
-            return 'Fehler: Keine Zeitplan-Einträge zum Speichern';
+        $normalized = GardenaSmartSchedules::normalizeRules($rules);
+        if (!$normalized['ok']) {
+            return 'Fehler: ' . $normalized['error'];
         }
+        $rules = $normalized['rules'];
+        $this->saveDeviceScheduleRules($rules);
         $result = $this->sendCommandToGateway([
             'action' => 'writeSchedulesGen2',
             'deviceId' => $this->ReadPropertyString('DeviceId'),
@@ -234,7 +237,7 @@ class GardenaSmartValve extends IPSModuleStrict
         $this->WriteAttributeString('DeviceAppSchedules', $text);
         $this->notifyGatewaySchedules();
 
-        return 'OK — Zeitpläne am Gerät gespeichert';
+        return 'OK — Zeitpläne am Gerät gespeichert (' . count($rules) . '/' . GardenaSmartSchedules::GEN2_MAX_SLOTS . ')';
     }
 
     /** @param array<string, mixed> $data */

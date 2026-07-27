@@ -114,3 +114,11 @@
 .gs-sched-table .gs-slot { font-weight: 600; }
 .gs-sched-table .gs-empty { text-align: left; opacity: 0.7; padding: 8px; }
 .gs-sched-editor .gs-actions { margin-top: 4px; }
+.gs-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.gs-btn-sm {
+    padding: 4px 8px;
+    font-size: 12px;
+}

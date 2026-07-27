@@ -9,6 +9,8 @@ require_once __DIR__ . '/GardenaSmartDevices.php';
  */
 final class GardenaSmartSchedules
 {
+    public const GEN2_MAX_SLOTS = 4;
+
     public static function supportsDeviceScheduleWrite(int $generation, string $deviceKind = 'valve'): bool
     {
         return $generation >= 2 && in_array($deviceKind, ['valve', 'water'], true);
@@ -47,6 +49,9 @@ final class GardenaSmartSchedules
             $startSec = (int) (GardenaSmartDevices::fieldValue($sch['start_offset_seconds'] ?? null) ?? 0);
             $endSec = (int) (GardenaSmartDevices::fieldValue($sch['end_offset_seconds'] ?? null) ?? 0);
             $repValue = (int) (GardenaSmartDevices::fieldValue($sch['repetition_value'] ?? null) ?? 0);
+            if (self::isEmptySlot($startSec, $endSec, $repValue)) {
+                continue;
+            }
             $days = self::decodeDays($repValue);
             $rules[] = [
                 'slot' => (string) $slotId,
@@ -70,16 +75,81 @@ final class GardenaSmartSchedules
     }
 
     /**
+     * Normalize editor rules: keep active entries with valid times, assign slots 0..3.
+     *
+     * @param list<array<string, mixed>> $rules
+     * @return array{ok: bool, rules: list<array<string, mixed>>, error: string}
+     */
+    public static function normalizeRules(array $rules): array
+    {
+        $normalized = [];
+        $activeCount = 0;
+        foreach ($rules as $rule) {
+            if (!is_array($rule)) {
+                continue;
+            }
+            if (empty($rule['active'])) {
+                continue;
+            }
+            $start = trim((string) ($rule['start'] ?? ''));
+            $end = trim((string) ($rule['end'] ?? ''));
+            if (self::hmToSeconds($start) === null || self::hmToSeconds($end) === null) {
+                return [
+                    'ok' => false,
+                    'rules' => [],
+                    'error' => 'Ungültige Zeitangabe (erwartet HH:MM)',
+                ];
+            }
+            $hasDay = false;
+            foreach (self::DAY_BITS as $key => $_) {
+                if (!empty($rule[$key])) {
+                    $hasDay = true;
+                    break;
+                }
+            }
+            if (!$hasDay) {
+                return [
+                    'ok' => false,
+                    'rules' => [],
+                    'error' => 'Jeder aktive Eintrag braucht mindestens einen Wochentag',
+                ];
+            }
+            $activeCount++;
+            if ($activeCount > self::GEN2_MAX_SLOTS) {
+                return [
+                    'ok' => false,
+                    'rules' => [],
+                    'error' => 'Maximal ' . self::GEN2_MAX_SLOTS . ' Zeitplan-Einträge möglich',
+                ];
+            }
+            $entry = [
+                'slot' => (string) (count($normalized)),
+                'active' => true,
+                'valve' => max(0, (int) ($rule['valve'] ?? 0)),
+                'start' => self::secondsToHm((int) self::hmToSeconds($start)),
+                'end' => self::secondsToHm((int) self::hmToSeconds($end)),
+            ];
+            foreach (self::DAY_BITS as $key => $_) {
+                $entry[$key] = !empty($rule[$key]);
+            }
+            $normalized[] = $entry;
+        }
+
+        return ['ok' => true, 'rules' => $normalized, 'error' => ''];
+    }
+
+    /**
      * @param list<array<string, mixed>> $rules
      * @return list<array<string, mixed>> WSS request arrays
      */
     public static function buildGen2WriteRequests(string $deviceId, array $rules): array
     {
+        $normalized = self::normalizeRules($rules);
+        $active = $normalized['ok'] ? $normalized['rules'] : [];
+        $usedSlots = [];
         $requests = [];
-        foreach ($rules as $rule) {
-            if (!is_array($rule) || empty($rule['active'])) {
-                continue;
-            }
+
+        foreach ($active as $rule) {
             $slot = (string) ($rule['slot'] ?? '');
             if ($slot === '') {
                 continue;
@@ -89,6 +159,7 @@ final class GardenaSmartSchedules
             if ($startSec === null || $endSec === null) {
                 continue;
             }
+            $usedSlots[$slot] = true;
             $fields = [
                 'actuator' => (int) ($rule['valve'] ?? 0),
                 'start_offset_seconds' => $startSec,
@@ -100,15 +171,26 @@ final class GardenaSmartSchedules
                 'repetition_value' => self::encodeDays($rule),
             ];
             foreach ($fields as $field => $value) {
-                $requests[] = [
-                    'op' => 'write',
-                    'entity' => [
-                        'device' => $deviceId,
-                        'service' => 'lwm2mserver',
-                        'path' => 'schedule/' . $slot . '/' . $field,
-                    ],
-                    'payload' => ['vi' => $value],
-                ];
+                $requests[] = self::writeRequest($deviceId, $slot, $field, $value);
+            }
+        }
+
+        for ($i = 0; $i < self::GEN2_MAX_SLOTS; $i++) {
+            $slot = (string) $i;
+            if (isset($usedSlots[$slot])) {
+                continue;
+            }
+            foreach ([
+                'actuator' => 0,
+                'start_offset_seconds' => 0,
+                'end_offset_seconds' => 0,
+                'start_offset_from' => 0,
+                'end_offset_from' => 0,
+                'pre_offset' => 0,
+                'repetition_type' => self::REPETITION_TYPE_WEEKLY,
+                'repetition_value' => 0,
+            ] as $field => $value) {
+                $requests[] = self::writeRequest($deviceId, $slot, $field, $value);
             }
         }
 
@@ -143,6 +225,27 @@ final class GardenaSmartSchedules
         }
 
         return $lines;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function writeRequest(string $deviceId, string $slot, string $field, int $value): array
+    {
+        return [
+            'op' => 'write',
+            'entity' => [
+                'device' => $deviceId,
+                'service' => 'lwm2mserver',
+                'path' => 'schedule/' . $slot . '/' . $field,
+            ],
+            'payload' => ['vi' => $value],
+        ];
+    }
+
+    private static function isEmptySlot(int $startSec, int $endSec, int $repValue): bool
+    {
+        return $startSec === 0 && $endSec === 0 && $repValue === 0;
     }
 
     /**
