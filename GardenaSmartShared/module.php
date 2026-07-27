@@ -9,7 +9,7 @@ declare(strict_types=1);
 class GardenaSmartShared extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 5;
+    private const MODULE_BUILD = 6;
 
     public function Create(): void
     {

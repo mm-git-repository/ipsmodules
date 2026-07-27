@@ -464,8 +464,8 @@ final class GardenaSmartClient
         $fp = $this->connect();
         $got = [];
         $needReconnect = false;
-        // 5 fields per schedule slot — never reconnect mid-slot
-        $fieldsPerSlot = 5;
+        // Fields per slot in buildGen2WriteRequests (actuator, repetition_value, start, end)
+        $fieldsPerSlot = 4;
         try {
             foreach ($requests as $idx => $req) {
                 $slotBoundary = ($idx > 0 && ($idx % $fieldsPerSlot) === 0);
@@ -476,9 +476,11 @@ final class GardenaSmartClient
                     $needReconnect = false;
                 }
                 $path = (string) (($req['entity']['path'] ?? '') ?: '?');
+                $requireAck = $this->scheduleWriteRequiresAck($path);
                 $acked = false;
                 $lastError = '';
-                for ($attempt = 1; $attempt <= 3; $attempt++) {
+                $attempts = $requireAck ? 3 : 2;
+                for ($attempt = 1; $attempt <= $attempts; $attempt++) {
                     $this->log(
                         'WSS',
                         sprintf('write %d/%d try %d %s', $idx + 1, count($requests), $attempt, $path)
@@ -493,7 +495,8 @@ final class GardenaSmartClient
                         $fp = $this->connect();
                         continue;
                     }
-                    $deadline = microtime(true) + min(4.0, (float) $this->timeoutSec);
+                    $waitSec = $requireAck ? min(4.0, (float) $this->timeoutSec) : 1.2;
+                    $deadline = microtime(true) + $waitSec;
                     $idleAfterAck = null;
                     $gotAck = false;
                     while (microtime(true) < $deadline) {
@@ -539,10 +542,13 @@ final class GardenaSmartClient
                     }
                 }
                 if (!$acked) {
-                    throw new RuntimeException(
-                        'Zeitplan-Feld ohne Bestätigung: ' . $path
-                        . ($lastError !== '' ? (' (' . $lastError . ')') : '')
-                    );
+                    if ($requireAck) {
+                        throw new RuntimeException(
+                            'Zeitplan-Feld ohne Bestätigung: ' . $path
+                            . ($lastError !== '' ? (' (' . $lastError . ')') : '')
+                        );
+                    }
+                    $this->log('WSS', 'write without ACK (optional field, continuing): ' . $path);
                 }
                 if ($idx < count($requests) - 1) {
                     usleep(180000);
@@ -554,6 +560,16 @@ final class GardenaSmartClient
         }
 
         return $got;
+    }
+
+    private function scheduleWriteRequiresAck(string $path): bool
+    {
+        // repetition_type often never emits an update/ACK on Gardena websocketd
+        if (str_contains($path, '/repetition_type')) {
+            return false;
+        }
+
+        return true;
     }
 
     /** @param array<string, mixed> $msg */

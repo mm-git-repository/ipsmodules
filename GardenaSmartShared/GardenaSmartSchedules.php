@@ -175,13 +175,12 @@ final class GardenaSmartSchedules
             $usedSlots[$slot] = true;
             $maxUsed = max($maxUsed, (int) $slot);
             $fields = [
-                // Days/type first, then times — device sometimes ignores trailing fields if session drops mid-slot
                 'actuator' => (int) ($rule['valve'] ?? 0),
-                'repetition_type' => self::REPETITION_TYPE_WEEKLY,
                 'repetition_value' => self::encodeDays($rule),
                 'start_offset_seconds' => $startSec,
                 'end_offset_seconds' => $endSec,
             ];
+            // repetition_type (weekly=1) is omitted: many gateways never ACK that path and weekly is implied by repetition_value
             foreach ($fields as $field => $value) {
                 $active[] = self::writeRequest($deviceId, $slot, $field, $value);
             }
