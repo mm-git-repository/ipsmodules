@@ -464,72 +464,92 @@ final class GardenaSmartClient
         $fp = $this->connect();
         $got = [];
         $needReconnect = false;
+        // 5 fields per schedule slot — never reconnect mid-slot
+        $fieldsPerSlot = 5;
         try {
             foreach ($requests as $idx => $req) {
-                // Fresh connection every 4 writes reduces gateway dropouts
-                if ($needReconnect || ($idx > 0 && ($idx % 4) === 0)) {
+                $slotBoundary = ($idx > 0 && ($idx % $fieldsPerSlot) === 0);
+                if ($needReconnect || $slotBoundary) {
                     $this->closeStream($fp);
-                    usleep(250000);
+                    usleep(400000);
                     $fp = $this->connect();
                     $needReconnect = false;
                 }
                 $path = (string) (($req['entity']['path'] ?? '') ?: '?');
-                $this->log('WSS', sprintf('write %d/%d %s', $idx + 1, count($requests), $path));
-                try {
-                    $this->sendJson($fp, [$req]);
-                } catch (Throwable $e) {
-                    $this->log('WSS', 'send failed, reconnecting: ' . $e->getMessage());
-                    $this->closeStream($fp);
-                    usleep(300000);
-                    $fp = $this->connect();
-                    $this->sendJson($fp, [$req]);
-                }
-                $deadline = microtime(true) + min(3.5, (float) $this->timeoutSec);
                 $acked = false;
-                $idleAfterAck = null;
-                while (microtime(true) < $deadline) {
-                    $raw = $this->recvFrame($fp, max(0.15, $deadline - microtime(true)));
-                    if ($raw === null) {
-                        if ($acked && $idleAfterAck !== null && (microtime(true) - $idleAfterAck) > 0.25) {
-                            break;
-                        }
-                        // Connection may have closed
-                        $meta = is_resource($fp) ? @stream_get_meta_data($fp) : null;
-                        if (is_array($meta) && !empty($meta['eof'])) {
-                            $this->log('WSS', 'write connection EOF — reconnect for next field');
-                            $needReconnect = true;
-                            break;
-                        }
+                $lastError = '';
+                for ($attempt = 1; $attempt <= 3; $attempt++) {
+                    $this->log(
+                        'WSS',
+                        sprintf('write %d/%d try %d %s', $idx + 1, count($requests), $attempt, $path)
+                    );
+                    try {
+                        $this->sendJson($fp, [$req]);
+                    } catch (Throwable $e) {
+                        $lastError = $e->getMessage();
+                        $this->log('WSS', 'send failed, reconnecting: ' . $lastError);
+                        $this->closeStream($fp);
+                        usleep(350000);
+                        $fp = $this->connect();
                         continue;
                     }
-                    $this->log('WSS', 'write frame preview=' . substr($raw, 0, 220));
-                    $decoded = json_decode($raw, true);
-                    if (!is_array($decoded)) {
-                        continue;
-                    }
-                    foreach ($this->flattenReplyMessages($decoded) as $msg) {
-                        if ($this->isExplicitWriteFailure($msg)) {
-                            $detail = is_string($msg['error'] ?? null)
-                                ? (string) $msg['error']
-                                : 'Gateway lehnte Write ab (' . $path . ')';
-                            throw new RuntimeException($detail);
+                    $deadline = microtime(true) + min(4.0, (float) $this->timeoutSec);
+                    $idleAfterAck = null;
+                    $gotAck = false;
+                    while (microtime(true) < $deadline) {
+                        $raw = $this->recvFrame($fp, max(0.15, $deadline - microtime(true)));
+                        if ($raw === null) {
+                            if ($gotAck && $idleAfterAck !== null && (microtime(true) - $idleAfterAck) > 0.25) {
+                                break;
+                            }
+                            $meta = is_resource($fp) ? @stream_get_meta_data($fp) : null;
+                            if (is_array($meta) && !empty($meta['eof'])) {
+                                $this->log('WSS', 'write connection EOF — retry field');
+                                $needReconnect = true;
+                                break;
+                            }
+                            continue;
                         }
-                        // "op":"update" push after write is a valid ACK
-                        $got[] = $msg;
+                        $this->log('WSS', 'write frame preview=' . substr($raw, 0, 220));
+                        $decoded = json_decode($raw, true);
+                        if (!is_array($decoded)) {
+                            continue;
+                        }
+                        foreach ($this->flattenReplyMessages($decoded) as $msg) {
+                            if ($this->isExplicitWriteFailure($msg)) {
+                                $detail = is_string($msg['error'] ?? null)
+                                    ? (string) $msg['error']
+                                    : 'Gateway lehnte Write ab (' . $path . ')';
+                                throw new RuntimeException($detail);
+                            }
+                            $got[] = $msg;
+                            $gotAck = true;
+                            $idleAfterAck = microtime(true);
+                        }
+                    }
+                    if ($gotAck) {
                         $acked = true;
-                        $idleAfterAck = microtime(true);
+                        break;
+                    }
+                    if ($needReconnect) {
+                        $this->closeStream($fp);
+                        usleep(350000);
+                        $fp = $this->connect();
+                        $needReconnect = false;
                     }
                 }
                 if (!$acked) {
-                    $this->log('WSS', sprintf('write %d/%d no ACK (continuing) %s', $idx + 1, count($requests), $path));
+                    throw new RuntimeException(
+                        'Zeitplan-Feld ohne Bestätigung: ' . $path
+                        . ($lastError !== '' ? (' (' . $lastError . ')') : '')
+                    );
                 }
                 if ($idx < count($requests) - 1) {
-                    usleep(150000);
+                    usleep(180000);
                 }
             }
         } finally {
             $this->closeStream($fp);
-            // Let websocketd / lwm2m settle before verify-discover
             usleep(800000);
         }
 

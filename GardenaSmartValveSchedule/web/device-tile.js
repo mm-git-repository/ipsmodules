@@ -38,13 +38,28 @@
         el.className = 'gs-msg ' + (ok ? 'ok' : 'err');
     }
 
+    function parseMaybeJson(res) {
+        if (res && typeof res === 'object') return res;
+        if (typeof res !== 'string') return null;
+        var s = res.trim();
+        // IPS sometimes wraps echo output or doubles JSON
+        try { return JSON.parse(s); } catch (e1) {}
+        var start = s.indexOf('{');
+        var end = s.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            try { return JSON.parse(s.slice(start, end + 1)); } catch (e2) {}
+        }
+        return null;
+    }
+
     function defaultRule() {
         return {
             active: true,
             valve: 0,
             start: state.defaultScheduleStart || '06:00',
             end: state.defaultScheduleEnd || '06:30',
-            mo: true, tu: true, we: true, th: true, fr: true,
+            // No days preselected — forces explicit choice (avoids accidental Mo–Fr / daily writes)
+            mo: false, tu: false, we: false, th: false, fr: false,
             sa: false, so: false
         };
     }
@@ -56,6 +71,9 @@
                 copy[k] = !!r[k];
             });
             copy.active = r.active !== false;
+            copy.valve = parseInt(r.valve != null ? r.valve : 0, 10) || 0;
+            copy.start = String(r.start || copy.start);
+            copy.end = String(r.end || copy.end);
             return copy;
         });
     }
@@ -67,15 +85,19 @@
     function readRulesFromDom() {
         var rules = [];
         root.querySelectorAll('[data-rule-row]').forEach(function (row) {
+            var activeEl = row.querySelector('[data-field="active"]');
+            var valveEl = row.querySelector('[data-field="valve"]');
+            var startEl = row.querySelector('[data-field="start"]');
+            var endEl = row.querySelector('[data-field="end"]');
             var rule = {
-                active: !!(row.querySelector('[data-field="active"]') || {}).checked,
-                valve: parseInt((row.querySelector('[data-field="valve"]') || {}).value || '0', 10),
-                start: ((row.querySelector('[data-field="start"]') || {}).value || '').trim(),
-                end: ((row.querySelector('[data-field="end"]') || {}).value || '').trim()
+                active: !!(activeEl && activeEl.classList.contains('on')),
+                valve: parseInt((valveEl && valveEl.value) || '0', 10),
+                start: ((startEl && startEl.value) || '').trim(),
+                end: ((endEl && endEl.value) || '').trim()
             };
             DAY_KEYS.forEach(function (k) {
-                var cb = row.querySelector('[data-field="' + k + '"]');
-                rule[k] = cb ? cb.checked : false;
+                var btn = row.querySelector('[data-day="' + k + '"]');
+                rule[k] = !!(btn && btn.classList.contains('on'));
             });
             rules.push(rule);
         });
@@ -84,6 +106,12 @@
 
     function isValidHm(value) {
         return /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(value || '').trim());
+    }
+
+    function hmToMin(value) {
+        var m = String(value || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+        if (!m) return -1;
+        return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
     }
 
     function validateRules(rules) {
@@ -97,6 +125,9 @@
             }
             if (!isValidHm(rule.start) || !isValidHm(rule.end)) {
                 return 'Ungültige Zeitangabe (erwartet HH:MM)';
+            }
+            if (hmToMin(rule.end) <= hmToMin(rule.start)) {
+                return 'Ende muss nach Start liegen';
             }
             var hasDay = DAY_KEYS.some(function (k) { return !!rule[k]; });
             if (!hasDay) {
@@ -149,6 +180,11 @@
             ' (' + (days.length ? days.join(',') : 'keine Tage') + ')';
     }
 
+    function toggleBtn(on, attrs, label) {
+        return '<button type="button" class="gs-tog' + (on ? ' on' : '') + '" ' + attrs + '>' +
+            esc(label) + '</button>';
+    }
+
     function renderEditor() {
         var rules = cloneRules(state.scheduleRules || []);
         var html = '';
@@ -157,29 +193,32 @@
         if (scheduleMetaText()) {
             html += '<p class="gs-hint">' + esc(scheduleMetaText()) + '</p>';
         }
-        html += '<div class="gs-sched-table-wrap"><table class="gs-sched-table"><thead><tr>';
-        html += '<th>Aktiv</th><th>Ventil</th><th>Start</th><th>Ende</th>';
-        DAY_LABELS.forEach(function (d) { html += '<th>' + d + '</th>'; });
-        html += '<th></th></tr></thead><tbody>';
 
         if (!rules.length) {
-            html += '<tr><td colspan="12" class="gs-empty">Keine Einträge</td></tr>';
+            html += '<p class="gs-hint">Keine Einträge</p>';
         }
+
         rules.forEach(function (rule, idx) {
-            html += '<tr data-rule-row="' + idx + '">';
-            html += '<td><input type="checkbox" data-field="active"' + (rule.active ? ' checked' : '') + '></td>';
-            html += '<td><select data-field="valve">' +
+            html += '<div class="gs-rule" data-rule-row="' + idx + '">';
+            html += '<div class="gs-rule-top">';
+            html += toggleBtn(!!rule.active, 'data-field="active"', 'Aktiv');
+            html += '<select data-field="valve">' +
                 valveOptions(parseInt(rule.valve != null ? rule.valve : 0, 10)) +
-                '</select></td>';
-            html += '<td><input type="text" data-field="start" value="' + esc(rule.start || '06:00') + '" placeholder="HH:MM"></td>';
-            html += '<td><input type="text" data-field="end" value="' + esc(rule.end || '06:30') + '" placeholder="HH:MM"></td>';
-            DAY_KEYS.forEach(function (k) {
-                html += '<td><input type="checkbox" data-field="' + k + '"' + (rule[k] ? ' checked' : '') + '></td>';
+                '</select>';
+            html += '<input type="text" inputmode="numeric" data-field="start" value="' +
+                esc(rule.start || '06:00') + '" placeholder="Start">';
+            html += '<input type="text" inputmode="numeric" data-field="end" value="' +
+                esc(rule.end || '06:30') + '" placeholder="Ende">';
+            html += '<button type="button" class="gs-btn danger gs-btn-sm" data-remove-row="' +
+                idx + '">Entfernen</button>';
+            html += '</div>';
+            html += '<div class="gs-days">';
+            DAY_KEYS.forEach(function (k, i) {
+                html += toggleBtn(!!rule[k], 'data-day="' + k + '"', DAY_LABELS[i]);
             });
-            html += '<td><button type="button" class="gs-btn danger gs-btn-sm" data-remove-row="' + idx + '">Entfernen</button></td>';
-            html += '</tr>';
+            html += '</div></div>';
         });
-        html += '</tbody></table></div>';
+
         html += '<div class="gs-actions">';
         html += '<button type="button" class="gs-btn" data-add-sched="1"' +
             (rules.length >= MAX_SLOTS ? ' disabled' : '') + '>Eintrag hinzufügen</button>';
@@ -201,6 +240,12 @@
     }
 
     function bind() {
+        root.querySelectorAll('.gs-tog').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                btn.classList.toggle('on');
+            });
+        });
+
         var addBtn = root.querySelector('[data-add-sched]');
         if (addBtn) {
             addBtn.addEventListener('click', function () {
@@ -229,22 +274,21 @@
             pullBtn.addEventListener('click', function () {
                 setMsg('Lade Zeitplan vom Gerät…', true);
                 request('PullDeviceSchedules', true).then(function (res) {
-                    var parsed = null;
-                    if (typeof res === 'string') {
-                        try { parsed = JSON.parse(res); } catch (e) { parsed = null; }
-                    } else if (res && typeof res === 'object') {
-                        parsed = res;
+                    var parsed = parseMaybeJson(res);
+                    if (!parsed) {
+                        setMsg(typeof res === 'string' && res ? res : 'Fehler: Ungültige Antwort', false);
+                        return;
                     }
-                    if (parsed && parsed.ok === false) {
+                    if (parsed.ok === false) {
                         setMsg(String(parsed.message || 'Fehler'), false);
                         return;
                     }
-                    if (parsed && Array.isArray(parsed.rules)) {
+                    if (Array.isArray(parsed.rules)) {
                         state.scheduleRules = cloneRules(parsed.rules);
                     }
                     state.scheduleLastSavedBy = 'Gerät';
                     state.scheduleLastSavedAt = new Date().toISOString();
-                    setMsg(parsed && parsed.message ? String(parsed.message) : 'OK', true);
+                    setMsg(parsed.message ? String(parsed.message) : 'OK', true);
                     render();
                 }).catch(function (e) {
                     setMsg(String(e && e.message ? e.message : e), false);
@@ -266,7 +310,10 @@
                 request('SaveDeviceSchedules', JSON.stringify(rules)).then(function (res) {
                     state.scheduleLastSavedBy = 'IPS';
                     state.scheduleLastSavedAt = new Date().toISOString();
-                    setMsg(typeof res === 'string' ? res : 'OK', true);
+                    var parsed = parseMaybeJson(res);
+                    var msg = parsed && parsed.message ? parsed.message
+                        : (typeof res === 'string' ? res : 'OK');
+                    setMsg(msg, !(parsed && parsed.ok === false) && String(msg).indexOf('Fehler') !== 0);
                     render();
                 }).catch(function (e) {
                     setMsg(String(e && e.message ? e.message : e), false);

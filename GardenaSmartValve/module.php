@@ -13,7 +13,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 15;
+    private const MODULE_BUILD = 16;
     /** Default manual start + new schedule entry duration (30 min). */
     private const DEFAULT_WATERING_DURATION_SEC = 1800;
 
@@ -370,7 +370,7 @@ class GardenaSmartValve extends IPSModuleStrict
             $rules = GardenaSmartSchedules::parseGen2Rules($data);
             // Explicit overwrite — also clears local rows when device has none
             $this->saveDeviceScheduleRules($rules);
-            @IPS_ApplyChanges($this->InstanceID);
+            // Do NOT IPS_ApplyChanges here: breaks visualization RequestAction and can surface as cryptic errors
             $lines = $this->deviceScheduleLines($rules);
         } else {
             $lines = GardenaSmartDevices::formatDeviceSchedules($data);

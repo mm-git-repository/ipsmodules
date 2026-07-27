@@ -94,11 +94,20 @@ final class GardenaSmartSchedules
             }
             $start = trim((string) ($rule['start'] ?? ''));
             $end = trim((string) ($rule['end'] ?? ''));
-            if (self::hmToSeconds($start) === null || self::hmToSeconds($end) === null) {
+            $startSec = self::hmToSeconds($start);
+            $endSec = self::hmToSeconds($end);
+            if ($startSec === null || $endSec === null) {
                 return [
                     'ok' => false,
                     'rules' => [],
                     'error' => 'Ungültige Zeitangabe (erwartet HH:MM)',
+                ];
+            }
+            if ($endSec <= $startSec) {
+                return [
+                    'ok' => false,
+                    'rules' => [],
+                    'error' => 'Ende muss nach Start liegen (gleiche Uhrzeit = 0 Minuten)',
                 ];
             }
             $hasDay = false;
@@ -127,8 +136,8 @@ final class GardenaSmartSchedules
                 'slot' => (string) (count($normalized)),
                 'active' => true,
                 'valve' => max(0, (int) ($rule['valve'] ?? 0)),
-                'start' => self::secondsToHm((int) self::hmToSeconds($start)),
-                'end' => self::secondsToHm((int) self::hmToSeconds($end)),
+                'start' => self::secondsToHm($startSec),
+                'end' => self::secondsToHm($endSec),
             ];
             foreach (self::DAY_BITS as $key => $_) {
                 $entry[$key] = !empty($rule[$key]);
@@ -166,11 +175,12 @@ final class GardenaSmartSchedules
             $usedSlots[$slot] = true;
             $maxUsed = max($maxUsed, (int) $slot);
             $fields = [
+                // Days/type first, then times — device sometimes ignores trailing fields if session drops mid-slot
                 'actuator' => (int) ($rule['valve'] ?? 0),
-                'start_offset_seconds' => $startSec,
-                'end_offset_seconds' => $endSec,
                 'repetition_type' => self::REPETITION_TYPE_WEEKLY,
                 'repetition_value' => self::encodeDays($rule),
+                'start_offset_seconds' => $startSec,
+                'end_offset_seconds' => $endSec,
             ];
             foreach ($fields as $field => $value) {
                 $active[] = self::writeRequest($deviceId, $slot, $field, $value);
@@ -300,21 +310,17 @@ final class GardenaSmartSchedules
      */
     private static function encodeDays(array $rule): int
     {
-        $all = true;
-        foreach (self::DAY_BITS as $key => $_) {
-            if (empty($rule[$key])) {
-                $all = false;
-                break;
-            }
-        }
-        if ($all) {
-            return self::REPETITION_DAILY;
-        }
         $mask = 0;
+        $count = 0;
         foreach (self::DAY_BITS as $key => $bit) {
             if (!empty($rule[$key])) {
                 $mask |= (1 << $bit);
+                $count++;
             }
+        }
+        // Prefer simple 7-bit weekly mask (127) over 16383 magic — both decode as daily
+        if ($count === 7) {
+            return 127;
         }
 
         return $mask;

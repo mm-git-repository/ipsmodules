@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 17;
+    private const MODULE_BUILD = 18;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -316,8 +316,12 @@ class GardenaSmartGateway extends IPSModuleStrict
         if ($deviceId === '') {
             return json_encode(['ok' => false, 'error' => 'deviceId fehlt'], JSON_UNESCAPED_UNICODE) ?: '{}';
         }
+        // Wait out cooldown after previous schedule write/read
+        for ($wait = 0; $wait < 12 && $this->isWssBusy(); $wait++) {
+            usleep(500000);
+        }
         if ($this->isWssBusy()) {
-            return json_encode(['ok' => false, 'error' => 'Gateway gerade belegt — bitte kurz warten'], JSON_UNESCAPED_UNICODE) ?: '{}';
+            return json_encode(['ok' => false, 'error' => 'Gateway gerade belegt — bitte kurz warten und erneut laden'], JSON_UNESCAPED_UNICODE) ?: '{}';
         }
         try {
             $this->markWssBusy(45);
