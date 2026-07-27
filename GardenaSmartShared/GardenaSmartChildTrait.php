@@ -43,7 +43,11 @@ trait GardenaSmartChildTrait
     /** @return list<array<string, mixed>> */
     protected function loadDeviceScheduleRules(): array
     {
-        $raw = $this->ReadPropertyString('DeviceScheduleRules');
+        try {
+            $raw = $this->ReadPropertyString('DeviceScheduleRules');
+        } catch (Throwable) {
+            return [];
+        }
         $rules = json_decode($raw, true);
 
         return is_array($rules) ? $rules : [];
@@ -51,7 +55,8 @@ trait GardenaSmartChildTrait
 
     protected function saveDeviceScheduleRules(array $rules): void
     {
-        $this->SetPropertyString('DeviceScheduleRules', json_encode($rules, JSON_UNESCAPED_UNICODE) ?: '[]');
+        $json = json_encode($rules, JSON_UNESCAPED_UNICODE) ?: '[]';
+        @IPS_SetProperty($this->InstanceID, 'DeviceScheduleRules', $json);
     }
 
     /**
