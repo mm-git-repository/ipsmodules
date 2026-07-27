@@ -140,16 +140,17 @@ final class GardenaSmartSchedules
 
     /**
      * @param list<array<string, mixed>> $rules
-     * @return list<array<string, mixed>> WSS request arrays
+     * @return array{active: list<array<string, mixed>>, clear: list<array<string, mixed>>}
      */
     public static function buildGen2WriteRequests(string $deviceId, array $rules): array
     {
         $normalized = self::normalizeRules($rules);
-        $active = $normalized['ok'] ? $normalized['rules'] : [];
+        $activeRules = $normalized['ok'] ? $normalized['rules'] : [];
         $usedSlots = [];
-        $requests = [];
+        $active = [];
+        $clear = [];
 
-        foreach ($active as $rule) {
+        foreach ($activeRules as $rule) {
             $slot = (string) ($rule['slot'] ?? '');
             if ($slot === '') {
                 continue;
@@ -168,7 +169,7 @@ final class GardenaSmartSchedules
                 'repetition_value' => self::encodeDays($rule),
             ];
             foreach ($fields as $field => $value) {
-                $requests[] = self::writeRequest($deviceId, $slot, $field, $value);
+                $active[] = self::writeRequest($deviceId, $slot, $field, $value);
             }
         }
 
@@ -177,17 +178,16 @@ final class GardenaSmartSchedules
             if (isset($usedSlots[$slot])) {
                 continue;
             }
-            // Minimal clear — enough to disable unused Gen2 slots
             foreach ([
                 'start_offset_seconds' => 0,
                 'end_offset_seconds' => 0,
                 'repetition_value' => 0,
             ] as $field => $value) {
-                $requests[] = self::writeRequest($deviceId, $slot, $field, $value);
+                $clear[] = self::writeRequest($deviceId, $slot, $field, $value);
             }
         }
 
-        return $requests;
+        return ['active' => $active, 'clear' => $clear];
     }
 
     /**

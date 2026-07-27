@@ -295,13 +295,11 @@ class GardenaSmartGateway extends IPSModuleStrict
 
         // Refresh after command (schedule writes already took long — softer refresh)
         if ($action === 'writeSchedulesGen2') {
+            // Do not block save on a second discovery; children already have local copy
             try {
-                $devices = $this->refreshDeviceCache();
-                $this->pushStateToChildren($devices);
-                $this->rebuildScheduleOverview($devices);
                 $this->rebuildUsageOverview();
-            } catch (Throwable $e) {
-                $this->SetValue('LastError', $e->getMessage());
+            } catch (Throwable) {
+                // ignore
             }
         } else {
             $this->UpdateValues();

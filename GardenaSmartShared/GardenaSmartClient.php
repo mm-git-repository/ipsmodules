@@ -74,44 +74,106 @@ final class GardenaSmartClient
 
         $fp = $this->connect();
         try {
-            $this->sendJson($fp, $requests);
-            $want = [];
-            foreach ($requests as $req) {
-                if (isset($req['request_id'])) {
-                    $want[(string) $req['request_id']] = true;
-                }
-            }
-            $got = [];
-            $deadline = microtime(true) + $this->timeoutSec;
-            while ($want !== [] && microtime(true) < $deadline) {
-                $raw = $this->recvFrame($fp, max(0.2, $deadline - microtime(true)));
-                if ($raw === null) {
-                    continue;
-                }
-                $decoded = json_decode($raw, true);
-                if (!is_array($decoded)) {
-                    continue;
-                }
-                $list = array_is_list($decoded) ? $decoded : [$decoded];
-                foreach ($list as $msg) {
-                    if (!is_array($msg)) {
-                        continue;
-                    }
-                    $rid = isset($msg['request_id']) ? (string) $msg['request_id'] : '';
-                    if ($rid !== '' && isset($want[$rid])) {
-                        $got[] = $msg;
-                        unset($want[$rid]);
-                    }
-                }
-            }
-            if ($want !== []) {
-                throw new RuntimeException('Timeout: nicht alle Antworten vom Gateway erhalten');
-            }
-
-            return $got;
+            return $this->exchangeOnConnection($fp, $requests);
         } finally {
             fclose($fp);
         }
+    }
+
+    /**
+     * Send requests one-by-one on a single connection (needed for Gen2 schedule writes).
+     *
+     * @param list<array<string, mixed>> $requests
+     * @return list<array<string, mixed>>
+     */
+    public function exchangeSequential(array $requests): array
+    {
+        if ($this->host === '' || $this->password === '') {
+            throw new RuntimeException('Host oder Passwort fehlt');
+        }
+        if ($requests === []) {
+            return [];
+        }
+
+        $fp = $this->connect();
+        $all = [];
+        try {
+            foreach ($requests as $idx => $req) {
+                $replies = $this->exchangeOnConnection($fp, [$req]);
+                foreach ($replies as $msg) {
+                    $all[] = $msg;
+                }
+                if ($idx < count($requests) - 1) {
+                    usleep(80000);
+                }
+            }
+        } finally {
+            fclose($fp);
+        }
+
+        return $all;
+    }
+
+    /**
+     * @param resource $fp
+     * @param list<array<string, mixed>> $requests
+     * @return list<array<string, mixed>>
+     */
+    private function exchangeOnConnection($fp, array $requests): array
+    {
+        // Single request: send as one-element array (protocol) but match loosely on reply
+        $this->sendJson($fp, $requests);
+        $want = [];
+        foreach ($requests as $req) {
+            if (isset($req['request_id'])) {
+                $want[(string) $req['request_id']] = true;
+            }
+        }
+        $pending = count($want);
+        $got = [];
+        $deadline = microtime(true) + $this->timeoutSec;
+        $buffer = '';
+        while ($want !== [] && microtime(true) < $deadline) {
+            $raw = $this->recvFrame($fp, max(0.2, $deadline - microtime(true)));
+            if ($raw === null) {
+                continue;
+            }
+            $buffer .= $raw;
+            $decoded = json_decode($buffer, true);
+            if (!is_array($decoded)) {
+                // incomplete JSON / fragment piece — keep buffering briefly
+                if (strlen($buffer) > 1_000_000) {
+                    $buffer = '';
+                }
+                continue;
+            }
+            $buffer = '';
+            $list = array_is_list($decoded) ? $decoded : [$decoded];
+            foreach ($list as $msg) {
+                if (!is_array($msg)) {
+                    continue;
+                }
+                $rid = isset($msg['request_id']) ? (string) $msg['request_id'] : '';
+                if ($rid !== '' && isset($want[$rid])) {
+                    $got[] = $msg;
+                    unset($want[$rid]);
+                    continue;
+                }
+                // Some firmware replies omit/alter request_id for writes
+                if ($pending === 1 && count($want) === 1 && array_key_exists('success', $msg)) {
+                    $got[] = $msg;
+                    $want = [];
+                }
+            }
+        }
+        if ($want !== []) {
+            throw new RuntimeException(
+                'Timeout: nicht alle Antworten vom Gateway erhalten ('
+                . count($got) . '/' . $pending . ')'
+            );
+        }
+
+        return $got;
     }
 
     /**
@@ -158,29 +220,35 @@ final class GardenaSmartClient
     public function writeGen2Schedules(string $deviceId, array $rules): array
     {
         require_once __DIR__ . '/GardenaSmartSchedules.php';
-        $raw = GardenaSmartSchedules::buildGen2WriteRequests($deviceId, $rules);
-        if ($raw === []) {
+        $parts = GardenaSmartSchedules::buildGen2WriteRequests($deviceId, $rules);
+        $activeRaw = $parts['active'] ?? [];
+        $clearRaw = $parts['clear'] ?? [];
+        if ($activeRaw === [] && $clearRaw === []) {
             throw new RuntimeException('Keine gültigen Zeitplan-Einträge zum Speichern');
         }
-        $requests = [];
-        foreach ($raw as $item) {
-            $entity = $item['entity'] ?? [];
-            $requests[] = $this->buildRequest(
-                (string) ($item['op'] ?? 'write'),
-                (string) ($entity['service'] ?? 'lwm2mserver'),
-                (string) ($entity['path'] ?? ''),
-                is_array($item['payload'] ?? null) ? $item['payload'] : null,
-                (string) ($entity['device'] ?? $deviceId)
-            );
-        }
 
-        // Gateway/websocketd is slow with large write batches — chunk + longer timeout
+        $toRequests = function (array $raw) use ($deviceId): array {
+            $requests = [];
+            foreach ($raw as $item) {
+                $entity = $item['entity'] ?? [];
+                $requests[] = $this->buildRequest(
+                    (string) ($item['op'] ?? 'write'),
+                    (string) ($entity['service'] ?? 'lwm2mserver'),
+                    (string) ($entity['path'] ?? ''),
+                    is_array($item['payload'] ?? null) ? $item['payload'] : null,
+                    (string) ($entity['device'] ?? $deviceId)
+                );
+            }
+
+            return $requests;
+        };
+
         $previousTimeout = $this->timeoutSec;
-        $this->timeoutSec = max($previousTimeout, 25);
+        $this->timeoutSec = max($previousTimeout, 15);
         $allReplies = [];
         try {
-            foreach (array_chunk($requests, 4) as $chunk) {
-                $replies = $this->exchange($chunk);
+            if ($activeRaw !== []) {
+                $replies = $this->exchangeSequential($toRequests($activeRaw));
                 foreach ($replies as $msg) {
                     if (($msg['success'] ?? null) !== true) {
                         $detail = is_string($msg['error'] ?? null)
@@ -190,8 +258,17 @@ final class GardenaSmartClient
                     }
                     $allReplies[] = $msg;
                 }
-                // brief pause between chunks to avoid gateway overload
-                usleep(150000);
+            }
+            // Clearing unused slots is best-effort (firmware may be slow/silent)
+            if ($clearRaw !== []) {
+                try {
+                    $clearReplies = $this->exchangeSequential($toRequests($clearRaw));
+                    foreach ($clearReplies as $msg) {
+                        $allReplies[] = $msg;
+                    }
+                } catch (Throwable) {
+                    // active writes already succeeded
+                }
             }
         } finally {
             $this->timeoutSec = $previousTimeout;
