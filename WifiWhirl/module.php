@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 18;
+    private const MODULE_BUILD = 19;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -30,6 +30,8 @@ class WifiWhirl extends IPSModuleStrict
     private const PV_HYSTERESIS_DEFAULT_W = 200;
 
     private const MANUAL_OVERRIDE_IDENTS = ['Pump', 'Heater', 'Power', 'TargetTemperature'];
+
+    private bool $applyChangesInProgress = false;
 
     /** @var list<string> */
     private const PERSISTENT_CONFIGURATION_KEYS = [
@@ -260,34 +262,55 @@ class WifiWhirl extends IPSModuleStrict
 
     public function ApplyChanges(): void
     {
-        $snapshot = $this->takePersistentConfigurationSnapshot();
-        $this->ensureConfigurationDefaults();
-        parent::ApplyChanges();
-        $restored = $this->restorePersistentConfigurationFromSnapshot($snapshot);
-        if ($restored > 0) {
-            $this->SendDebug(
-                'Konfiguration',
-                $restored . ' gespeicherte Einstellung(en) nach IPS-Neustart wiederhergestellt.',
-                0,
-            );
+        if ($this->applyChangesInProgress) {
+            return;
+        }
+        $this->applyChangesInProgress = true;
+        try {
+            $snapshot = $this->takePersistentConfigurationSnapshot();
+            $this->ensureConfigurationDefaults();
             parent::ApplyChanges();
-        }
+            $restored = $this->restorePersistentConfigurationFromSnapshot($snapshot);
+            if ($restored > 0) {
+                $this->SendDebug(
+                    'Konfiguration',
+                    $restored . ' gespeicherte Einstellung(en) nach IPS-Neustart wiederhergestellt.',
+                    0,
+                );
+                parent::ApplyChanges();
+            }
 
-        $this->sanitizeConfigurationProperties();
+            $this->sanitizeConfigurationProperties();
 
-        $this->ensureProfiles();
-        $this->registerAllVariables();
-        $this->ensureModuleVersionVariable();
-        $this->syncModuleVersionVariable();
-        $this->configureTimer();
-        $this->configureAutomationTimer();
-        $this->handleAutomationEnabledTransition();
-        if (method_exists($this, 'SetVisualizationType')) {
-            $this->SetVisualizationType(1);
+            $this->ensureProfiles();
+            $this->registerAllVariables();
+            $this->ensureModuleVersionVariable();
+            $this->syncModuleVersionVariable();
+            $this->configureTimer();
+            $this->configureAutomationTimer();
+            $this->handleAutomationEnabledTransition();
+            if (method_exists($this, 'SetVisualizationType')) {
+                $this->SetVisualizationType(1);
+            }
+            // Config path only — never fault on stale Reachable during library reload
+            $this->updateInstanceStatus(false);
+            $this->SetSummary($this->buildSummary());
+            $this->savePersistentConfigurationBackup($this->captureCurrentPersistentConfiguration());
+        } catch (Throwable $e) {
+            $this->SendDebug('ApplyChanges', $e->getMessage(), 0);
+            try {
+                $this->updateInstanceStatus(false);
+            } catch (Throwable) {
+                $this->SetStatus(self::IS_ACTIVE);
+            }
+            try {
+                $this->SetSummary($this->buildSummary());
+            } catch (Throwable) {
+                // ignore
+            }
+        } finally {
+            $this->applyChangesInProgress = false;
         }
-        $this->updateInstanceStatus();
-        $this->SetSummary($this->buildSummary());
-        $this->savePersistentConfigurationBackup($this->captureCurrentPersistentConfiguration());
     }
 
     public function GetConfigurationForm(): string
@@ -389,7 +412,7 @@ class WifiWhirl extends IPSModuleStrict
     {
         if (!$this->ReadPropertyBoolean('Active')) {
             $this->SetValue('Reachable', false);
-            $this->updateInstanceStatus();
+            $this->updateInstanceStatus(true);
 
             return;
         }
@@ -397,7 +420,7 @@ class WifiWhirl extends IPSModuleStrict
         $host = $this->readHostProperty();
         if ($host === '') {
             $this->SetValue('Reachable', false);
-            $this->updateInstanceStatus();
+            $this->updateInstanceStatus(true);
 
             return;
         }
@@ -414,7 +437,7 @@ class WifiWhirl extends IPSModuleStrict
         if ($payload === null) {
             $this->SetValue('Reachable', false);
             $this->SendDebug(__FUNCTION__, 'WifiWhirl nicht erreichbar: ' . $host, 0);
-            $this->updateInstanceStatus();
+            $this->updateInstanceStatus(true);
 
             return;
         }
@@ -424,7 +447,7 @@ class WifiWhirl extends IPSModuleStrict
         if ($usedFallback) {
             $this->SendDebug(__FUNCTION__, 'Fallback /getstates/ + /gettemps/ verwendet', 0);
         }
-        $this->updateInstanceStatus();
+        $this->updateInstanceStatus(true);
     }
 
     public function Refresh(): void
@@ -1233,7 +1256,11 @@ class WifiWhirl extends IPSModuleStrict
         return $this->getBufferInt($name) !== 0;
     }
 
-    private function updateInstanceStatus(): void
+    /**
+     * @param bool $fromLiveCheck true = after poll / UpdateValues (may set 202 unreachable)
+     *                            false = ApplyChanges / config path (never fault on stale Reachable)
+     */
+    private function updateInstanceStatus(bool $fromLiveCheck = false): void
     {
         if (!$this->ReadPropertyBoolean('Active')) {
             $this->SetStatus(self::IS_INACTIVE);
@@ -1247,17 +1274,18 @@ class WifiWhirl extends IPSModuleStrict
             return;
         }
 
-        try {
-            if (!$this->GetValue('Reachable')) {
-                $this->SetStatus(self::IS_UNREACHABLE);
+        if (!$fromLiveCheck) {
+            // Library reload re-runs ApplyChanges; Keep configured instances green until a real poll.
+            $this->SetStatus(self::IS_ACTIVE);
 
-                return;
-            }
-        } catch (Throwable) {
-            // Variable noch nicht angelegt
+            return;
         }
 
-        $this->SetStatus(self::IS_ACTIVE);
+        try {
+            $this->SetStatus($this->GetValue('Reachable') ? self::IS_ACTIVE : self::IS_UNREACHABLE);
+        } catch (Throwable) {
+            $this->SetStatus(self::IS_ACTIVE);
+        }
     }
 
     private function buildSummary(): string

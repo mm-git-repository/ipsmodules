@@ -13,6 +13,7 @@ final class GardenaSmartGuids
     public const VALVE = '{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C1E}';
     public const POWER = '{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C1F}';
     public const SENSOR = '{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C20}';
+    public const SHARED = '{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C21}';
 
     /** Parent → Child (state / events) */
     public const TX_CHILDREN = '{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C30}';

@@ -10,7 +10,7 @@ IP-Symcon-Bibliothek mit Gerätemodulen. Beim Hinzufügen einer Instanz erschein
 | Pool Steuerung | `PoolControl/` | Wasserqualität, Grenzwerte, Dosierungsempfehlungen, pH-Sync |
 | Gardena Smart Gateway | `GardenaSmartGateway/` | Lokales Gardena-Gateway (WSS) + Child-Geräte |
 
-**Bibliothek:** 1.4 (Build 67) · **GUID:** `{078F2CCC-248B-E9F8-37A2-89E15868706B}`
+**Bibliothek:** 1.4 (Build 68) · **GUID:** `{078F2CCC-248B-E9F8-37A2-89E15868706B}`
 
 Gardena-Einrichtung: [GardenaSmartGateway/EINRICHTUNG.md](GardenaSmartGateway/EINRICHTUNG.md)
 

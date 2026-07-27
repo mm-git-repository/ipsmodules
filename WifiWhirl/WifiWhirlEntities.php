@@ -58,7 +58,7 @@ final class WifiWhirlEntities
             // Energie
             ['ident' => 'EnergyTotal', 'name' => 'Gesamtenergieverbrauch', 'ipsType' => 2, 'profile' => 'WWHL.kWh', 'source' => self::SOURCE_TIMES, 'field' => 'KWH', 'action' => false, 'cmd' => null, 'scale' => 1.0, 'min' => null, 'max' => null],
             ['ident' => 'EnergyToday', 'name' => 'Energieverbrauch heute', 'ipsType' => 2, 'profile' => 'WWHL.kWh', 'source' => self::SOURCE_TIMES, 'field' => 'KWHD', 'action' => false, 'cmd' => null, 'scale' => 1.0, 'min' => null, 'max' => null],
-            ['ident' => 'Power', 'name' => 'Leistungsaufnahme', 'ipsType' => 1, 'profile' => 'WWHL.W', 'source' => self::SOURCE_TIMES, 'field' => 'WATT', 'action' => false, 'cmd' => null, 'scale' => 1.0, 'min' => null, 'max' => null],
+            ['ident' => 'PowerDraw', 'name' => 'Leistungsaufnahme', 'ipsType' => 1, 'profile' => 'WWHL.W', 'source' => self::SOURCE_TIMES, 'field' => 'WATT', 'action' => false, 'cmd' => null, 'scale' => 1.0, 'min' => null, 'max' => null],
             ['ident' => 'TimeToReady', 'name' => 'Bereit in (h)', 'ipsType' => 1, 'profile' => 'WWHL.hours', 'source' => self::SOURCE_COMPUTED, 'field' => 'T2R', 'action' => false, 'cmd' => null, 'scale' => 1.0, 'min' => null, 'max' => null],
 
             // Laufzeiten (Stunden)
