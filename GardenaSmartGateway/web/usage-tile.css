@@ -10,7 +10,7 @@
     height: 100%;
     min-height: 100%;
     margin: 0;
-    padding: 14px 16px 16px;
+    padding: 28px 16px 16px;
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -22,6 +22,7 @@
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 10px;
     flex: 0 0 auto;
+    margin-top: 6px;
 }
 @media (max-width: 640px) {
     .gs-usage-totals {
