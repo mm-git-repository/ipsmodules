@@ -63,23 +63,86 @@ final class GardenaSmartClient
         $replies = $this->exchange($requests);
         $devices = [];
         foreach ($replies as $msg) {
-            if (($msg['success'] ?? null) !== true) {
-                $this->log('WSS', 'discover reply failed: ' . json_encode($msg, JSON_UNESCAPED_UNICODE));
-                continue;
-            }
-            $payload = $msg['payload'] ?? null;
-            if (!is_array($payload)) {
+            $payload = $this->extractDiscoverPayload($msg);
+            if ($payload === null) {
+                $this->log(
+                    'WSS',
+                    'discover reply ignored keys=' . implode(',', array_keys($msg))
+                    . ' preview=' . substr((string) json_encode($msg, JSON_UNESCAPED_UNICODE), 0, 240)
+                );
                 continue;
             }
             foreach ($payload as $deviceId => $deviceData) {
                 if (is_string($deviceId) && is_array($deviceData)) {
-                    $devices[$deviceId] = $deviceData;
+                    // Later replies (e.g. lwm2mserver) overwrite / merge richer data
+                    if (!isset($devices[$deviceId])) {
+                        $devices[$deviceId] = $deviceData;
+                    } else {
+                        $devices[$deviceId] = array_replace_recursive($devices[$deviceId], $deviceData);
+                    }
                 }
             }
         }
         $this->log('WSS', 'discover done — ' . count($devices) . ' device(s)');
 
         return ['devices' => $devices, 'raw' => $replies];
+    }
+
+    /**
+     * Accept classic {success,payload} replies and bare device maps (gateway sometimes omits the wrapper).
+     *
+     * @param array<string, mixed> $msg
+     * @return null|array<string, array<string, mixed>>
+     */
+    private function extractDiscoverPayload(array $msg): ?array
+    {
+        if (($msg['success'] ?? null) === true && is_array($msg['payload'] ?? null)) {
+            return $this->isDeviceMap($msg['payload']) ? $msg['payload'] : null;
+        }
+        if (is_array($msg['payload'] ?? null) && $this->isDeviceMap($msg['payload'])) {
+            return $msg['payload'];
+        }
+        if ($this->isDeviceMap($msg)) {
+            return $msg;
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, mixed> $map
+     */
+    private function isDeviceMap(array $map): bool
+    {
+        if ($map === [] || array_is_list($map)) {
+            return false;
+        }
+        // Wrapper keys from normal replies
+        if (isset($map['success']) || isset($map['request_id']) || isset($map['error'])) {
+            return false;
+        }
+        $deviceLike = 0;
+        foreach ($map as $key => $value) {
+            if (!is_string($key) || !is_array($value)) {
+                return false;
+            }
+            // Gardena device ids are long hex / SGTIN-like strings
+            if (strlen($key) < 8) {
+                return false;
+            }
+            if (
+                isset($value['actuator'])
+                || isset($value['device'])
+                || isset($value['schedule'])
+                || isset($value['lemonbeat'])
+                || isset($value['connection_status'])
+                || isset($value['sg_common'])
+            ) {
+                $deviceLike++;
+            }
+        }
+
+        return $deviceLike > 0;
     }
 
     /**
