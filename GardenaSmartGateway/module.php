@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 12;
+    private const MODULE_BUILD = 13;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -384,12 +384,27 @@ class GardenaSmartGateway extends IPSModuleStrict
 
             // Refresh after command (schedule writes already took long — softer refresh)
             if ($action === 'writeSchedulesGen2') {
-                // Keep busy a bit longer so timer-poll does not collide with websocketd
+                // Brief settle, then read back from device so IPS matches reality
                 $this->markWssBusy(8);
                 try {
                     $this->rebuildUsageOverview();
                 } catch (Throwable) {
                     // ignore
+                }
+                usleep(1000000);
+                $this->clearWssBusy();
+                try {
+                    $this->markWssBusy(30);
+                    $devices = $this->refreshDeviceCache();
+                    $this->pushStateToChildren($devices);
+                    $this->rebuildScheduleOverview($devices);
+                    $this->SetValue('Reachable', true);
+                    $this->SetValue('LastError', '');
+                    $this->SetValue('DeviceCount', count($devices));
+                } catch (Throwable $e) {
+                    $this->debugLog('Schedule', 'verify discover failed: ' . $e->getMessage());
+                } finally {
+                    $this->clearWssBusy();
                 }
             } else {
                 $this->clearWssBusy();

@@ -181,6 +181,7 @@ final class GardenaSmartSchedules
             foreach ([
                 'start_offset_seconds' => 0,
                 'end_offset_seconds' => 0,
+                'repetition_value' => 0,
             ] as $field => $value) {
                 $clear[] = self::writeRequest($deviceId, $slot, $field, $value);
             }
@@ -217,6 +218,35 @@ final class GardenaSmartSchedules
         }
 
         return $lines;
+    }
+
+    /**
+     * Stable fingerprint for comparing intended vs device schedules.
+     *
+     * @param list<array<string, mixed>> $rules
+     */
+    public static function rulesFingerprint(array $rules): string
+    {
+        $norm = self::normalizeRules($rules);
+        $rows = $norm['ok'] ? $norm['rules'] : [];
+        $compact = [];
+        foreach ($rows as $rule) {
+            $days = '';
+            foreach (self::DAY_BITS as $k => $_) {
+                $days .= !empty($rule[$k]) ? '1' : '0';
+            }
+            $compact[] = sprintf(
+                '%s|%d|%s|%s|%s',
+                (string) ($rule['slot'] ?? ''),
+                (int) ($rule['valve'] ?? 0),
+                (string) ($rule['start'] ?? ''),
+                (string) ($rule['end'] ?? ''),
+                $days
+            );
+        }
+        sort($compact);
+
+        return implode(';', $compact);
     }
 
     /**

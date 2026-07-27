@@ -159,7 +159,7 @@
         if (scheduleMetaText()) {
             html += '<p class="gs-hint">' + esc(scheduleMetaText()) + '</p>';
         }
-        html += '<p class="gs-hint">Max. ' + MAX_SLOTS + ' Einträge. Hinzufügen, entfernen und ändern — dann speichern.</p>';
+        html += '<p class="gs-hint">Max. ' + MAX_SLOTS + ' Einträge (Geräte-Limit Gen2). Nach Speichern Abgleich mit dem Gerät.</p>';
         html += '<div class="gs-sched-table-wrap"><table class="gs-sched-table"><thead><tr>';
         html += '<th>Aktiv</th><th>Ventil</th><th>Start</th><th>Ende</th>';
         DAY_LABELS.forEach(function (d) { html += '<th>' + d + '</th>'; });

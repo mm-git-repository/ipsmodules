@@ -13,7 +13,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 9;
+    private const MODULE_BUILD = 10;
     /** Default manual start + new schedule entry duration (30 min). */
     private const DEFAULT_WATERING_DURATION_SEC = 1800;
 
@@ -283,6 +283,7 @@ class GardenaSmartValve extends IPSModuleStrict
             return 'Fehler: ' . $normalized['error'];
         }
         $rules = $normalized['rules'];
+        $intendedFp = GardenaSmartSchedules::rulesFingerprint($rules);
         $this->saveDeviceScheduleRules($rules);
         $result = $this->sendCommandToGateway([
             'action' => 'writeSchedulesGen2',
@@ -292,15 +293,27 @@ class GardenaSmartValve extends IPSModuleStrict
         if (empty($result['ok'])) {
             return 'Fehler: ' . (string) ($result['error'] ?? 'unbekannt');
         }
-        $this->WriteAttributeString('ScheduleLastSavedBy', 'IPS');
-        $this->WriteAttributeString('ScheduleLastSavedAt', date('c'));
-        $lines = $this->deviceScheduleLines($rules);
+
+        // Gateway has re-discovered and pushed device state — reload local copy
+        $deviceRules = $this->loadDeviceScheduleRules();
+        $deviceFp = GardenaSmartSchedules::rulesFingerprint($deviceRules);
+        $lines = $this->deviceScheduleLines($deviceRules !== [] ? $deviceRules : $rules);
         $text = $lines === [] ? '(keine)' : implode("\n", $lines);
         $this->SetValue('DeviceSchedules', $text);
         $this->WriteAttributeString('DeviceAppSchedules', $text);
+        $this->WriteAttributeString('ScheduleLastSavedBy', 'IPS');
+        $this->WriteAttributeString('ScheduleLastSavedAt', date('c'));
         $this->notifyGatewaySchedules();
 
-        return 'OK — Zeitpläne am Gerät gespeichert (' . count($rules) . '/' . GardenaSmartSchedules::GEN2_MAX_SLOTS . ')';
+        if ($deviceFp !== '' && $intendedFp !== $deviceFp) {
+            return 'Warnung — geschrieben, aber Gerät meldet andere Werte (Anzeige = Gerätezustand). '
+                . 'App/Cloud kann verzögert nachziehen. Erneut „Jetzt aktualisieren“ am Gateway prüfen. '
+                . '(' . count($deviceRules) . '/' . GardenaSmartSchedules::GEN2_MAX_SLOTS . ' Slots)';
+        }
+
+        return 'OK — Zeitpläne am Gerät gespeichert und verifiziert ('
+            . count($deviceRules !== [] ? $deviceRules : $rules)
+            . '/' . GardenaSmartSchedules::GEN2_MAX_SLOTS . ')';
     }
 
     public function ResetWaterUsage(): string

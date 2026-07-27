@@ -520,13 +520,13 @@ final class GardenaSmartClient
                     $this->log('WSS', sprintf('write %d/%d no ACK (continuing) %s', $idx + 1, count($requests), $path));
                 }
                 if ($idx < count($requests) - 1) {
-                    usleep(80000);
+                    usleep(150000);
                 }
             }
         } finally {
             @fclose($fp);
-            // Let websocketd settle before the next discover/poll
-            usleep(400000);
+            // Let websocketd / lwm2m settle before verify-discover
+            usleep(800000);
         }
 
         return $got;
