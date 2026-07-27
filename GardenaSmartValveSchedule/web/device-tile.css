@@ -17,11 +17,6 @@
     margin-bottom: 10px;
 }
 .gs-title { font-size: 1.15rem; font-weight: 650; letter-spacing: 0.01em; }
-.gs-hint {
-    font-size: 12px;
-    opacity: 0.75;
-    margin: 0 0 10px;
-}
 
 .gs-rule {
     border: 1px solid rgba(128,128,128,0.28);
@@ -37,8 +32,7 @@
     align-items: center;
     margin-bottom: 10px;
 }
-.gs-rule-top select,
-.gs-rule-top input[type="text"] {
+.gs-rule-top select {
     min-height: 40px;
     min-width: 72px;
     border: 1px solid rgba(128,128,128,0.35);
@@ -48,9 +42,16 @@
     background: transparent;
     color: inherit;
 }
-.gs-rule-top input[data-field="start"],
-.gs-rule-top input[data-field="end"] {
-    width: 5.5rem;
+.gs-rule-top select[data-field="start"],
+.gs-rule-top select[data-field="end"] {
+    width: 5.8rem;
+    min-width: 5.8rem;
+}
+.gs-rule-end {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
 }
 
 .gs-days {
@@ -112,10 +113,14 @@
     opacity: 0.45;
     cursor: not-allowed;
 }
-.gs-btn-sm {
-    padding: 8px 10px;
-    min-height: 40px;
-    font-size: 12px;
+.gs-btn-x {
+    width: 42px;
+    min-width: 42px;
+    min-height: 42px;
+    padding: 0;
+    font-size: 1.45rem;
+    line-height: 1;
+    font-weight: 700;
 }
 .gs-sched {
     white-space: pre-wrap;
@@ -130,6 +135,11 @@
 @media (max-width: 420px) {
     .gs-days {
         grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .gs-rule-end {
+        margin-left: 0;
+        width: 100%;
+        justify-content: flex-end;
     }
     .gs-actions .gs-btn {
         flex: 1 1 100%;

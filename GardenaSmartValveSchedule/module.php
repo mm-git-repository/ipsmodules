@@ -10,7 +10,7 @@ class GardenaSmartValveSchedule extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 2;
+    private const MODULE_BUILD = 3;
 
     public function Create(): void
     {

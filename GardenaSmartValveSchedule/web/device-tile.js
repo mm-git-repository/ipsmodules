@@ -8,12 +8,25 @@
     var DAY_KEYS = ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'so'];
     var DAY_LABELS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
     var MAX_SLOTS = parseInt(state.scheduleMaxSlots || 36, 10) || 36;
+    var TIME_OPTIONS = buildTimeOptions();
 
     if (!Array.isArray(state.scheduleRules)) {
         state.scheduleRules = [];
     }
     if (!Array.isArray(state.valveNames)) {
         state.valveNames = [];
+    }
+
+    function buildTimeOptions() {
+        var list = [];
+        for (var h = 0; h < 24; h++) {
+            for (var m = 0; m < 60; m += 15) {
+                list.push(
+                    (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m
+                );
+            }
+        }
+        return list;
     }
 
     function esc(s) {
@@ -42,7 +55,6 @@
         if (res && typeof res === 'object') return res;
         if (typeof res !== 'string') return null;
         var s = res.trim();
-        // IPS sometimes wraps echo output or doubles JSON
         try { return JSON.parse(s); } catch (e1) {}
         var start = s.indexOf('{');
         var end = s.lastIndexOf('}');
@@ -52,13 +64,26 @@
         return null;
     }
 
+    function snapTime(value, fallback) {
+        var raw = String(value || fallback || '06:00').trim();
+        var m = raw.match(/^(\d{1,2}):(\d{2})$/);
+        if (!m) return fallback || '06:00';
+        var h = Math.max(0, Math.min(23, parseInt(m[1], 10)));
+        var min = Math.max(0, Math.min(59, parseInt(m[2], 10)));
+        min = Math.round(min / 15) * 15;
+        if (min === 60) {
+            min = 0;
+            h = (h + 1) % 24;
+        }
+        return (h < 10 ? '0' : '') + h + ':' + (min < 10 ? '0' : '') + min;
+    }
+
     function defaultRule() {
         return {
             active: true,
             valve: 0,
-            start: state.defaultScheduleStart || '06:00',
-            end: state.defaultScheduleEnd || '06:30',
-            // No days preselected — forces explicit choice (avoids accidental Mo–Fr / daily writes)
+            start: snapTime(state.defaultScheduleStart || '06:00', '06:00'),
+            end: snapTime(state.defaultScheduleEnd || '06:30', '06:30'),
             mo: false, tu: false, we: false, th: false, fr: false,
             sa: false, so: false
         };
@@ -72,8 +97,8 @@
             });
             copy.active = r.active !== false;
             copy.valve = parseInt(r.valve != null ? r.valve : 0, 10) || 0;
-            copy.start = String(r.start || copy.start);
-            copy.end = String(r.end || copy.end);
+            copy.start = snapTime(r.start, copy.start);
+            copy.end = snapTime(r.end, copy.end);
             return copy;
         });
     }
@@ -92,8 +117,8 @@
             var rule = {
                 active: !!(activeEl && activeEl.classList.contains('on')),
                 valve: parseInt((valveEl && valveEl.value) || '0', 10),
-                start: ((startEl && startEl.value) || '').trim(),
-                end: ((endEl && endEl.value) || '').trim()
+                start: snapTime((startEl && startEl.value) || '', '06:00'),
+                end: snapTime((endEl && endEl.value) || '', '06:30')
             };
             DAY_KEYS.forEach(function (k) {
                 var btn = row.querySelector('[data-day="' + k + '"]');
@@ -102,10 +127,6 @@
             rules.push(rule);
         });
         return rules;
-    }
-
-    function isValidHm(value) {
-        return /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(value || '').trim());
     }
 
     function hmToMin(value) {
@@ -123,9 +144,6 @@
             if (active > MAX_SLOTS) {
                 return 'Maximal ' + MAX_SLOTS + ' Zeitplan-Einträge möglich';
             }
-            if (!isValidHm(rule.start) || !isValidHm(rule.end)) {
-                return 'Ungültige Zeitangabe (erwartet HH:MM)';
-            }
             if (hmToMin(rule.end) <= hmToMin(rule.start)) {
                 return 'Ende muss nach Start liegen';
             }
@@ -135,17 +153,6 @@
             }
         }
         return '';
-    }
-
-    function scheduleMetaText() {
-        var parts = [];
-        if (state.scheduleLastSavedBy) {
-            parts.push('Zuletzt gespeichert von ' + state.scheduleLastSavedBy);
-        }
-        if (state.scheduleLastSavedAt) {
-            parts.push('am ' + state.scheduleLastSavedAt);
-        }
-        return parts.join(' ');
     }
 
     function valveOptions(selected) {
@@ -162,6 +169,20 @@
             html += '<option value="' + id + '"' + (selected === id ? ' selected' : '') + '>' +
                 esc(label) + '</option>';
         });
+        return html;
+    }
+
+    function timeOptions(selected) {
+        var sel = snapTime(selected, '06:00');
+        var html = '';
+        var found = false;
+        TIME_OPTIONS.forEach(function (t) {
+            if (t === sel) found = true;
+            html += '<option value="' + t + '"' + (t === sel ? ' selected' : '') + '>' + t + '</option>';
+        });
+        if (!found) {
+            html = '<option value="' + esc(sel) + '" selected>' + esc(sel) + '</option>' + html;
+        }
         return html;
     }
 
@@ -190,27 +211,20 @@
         var html = '';
         html += '<div class="gs-head"><div class="gs-title">' +
             esc((state.name || 'Ventil') + ' — Zeitplan') + '</div></div>';
-        if (scheduleMetaText()) {
-            html += '<p class="gs-hint">' + esc(scheduleMetaText()) + '</p>';
-        }
-
-        if (!rules.length) {
-            html += '<p class="gs-hint">Keine Einträge</p>';
-        }
 
         rules.forEach(function (rule, idx) {
             html += '<div class="gs-rule" data-rule-row="' + idx + '">';
             html += '<div class="gs-rule-top">';
-            html += toggleBtn(!!rule.active, 'data-field="active"', 'Aktiv');
             html += '<select data-field="valve">' +
                 valveOptions(parseInt(rule.valve != null ? rule.valve : 0, 10)) +
                 '</select>';
-            html += '<input type="text" inputmode="numeric" data-field="start" value="' +
-                esc(rule.start || '06:00') + '" placeholder="Start">';
-            html += '<input type="text" inputmode="numeric" data-field="end" value="' +
-                esc(rule.end || '06:30') + '" placeholder="Ende">';
-            html += '<button type="button" class="gs-btn danger gs-btn-sm" data-remove-row="' +
-                idx + '">Entfernen</button>';
+            html += '<select data-field="start">' + timeOptions(rule.start || '06:00') + '</select>';
+            html += '<select data-field="end">' + timeOptions(rule.end || '06:30') + '</select>';
+            html += '<div class="gs-rule-end">';
+            html += toggleBtn(!!rule.active, 'data-field="active"', 'Aktiv');
+            html += '<button type="button" class="gs-btn danger gs-btn-x" data-remove-row="' +
+                idx + '" title="Entfernen" aria-label="Entfernen">×</button>';
+            html += '</div>';
             html += '</div>';
             html += '<div class="gs-days">';
             DAY_KEYS.forEach(function (k, i) {
