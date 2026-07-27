@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 22;
+    private const MODULE_BUILD = 23;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -455,8 +455,13 @@ class GardenaSmartGateway extends IPSModuleStrict
         if ($deviceId === '') {
             throw new RuntimeException('deviceId fehlt');
         }
-        // Schedule writes keep one WSS session; busy covers write + short settle (not 90s)
-        $this->markWssBusy($action === 'writeSchedulesGen2' ? 45 : 30);
+        // Schedule writes keep one WSS session; valve start/stop should stay short-lived
+        $busySec = match ($action) {
+            'writeSchedulesGen2' => 45,
+            'startValve', 'stopValve', 'powerOn', 'powerOff' => 8,
+            default => 20,
+        };
+        $this->markWssBusy($busySec);
         try {
             $client = $this->createClient();
             $generation = (int) ($command['generation'] ?? 2);
@@ -509,15 +514,15 @@ class GardenaSmartGateway extends IPSModuleStrict
                 // Short cooldown so poll can resume soon
                 $this->markWssBusy(8);
             } else {
+                // start/stop/power: return immediately — full discover would delay UI/device feedback
                 $this->clearWssBusy();
-                $this->UpdateValues();
             }
 
             return $replies;
         } catch (Throwable $e) {
             $this->debugLog('Command', 'failed action=' . $action . ': ' . $e->getMessage());
             // Short cooldown — do not leave gateway "busy" for a long time after connect crash
-            $this->markWssBusy($action === 'writeSchedulesGen2' ? 6 : 8);
+            $this->markWssBusy($action === 'writeSchedulesGen2' ? 6 : 5);
             throw $e;
         }
     }

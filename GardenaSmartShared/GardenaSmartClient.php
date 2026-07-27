@@ -661,7 +661,7 @@ final class GardenaSmartClient
             $deviceId
         );
 
-        return $this->exchange([$req]);
+        return $this->exchangeExecute([$req]);
     }
 
     /**
@@ -677,7 +677,40 @@ final class GardenaSmartClient
             $deviceId
         );
 
-        return $this->exchange([$req]);
+        return $this->exchangeExecute([$req]);
+    }
+
+    /**
+     * Fast path for actuator execute: short wait, treat any non-failure frame as ACK,
+     * and do not fail the whole command on timeout (device often applies anyway).
+     *
+     * @param list<array<string, mixed>> $requests
+     * @return list<array<string, mixed>>
+     */
+    private function exchangeExecute(array $requests): array
+    {
+        if ($this->host === '' || $this->password === '') {
+            throw new RuntimeException('Host oder Passwort fehlt');
+        }
+        $previous = $this->timeoutSec;
+        $this->timeoutSec = min(4, max(2, $previous));
+        $this->log('WSS', 'exchangeExecute timeout=' . $this->timeoutSec . 's');
+        $fp = $this->connect();
+        try {
+            try {
+                return $this->exchangeOnConnection($fp, $requests);
+            } catch (RuntimeException $e) {
+                if (str_starts_with($e->getMessage(), 'Timeout:')) {
+                    $this->log('WSS', 'exchangeExecute timeout tolerated: ' . $e->getMessage());
+
+                    return [];
+                }
+                throw $e;
+            }
+        } finally {
+            $this->closeStream($fp);
+            $this->timeoutSec = $previous;
+        }
     }
 
     /**

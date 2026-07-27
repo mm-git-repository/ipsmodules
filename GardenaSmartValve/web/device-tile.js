@@ -4,6 +4,7 @@
     var state = window.__GS_INITIAL__ || {};
     var root = document.getElementById('gs-tile-root');
     if (!root) return;
+    var pending = false;
 
     function esc(s) {
         return String(s == null ? '' : s)
@@ -25,6 +26,19 @@
         if (!el) return;
         el.textContent = text || '';
         el.className = 'gs-msg ' + (ok ? 'ok' : 'err');
+    }
+
+    function parseMaybeJson(res) {
+        if (res && typeof res === 'object') return res;
+        if (typeof res !== 'string') return null;
+        var s = res.trim();
+        try { return JSON.parse(s); } catch (e1) {}
+        var start = s.indexOf('{');
+        var end = s.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            try { return JSON.parse(s.slice(start, end + 1)); } catch (e2) {}
+        }
+        return null;
     }
 
     function valves() {
@@ -55,6 +69,14 @@
         return list;
     }
 
+    function setValveOpen(valveId, open) {
+        var list = valves();
+        list.forEach(function (v) {
+            if (v.id === valveId) v.open = !!open;
+        });
+        state.valves = list;
+    }
+
     function valveRow(v) {
         var open = !!v.open;
         var title = v.name || ('Ventil ' + (v.side || (v.id + 1)));
@@ -69,7 +91,8 @@
             (open ? 'aktiv' : 'inaktiv') +
             '</span></div>' +
             '<button type="button" class="' + btnClass + '" data-act="' + act +
-            '" data-valve="' + esc(v.id) + '">' + label + '</button>' +
+            '" data-valve="' + esc(v.id) + '"' + (pending ? ' disabled' : '') + '>' +
+            label + '</button>' +
             '</div>';
     }
 
@@ -88,23 +111,45 @@
 
         root.querySelectorAll('[data-act]').forEach(function (btn) {
             btn.addEventListener('click', function () {
+                if (pending) return;
                 var act = btn.getAttribute('data-act');
                 var valve = parseInt(btn.getAttribute('data-valve') || '0', 10);
-                var ident = act === 'start' ? 'StartValve' : 'StopValve';
-                var value = act === 'start'
+                var wantOpen = act === 'start';
+                var prevOpen = false;
+                valves().forEach(function (v) {
+                    if (v.id === valve) prevOpen = !!v.open;
+                });
+
+                // Optimistic UI update immediately
+                pending = true;
+                setValveOpen(valve, wantOpen);
+                render();
+                setMsg(wantOpen ? 'Starte…' : 'Stoppe…', true);
+
+                var ident = wantOpen ? 'StartValve' : 'StopValve';
+                var value = wantOpen
                     ? JSON.stringify({ valveId: valve, duration: parseInt(state.defaultDuration || 1800, 10) })
                     : JSON.stringify({ valveId: valve });
-                setMsg('Sende…', true);
-                request(ident, value).then(function () {
-                    setMsg('OK', true);
-                    list.forEach(function (v) {
-                        if (v.id === valve) {
-                            v.open = act === 'start';
-                        }
-                    });
-                    state.valves = list;
+                request(ident, value).then(function (res) {
+                    pending = false;
+                    var parsed = parseMaybeJson(res);
+                    if (parsed && parsed.ok === false) {
+                        setValveOpen(valve, prevOpen);
+                        render();
+                        setMsg(String(parsed.message || 'Fehler'), false);
+                        return;
+                    }
+                    if (parsed && typeof parsed.open === 'boolean') {
+                        setValveOpen(valve, parsed.open);
+                    } else {
+                        setValveOpen(valve, wantOpen);
+                    }
                     render();
+                    setMsg((parsed && parsed.message) ? String(parsed.message) : 'OK', true);
                 }).catch(function (e) {
+                    pending = false;
+                    setValveOpen(valve, prevOpen);
+                    render();
                     setMsg(String(e && e.message ? e.message : e), false);
                 });
             });

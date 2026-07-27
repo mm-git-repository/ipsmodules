@@ -13,7 +13,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 18;
+    private const MODULE_BUILD = 19;
     /** Default manual start + new schedule entry duration (30 min). */
     private const DEFAULT_WATERING_DURATION_SEC = 1800;
 
@@ -220,13 +220,13 @@ class GardenaSmartValve extends IPSModuleStrict
         }
         if ($Ident === 'StartValve') {
             $payload = $this->decodeActionPayload($Value);
-            $this->StartValve((int) ($payload['valveId'] ?? 0), (int) ($payload['duration'] ?? 0));
+            echo $this->StartValve((int) ($payload['valveId'] ?? 0), (int) ($payload['duration'] ?? 0));
 
             return;
         }
         if ($Ident === 'StopValve') {
             $payload = $this->decodeActionPayload($Value);
-            $this->StopValve((int) ($payload['valveId'] ?? 0));
+            echo $this->StopValve((int) ($payload['valveId'] ?? 0));
 
             return;
         }
@@ -296,6 +296,9 @@ class GardenaSmartValve extends IPSModuleStrict
         if ($durationSec <= 0) {
             $durationSec = $this->defaultWateringDurationSec();
         }
+        // Optimistic local state so visualization can refresh immediately
+        $this->SetValue($valveId === 0 ? 'ValveAOpen' : 'ValveBOpen', true);
+        $this->trackValveOpenState($valveId, true);
         $result = $this->sendCommandToGateway([
             'action' => 'startValve',
             'deviceId' => $this->ReadPropertyString('DeviceId'),
@@ -304,16 +307,27 @@ class GardenaSmartValve extends IPSModuleStrict
             'duration' => $durationSec,
         ]);
         if (empty($result['ok'])) {
-            return 'Fehler: ' . (string) ($result['error'] ?? 'unbekannt');
-        }
-        $this->SetValue($valveId === 0 ? 'ValveAOpen' : 'ValveBOpen', true);
-        $this->trackValveOpenState($valveId, true);
+            $this->SetValue($valveId === 0 ? 'ValveAOpen' : 'ValveBOpen', false);
+            $this->trackValveOpenState($valveId, false);
 
-        return 'OK';
+            return json_encode([
+                'ok' => false,
+                'open' => false,
+                'message' => 'Fehler: ' . (string) ($result['error'] ?? 'unbekannt'),
+            ], JSON_UNESCAPED_UNICODE) ?: '{"ok":false}';
+        }
+
+        return json_encode([
+            'ok' => true,
+            'open' => true,
+            'message' => 'OK',
+        ], JSON_UNESCAPED_UNICODE) ?: '{"ok":true,"open":true}';
     }
 
     public function StopValve(int $valveId): string
     {
+        $this->SetValue($valveId === 0 ? 'ValveAOpen' : 'ValveBOpen', false);
+        $this->trackValveOpenState($valveId, false);
         $result = $this->sendCommandToGateway([
             'action' => 'stopValve',
             'deviceId' => $this->ReadPropertyString('DeviceId'),
@@ -321,12 +335,19 @@ class GardenaSmartValve extends IPSModuleStrict
             'valveId' => $valveId,
         ]);
         if (empty($result['ok'])) {
-            return 'Fehler: ' . (string) ($result['error'] ?? 'unbekannt');
+            // Keep closed locally; device may still be open — next poll corrects
+            return json_encode([
+                'ok' => false,
+                'open' => false,
+                'message' => 'Fehler: ' . (string) ($result['error'] ?? 'unbekannt'),
+            ], JSON_UNESCAPED_UNICODE) ?: '{"ok":false}';
         }
-        $this->SetValue($valveId === 0 ? 'ValveAOpen' : 'ValveBOpen', false);
-        $this->trackValveOpenState($valveId, false);
 
-        return 'OK';
+        return json_encode([
+            'ok' => true,
+            'open' => false,
+            'message' => 'OK',
+        ], JSON_UNESCAPED_UNICODE) ?: '{"ok":true,"open":false}';
     }
 
     public function PushDeviceSchedules(): string
