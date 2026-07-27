@@ -36,11 +36,13 @@
     }
 
     function defaultRule() {
+        var start = state.defaultScheduleStart || '06:00';
+        var end = state.defaultScheduleEnd || '06:30';
         return {
             active: true,
             valve: 0,
-            start: '06:00',
-            end: '06:30',
+            start: start,
+            end: end,
             mo: true, tu: true, we: true, th: true, fr: true,
             sa: false, so: false
         };

@@ -192,10 +192,17 @@ final class GardenaSmartClient
                     unset($want[$rid]);
                     continue;
                 }
-                if ($pending === 1 && count($want) === 1 && array_key_exists('success', $msg)) {
-                    $this->log('WSS', 'matched reply without exact request_id (single outstanding)');
+                // Gateway sometimes omits / remaps request_id — accept success replies FIFO
+                if (array_key_exists('success', $msg) && $want !== []) {
+                    $fallbackId = (string) array_key_first($want);
+                    $this->log(
+                        'WSS',
+                        'matched reply FIFO (want_id=' . $fallbackId
+                        . ' got_rid=' . ($rid !== '' ? $rid : '-')
+                        . ' success=' . json_encode($msg['success'] ?? null) . ')'
+                    );
                     $got[] = $msg;
-                    $want = [];
+                    unset($want[$fallbackId]);
                     continue;
                 }
                 $this->log(
@@ -259,6 +266,7 @@ final class GardenaSmartClient
 
     /**
      * Write Gen2 device schedules (lwm2mserver schedule/*).
+     * Strategy: one WSS round-trip per slot (all fields batched), then best-effort clear of unused slots.
      *
      * @param list<array<string, mixed>> $rules Editor rules from DeviceScheduleRules
      * @return list<array<string, mixed>>
@@ -289,38 +297,58 @@ final class GardenaSmartClient
             return $requests;
         };
 
+        $activeReqs = $toRequests($activeRaw);
+        $clearReqs = $toRequests($clearRaw);
+
+        // Group by schedule slot → one batch per slot (typically 5 fields)
+        $bySlot = [];
+        foreach ($activeReqs as $req) {
+            $path = (string) ($req['entity']['path'] ?? '');
+            if (preg_match('#^schedule/(\d+)/#', $path, $m)) {
+                $bySlot[$m[1]][] = $req;
+            } else {
+                $bySlot['_'][] = $req;
+            }
+        }
+
         $this->log(
             'Schedule',
             'writeGen2 device=' . $deviceId
-            . ' activeWrites=' . count($activeRaw)
-            . ' clearWrites=' . count($clearRaw)
+            . ' slots=' . count($bySlot)
+            . ' activeWrites=' . count($activeReqs)
+            . ' clearWrites=' . count($clearReqs)
         );
 
         $previousTimeout = $this->timeoutSec;
-        $this->timeoutSec = max($previousTimeout, 15);
+        $this->timeoutSec = max($previousTimeout, 20);
         $allReplies = [];
         try {
-            if ($activeRaw !== []) {
-                $replies = $this->exchangeSequential($toRequests($activeRaw));
+            $slotIndex = 0;
+            foreach ($bySlot as $slot => $reqs) {
+                $slotIndex++;
+                $this->log('Schedule', sprintf('slot %s batch %d/%d fields=%d', (string) $slot, $slotIndex, count($bySlot), count($reqs)));
+                $replies = $this->exchange($reqs);
                 foreach ($replies as $msg) {
                     if (($msg['success'] ?? null) !== true) {
                         $detail = is_string($msg['error'] ?? null)
                             ? (string) $msg['error']
-                            : 'Gateway lehnte Zeitplan-Write ab';
-                        $this->log('Schedule', 'active write failed: ' . $detail);
+                            : 'Gateway lehnte Zeitplan-Write ab (Slot ' . $slot . ')';
+                        $this->log('Schedule', 'slot write failed: ' . $detail);
                         throw new RuntimeException($detail);
                     }
                     $allReplies[] = $msg;
                 }
-                $this->log('Schedule', 'active writes OK (' . count($replies) . ')');
+                if ($slotIndex < count($bySlot)) {
+                    usleep(120000);
+                }
             }
-            if ($clearRaw !== []) {
+            $this->log('Schedule', 'active writes OK (' . count($allReplies) . ')');
+
+            if ($clearReqs !== []) {
+                // Do not block save on clearing unused slots — send and briefly drain
                 try {
-                    $clearReplies = $this->exchangeSequential($toRequests($clearRaw));
-                    foreach ($clearReplies as $msg) {
-                        $allReplies[] = $msg;
-                    }
-                    $this->log('Schedule', 'clear writes OK (' . count($clearReplies) . ')');
+                    $this->exchangeFireAndForget($clearReqs, 3.0);
+                    $this->log('Schedule', 'clear writes sent best-effort (' . count($clearReqs) . ')');
                 } catch (Throwable $e) {
                     $this->log('Schedule', 'clear writes best-effort failed: ' . $e->getMessage());
                 }
@@ -330,6 +358,33 @@ final class GardenaSmartClient
         }
 
         return $allReplies;
+    }
+
+    /**
+     * Send requests and wait briefly for replies without failing on incomplete responses.
+     *
+     * @param list<array<string, mixed>> $requests
+     */
+    private function exchangeFireAndForget(array $requests, float $waitSec = 3.0): void
+    {
+        if ($requests === []) {
+            return;
+        }
+        $fp = $this->connect();
+        try {
+            $this->sendJson($fp, $requests);
+            $deadline = microtime(true) + max(0.5, $waitSec);
+            while (microtime(true) < $deadline) {
+                if ($this->recvFrame($fp, max(0.15, $deadline - microtime(true))) === null) {
+                    // idle — stop early if nothing more arrives
+                    if (microtime(true) + 0.4 >= $deadline) {
+                        break;
+                    }
+                }
+            }
+        } finally {
+            fclose($fp);
+        }
     }
 
     /**

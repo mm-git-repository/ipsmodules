@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 7;
+    private const MODULE_BUILD = 8;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -36,13 +36,14 @@ class GardenaSmartGateway extends IPSModuleStrict
 
         $this->RegisterAttributeString('DeviceCache', '{}');
         $this->RegisterAttributeString('DeviceScheduleBlock', '');
+        $this->RegisterAttributeString('DebugLogBuffer', '');
 
         $this->RegisterVariableBoolean('Reachable', 'Erreichbar', '', 1);
         $this->RegisterVariableString('LastError', 'Letzter Fehler', '', 2);
         $this->RegisterVariableInteger('DeviceCount', 'Geräteanzahl', '', 3);
         $this->RegisterVariableString('ScheduleOverview', 'Zeitplan-Übersicht', '', 10);
         $this->RegisterVariableString('UsageOverview', 'Wasserverbrauch-Übersicht', '', 11);
-        $this->RegisterVariableString('DebugLog', 'Debug-Log', '', 20);
+        $this->RegisterVariableString('DebugLog', 'Debug-Log', '~TextBox', 20);
         $this->RegisterVariableString('ModuleVersion', 'Modulversion', '', 999);
 
         $this->RegisterTimer('Update', 0, 'GSGW_UpdateValues($_IPS[\'TARGET\']);');
@@ -79,6 +80,30 @@ class GardenaSmartGateway extends IPSModuleStrict
                     self::MODULE_VERSION,
                     self::MODULE_BUILD
                 );
+            }
+            if (($element['type'] ?? '') === 'Label' && ($element['name'] ?? '') === 'DebugLogPreview') {
+                $buf = '';
+                try {
+                    $buf = (string) $this->ReadAttributeString('DebugLogBuffer');
+                } catch (Throwable) {
+                    $buf = '';
+                }
+                if ($buf === '') {
+                    try {
+                        $buf = (string) $this->GetValue('DebugLog');
+                    } catch (Throwable) {
+                        $buf = '';
+                    }
+                }
+                if ($buf === '') {
+                    $preview = $this->ReadPropertyBoolean('Debug')
+                        ? '(noch leer — nach Aktion / „Debug-Test“ hier und in Variable Debug-Log sichtbar)'
+                        : '(Debug aus — Checkbox aktivieren, Übernehmen, dann Debug-Test)';
+                } else {
+                    $lines = preg_split("/\r\n|\n|\r/", $buf) ?: [];
+                    $preview = implode("\n", array_slice($lines, -12));
+                }
+                $form['elements'][$idx]['caption'] = "Debug-Vorschau:\n" . $preview;
             }
         }
 
@@ -252,9 +277,33 @@ class GardenaSmartGateway extends IPSModuleStrict
 
     public function ClearDebugLog(): string
     {
-        $this->SetValue('DebugLog', '');
+        try {
+            $this->WriteAttributeString('DebugLogBuffer', '');
+        } catch (Throwable) {
+            // ignore
+        }
+        try {
+            $this->SetValue('DebugLog', '');
+        } catch (Throwable) {
+            // ignore
+        }
 
         return 'OK — Debug-Log geleert';
+    }
+
+    public function WriteDebugTest(): string
+    {
+        // Persist checkbox if user forgot ApplyChanges
+        if (!$this->ReadPropertyBoolean('Debug')) {
+            @IPS_SetProperty($this->InstanceID, 'Debug', true);
+        }
+        $this->appendDebugLine('Test', 'Debug-Log OK — ' . date('Y-m-d H:i:s'));
+        $debugVarId = @$this->GetIDForIdent('DebugLog');
+        if (is_int($debugVarId) && $debugVarId > 0) {
+            IPS_SetHidden($debugVarId, false);
+        }
+
+        return 'OK — Debug-Eintrag geschrieben (Variable Debug-Log + Formularvorschau nach Neuöffnen)';
     }
 
     public function GetVisualizationTile(): string
@@ -567,12 +616,10 @@ class GardenaSmartGateway extends IPSModuleStrict
 
     private function createClient(): GardenaSmartClient
     {
-        $logger = null;
-        if ($this->ReadPropertyBoolean('Debug')) {
-            $logger = function (string $topic, string $message): void {
-                $this->debugLog($topic, $message);
-            };
-        }
+        $gateway = $this;
+        $logger = function (string $topic, string $message) use ($gateway): void {
+            $gateway->debugLog($topic, $message);
+        };
 
         return new GardenaSmartClient(
             $this->ReadPropertyString('Host'),
@@ -580,21 +627,47 @@ class GardenaSmartGateway extends IPSModuleStrict
             $this->ReadPropertyInteger('Port'),
             $this->ReadPropertyBoolean('TlsInsecure'),
             12,
-            $logger
+            $this->isDebugEnabled() ? $logger : null
         );
+    }
+
+    private function isDebugEnabled(): bool
+    {
+        try {
+            if ($this->ReadPropertyBoolean('Debug')) {
+                return true;
+            }
+        } catch (Throwable) {
+            // ignore
+        }
+        // Fallback: unsaved form may have set property via IPS_SetProperty
+        try {
+            return (bool) IPS_GetProperty($this->InstanceID, 'Debug');
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     private function debugLog(string $topic, string $message): void
     {
-        $line = date('H:i:s') . ' [' . $topic . '] ' . $message;
-        // Always available in instance message log when IPS instance debug is on
         $this->SendDebug($topic, $message, 0);
-        if (!$this->ReadPropertyBoolean('Debug')) {
+        if (!$this->isDebugEnabled()) {
             return;
         }
-        @IPS_LogMessage('GardenaSmartGateway', $line);
+        $this->appendDebugLine($topic, $message);
+    }
+
+    private function appendDebugLine(string $topic, string $message): void
+    {
+        $line = date('H:i:s') . ' [' . $topic . '] ' . $message;
         try {
-            $prev = (string) $this->GetValue('DebugLog');
+            @IPS_LogMessage('GardenaSmartGateway', $line);
+        } catch (Throwable) {
+            // ignore
+        }
+        $prev = '';
+        try {
+            $prev = (string) $this->ReadAttributeString('DebugLogBuffer');
         } catch (Throwable) {
             $prev = '';
         }
@@ -607,7 +680,20 @@ class GardenaSmartGateway extends IPSModuleStrict
         if (strlen($text) > 30000) {
             $text = substr($text, -30000);
         }
-        $this->SetValue('DebugLog', $text);
+        try {
+            $this->WriteAttributeString('DebugLogBuffer', $text);
+        } catch (Throwable) {
+            // ignore
+        }
+        try {
+            $this->SetValue('DebugLog', $text);
+        } catch (Throwable $e) {
+            $this->SendDebug('DebugLog', 'SetValue failed: ' . $e->getMessage(), 0);
+        }
+        $debugVarId = @$this->GetIDForIdent('DebugLog');
+        if (is_int($debugVarId) && $debugVarId > 0) {
+            @IPS_SetHidden($debugVarId, false);
+        }
     }
 
     private function hasValidConfig(): bool

@@ -78,7 +78,7 @@ Am Dual 2814 funktioniert z. B.:
 - Dual Water Control = **eine** Valve-Instanz mit Ventil A und B
 - Geräte hängen **logisch** am Gateway (`GatewayInstanceID` + Objektbaum-Parent), ohne Symcon-Datenfluss/Splitter
 - Parallelbearbeitung in IPS und Gardena-App kann Pläne überschreiben — UI zeigt „Zuletzt gespeichert von IPS“
-- **Debug:** Am Gateway „Debug-Log aktiv“ einschalten → Variable `Debug-Log` zeigt WSS-/Kommando-Details; Button „Debug-Log leeren“
+- **Debug:** Am Gateway „Debug-Log aktiv“ einschalten und **Übernehmen**, dann „Debug-Test“ — Variable `Debug-Log` + Formularvorschau zeigen WSS-/Kommando-Details; Button „Debug-Log leeren“
 - Pump / Mäher: noch nicht im MVP
 
 ## Protokoll (Kurz)

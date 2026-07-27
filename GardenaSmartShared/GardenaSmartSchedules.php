@@ -181,7 +181,6 @@ final class GardenaSmartSchedules
             foreach ([
                 'start_offset_seconds' => 0,
                 'end_offset_seconds' => 0,
-                'repetition_value' => 0,
             ] as $field => $value) {
                 $clear[] = self::writeRequest($deviceId, $slot, $field, $value);
             }

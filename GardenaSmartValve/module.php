@@ -13,7 +13,9 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 8;
+    private const MODULE_BUILD = 9;
+    /** Default manual start + new schedule entry duration (30 min). */
+    private const DEFAULT_WATERING_DURATION_SEC = 1800;
 
     public function Create(): void
     {
@@ -24,7 +26,8 @@ class GardenaSmartValve extends IPSModuleStrict
         $this->RegisterPropertyString('ModelNumber', '');
         $this->RegisterPropertyInteger('Generation', 2);
         $this->RegisterPropertyInteger('ValveCount', 2);
-        $this->RegisterPropertyInteger('DefaultDurationSec', 1800);
+        // Kept for compatibility; no longer shown in form — used as default watering window
+        $this->RegisterPropertyInteger('DefaultDurationSec', self::DEFAULT_WATERING_DURATION_SEC);
         $this->RegisterPropertyString('DeviceScheduleRules', '[]');
 
         foreach (['A', 'B'] as $side) {
@@ -97,6 +100,18 @@ class GardenaSmartValve extends IPSModuleStrict
             if (($element['type'] ?? '') === 'Select' && in_array($element['name'] ?? '', ['OutletAPreset', 'OutletBPreset'], true)) {
                 $form['elements'][$idx]['options'] = $this->presetSelectOptions();
             }
+            if (($element['type'] ?? '') === 'List' && ($element['name'] ?? '') === 'DeviceScheduleRules') {
+                [$start, $end] = $this->defaultScheduleWindow();
+                foreach ($form['elements'][$idx]['columns'] ?? [] as $cIdx => $col) {
+                    $name = (string) ($col['name'] ?? '');
+                    if ($name === 'start') {
+                        $form['elements'][$idx]['columns'][$cIdx]['add'] = $start;
+                    }
+                    if ($name === 'end') {
+                        $form['elements'][$idx]['columns'][$cIdx]['add'] = $end;
+                    }
+                }
+            }
         }
         if ($this->ReadPropertyInteger('ValveCount') < 2) {
             $form['elements'] = array_values(array_filter(
@@ -141,7 +156,9 @@ class GardenaSmartValve extends IPSModuleStrict
             'scheduleMaxSlots' => GardenaSmartSchedules::GEN2_MAX_SLOTS,
             'scheduleLastSavedBy' => $this->ReadAttributeString('ScheduleLastSavedBy'),
             'scheduleLastSavedAt' => $this->ReadAttributeString('ScheduleLastSavedAt'),
-            'defaultDuration' => $this->ReadPropertyInteger('DefaultDurationSec'),
+            'defaultDuration' => $this->defaultWateringDurationSec(),
+            'defaultScheduleStart' => $this->defaultScheduleWindow()[0],
+            'defaultScheduleEnd' => $this->defaultScheduleWindow()[1],
             'instanceId' => $this->InstanceID,
         ];
 
@@ -205,7 +222,7 @@ class GardenaSmartValve extends IPSModuleStrict
     public function StartValve(int $valveId, int $durationSec = 0): string
     {
         if ($durationSec <= 0) {
-            $durationSec = $this->ReadPropertyInteger('DefaultDurationSec');
+            $durationSec = $this->defaultWateringDurationSec();
         }
         $result = $this->sendCommandToGateway([
             'action' => 'startValve',
@@ -490,6 +507,35 @@ class GardenaSmartValve extends IPSModuleStrict
         }
 
         return ['outlets' => $outlets];
+    }
+
+    private function defaultWateringDurationSec(): int
+    {
+        try {
+            $sec = (int) $this->ReadPropertyInteger('DefaultDurationSec');
+        } catch (Throwable) {
+            $sec = self::DEFAULT_WATERING_DURATION_SEC;
+        }
+
+        return max(60, $sec > 0 ? $sec : self::DEFAULT_WATERING_DURATION_SEC);
+    }
+
+    /**
+     * @return array{0: string, 1: string} start, end HH:MM
+     */
+    private function defaultScheduleWindow(): array
+    {
+        $startSec = 6 * 3600; // 06:00
+        $endSec = $startSec + $this->defaultWateringDurationSec();
+        if ($endSec >= 86400) {
+            $endSec = 86400 - 60;
+        }
+        $fmt = static function (int $sec): string {
+            $sec = max(0, $sec % 86400);
+            return sprintf('%02d:%02d', intdiv($sec, 3600), intdiv($sec % 3600, 60));
+        };
+
+        return [$fmt($startSec), $fmt($endSec)];
     }
 
     /**

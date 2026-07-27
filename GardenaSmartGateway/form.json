@@ -43,7 +43,12 @@
         {
             "type": "CheckBox",
             "name": "Debug",
-            "caption": "Debug-Log aktiv (WSS/Kommandos → Variable Debug-Log + Meldungsarchiv)"
+            "caption": "Debug-Log aktiv (danach Übernehmen!). WSS/Kommandos → Variable Debug-Log + Vorschau unten"
+        },
+        {
+            "type": "Label",
+            "name": "DebugLogPreview",
+            "caption": "Debug-Vorschau"
         },
         {
             "type": "Label",
@@ -69,17 +74,22 @@
         {
             "type": "Button",
             "caption": "Verbindung testen",
-            "onClick": "echo GSGW_TestConnection($id);"
+            "onClick": "IPS_ApplyChanges($id); echo GSGW_TestConnection($id);"
         },
         {
             "type": "Button",
             "caption": "Geräte scannen / anlegen",
-            "onClick": "echo GSGW_ScanAndCreateDevices($id);"
+            "onClick": "IPS_ApplyChanges($id); echo GSGW_ScanAndCreateDevices($id);"
         },
         {
             "type": "Button",
             "caption": "Jetzt aktualisieren",
-            "onClick": "GSGW_UpdateValues($id); echo 'OK';"
+            "onClick": "IPS_ApplyChanges($id); GSGW_UpdateValues($id); echo 'OK';"
+        },
+        {
+            "type": "Button",
+            "caption": "Debug-Test",
+            "onClick": "IPS_ApplyChanges($id); echo GSGW_WriteDebugTest($id);"
         },
         {
             "type": "Button",

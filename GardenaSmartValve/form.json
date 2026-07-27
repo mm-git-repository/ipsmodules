@@ -40,13 +40,6 @@
             "maximum": 6
         },
         {
-            "type": "NumberSpinner",
-            "name": "DefaultDurationSec",
-            "caption": "Standard-Bewässerungsdauer (Sekunden)",
-            "digits": 0,
-            "minimum": 60
-        },
-        {
             "type": "Label",
             "name": "UsageHint",
             "caption": "Wasserverbrauch: Preset am Gateway anlegen, hier wählen und speichern — Werte (l/h …) und Zählung kommen automatisch aus dem Preset."
@@ -70,7 +63,7 @@
         {
             "type": "Label",
             "name": "ScheduleHint",
-            "caption": "Geräte-Zeitpläne (Gen2): max. 4 Einträge. Hinzufügen/Entfernen/Ändern möglich. Slots werden automatisch vergeben. Speichern schreibt aufs Gerät."
+            "caption": "Geräte-Zeitpläne (Gen2): max. 4 Einträge. Neue Einträge starten mit 30 Min Dauer (Start/Ende frei änderbar). Speichern schreibt aufs Gerät."
         },
         {
             "type": "List",
