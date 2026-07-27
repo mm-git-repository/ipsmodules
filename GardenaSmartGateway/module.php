@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 9;
+    private const MODULE_BUILD = 10;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -31,7 +31,7 @@ class GardenaSmartGateway extends IPSModuleStrict
         $this->RegisterPropertyInteger('Port', 8443);
         $this->RegisterPropertyBoolean('TlsInsecure', true);
         $this->RegisterPropertyInteger('UpdateIntervalSeconds', self::UPDATE_DEFAULT_SEC);
-        $this->RegisterPropertyString('FlowPresets', '[]');
+        $this->RegisterPropertyString('FlowPresets', GardenaSmartWaterUsage::defaultCatalogJson());
         $this->RegisterPropertyBoolean('Debug', false);
 
         $this->RegisterAttributeString('DeviceCache', '{}');
@@ -58,6 +58,7 @@ class GardenaSmartGateway extends IPSModuleStrict
         parent::ApplyChanges();
 
         $this->SetValue('ModuleVersion', self::MODULE_VERSION . ' (Build ' . self::MODULE_BUILD . ')');
+        $this->ensureFlowPresetsSeeded();
         $debugVarId = @$this->GetIDForIdent('DebugLog');
         if (is_int($debugVarId) && $debugVarId > 0) {
             IPS_SetHidden($debugVarId, !$this->ReadPropertyBoolean('Debug'));
@@ -69,6 +70,7 @@ class GardenaSmartGateway extends IPSModuleStrict
 
     public function GetConfigurationForm(): string
     {
+        $this->ensureFlowPresetsSeeded();
         $form = json_decode((string) file_get_contents(__DIR__ . '/form.json'), true);
         if (!is_array($form)) {
             return '{}';
@@ -304,6 +306,15 @@ class GardenaSmartGateway extends IPSModuleStrict
         }
 
         return 'OK — Debug-Eintrag geschrieben (Variable Debug-Log + Formularvorschau nach Neuöffnen)';
+    }
+
+    public function ResetFlowPresetsToDefaults(): string
+    {
+        $json = GardenaSmartWaterUsage::defaultCatalogJson();
+        @IPS_SetProperty($this->InstanceID, 'FlowPresets', $json);
+        @IPS_ApplyChanges($this->InstanceID);
+
+        return 'OK — Basis-Presets wiederhergestellt (eigene Einträge entfernt)';
     }
 
     public function GetVisualizationTile(): string
@@ -612,6 +623,40 @@ class GardenaSmartGateway extends IPSModuleStrict
         }
 
         return 0;
+    }
+
+    private function ensureFlowPresetsSeeded(): void
+    {
+        $raw = '';
+        try {
+            $raw = trim((string) $this->ReadPropertyString('FlowPresets'));
+        } catch (Throwable) {
+            $raw = '';
+        }
+        $decoded = json_decode($raw !== '' ? $raw : '[]', true);
+        if (!is_array($decoded)) {
+            $decoded = [];
+        }
+        $catalog = GardenaSmartWaterUsage::normalizeCatalog($decoded);
+        $json = json_encode($catalog, JSON_UNESCAPED_UNICODE) ?: GardenaSmartWaterUsage::defaultCatalogJson();
+        // Persist when empty or when legacy customs-only list was expanded with builtins
+        if ($raw === '' || $raw === '[]' || $json !== $raw) {
+            // Only auto-write when empty or when we had to prepend builtins (legacy)
+            $needsWrite = ($raw === '' || $raw === '[]');
+            if (!$needsWrite && is_array($decoded)) {
+                $hadBuiltin = false;
+                foreach ($decoded as $row) {
+                    if (is_array($row) && str_starts_with(trim((string) ($row['id'] ?? '')), 'builtin:')) {
+                        $hadBuiltin = true;
+                        break;
+                    }
+                }
+                $needsWrite = !$hadBuiltin && $decoded !== [];
+            }
+            if ($needsWrite) {
+                @IPS_SetProperty($this->InstanceID, 'FlowPresets', $json);
+            }
+        }
     }
 
     private function createClient(): GardenaSmartClient

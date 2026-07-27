@@ -38,7 +38,7 @@ systemctl start websocketd
 
 Kein physikalischer Literzähler nötig. Verbrauch = **Öffnungsdauer × konfigurierte l/h**.
 
-1. Am **Gateway** Presets pflegen (Liste „Eigene Durchfluss-Presets“; Basis-Presets sind fest eingebaut), z. B. Perl-Regner 20 m / 2 bar / 300 l/h  
+1. Am **Gateway** Presets in der Liste **„Durchfluss-Presets“** pflegen (Basis-Presets sind vorbefüllt und änderbar; Button „Basis-Presets wiederherstellen“ setzt zurück)  
 2. Am **Valve** je Ausgang A/B nur das Preset wählen und speichern — l/h und Bezeichnung kommen aus dem Preset, die Zählung ist damit aktiv  
 3. Öffnen per IPS, App oder Geräte-Zeitplan wird mitgezählt (Poll + Sofort-Tracking bei IPS-Start/Stop)  
 4. Zähler: heute / Woche / Jahr / Gesamt (+ laufende Session)  

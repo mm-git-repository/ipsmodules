@@ -47,12 +47,42 @@ final class GardenaSmartWaterUsage
     }
 
     /**
+     * Editable default catalog for the Gateway form (builtins without "Benutzerdefiniert").
+     *
+     * @return list<array{id:string,label:string,length:string,pressure:string,litersPerHour:float}>
+     */
+    public static function defaultCatalogPresets(): array
+    {
+        $out = [];
+        foreach (self::builtinPresets() as $preset) {
+            if (($preset['id'] ?? '') === 'builtin:custom') {
+                continue;
+            }
+            $out[] = $preset;
+        }
+
+        return $out;
+    }
+
+    public static function defaultCatalogJson(): string
+    {
+        return json_encode(self::defaultCatalogPresets(), JSON_UNESCAPED_UNICODE) ?: '[]';
+    }
+
+    /**
+     * Normalize gateway list rows into a catalog. Empty input → default builtins.
+     * If the list has only custom rows (legacy), prepend missing default builtins.
+     *
      * @param list<array<string, mixed>> $gatewayPresets
      * @return list<array{id:string,label:string,length:string,pressure:string,litersPerHour:float}>
      */
-    public static function mergePresets(array $gatewayPresets): array
+    public static function normalizeCatalog(array $gatewayPresets): array
     {
-        $out = self::builtinPresets();
+        if ($gatewayPresets === []) {
+            return self::defaultCatalogPresets();
+        }
+        $customs = [];
+        $byId = [];
         foreach ($gatewayPresets as $idx => $row) {
             if (!is_array($row)) {
                 continue;
@@ -62,19 +92,46 @@ final class GardenaSmartWaterUsage
                 continue;
             }
             $id = trim((string) ($row['id'] ?? ''));
-            if ($id === '') {
+            if ($id === '' || $id === 'builtin:custom') {
                 $id = 'custom:' . $idx . ':' . preg_replace('/[^a-z0-9]+/i', '-', strtolower($label));
             }
-            $out[] = [
+            $entry = [
                 'id' => $id,
                 'label' => $label,
                 'length' => trim((string) ($row['length'] ?? '')),
                 'pressure' => trim((string) ($row['pressure'] ?? '')),
                 'litersPerHour' => max(0.0, (float) ($row['litersPerHour'] ?? $row['lph'] ?? 0)),
             ];
+            $byId[$id] = $entry;
+            if (!str_starts_with($id, 'builtin:')) {
+                $customs[] = $entry;
+            }
         }
+        if ($byId === []) {
+            return self::defaultCatalogPresets();
+        }
+        $hasBuiltin = false;
+        foreach (array_keys($byId) as $id) {
+            if (str_starts_with($id, 'builtin:')) {
+                $hasBuiltin = true;
+                break;
+            }
+        }
+        if ($hasBuiltin) {
+            return array_values($byId);
+        }
+        // Legacy: only custom presets stored → show defaults + customs
+        return array_merge(self::defaultCatalogPresets(), $customs);
+    }
 
-        return $out;
+    /**
+     * @param list<array<string, mixed>> $gatewayPresets
+     * @return list<array{id:string,label:string,length:string,pressure:string,litersPerHour:float}>
+     */
+    public static function mergePresets(array $gatewayPresets): array
+    {
+        // Gateway catalog is the single source of truth when configured (includes edited builtins).
+        return self::normalizeCatalog($gatewayPresets);
     }
 
     public static function litersForSeconds(float $litersPerHour, int $seconds): float

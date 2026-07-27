@@ -53,20 +53,21 @@
         {
             "type": "Label",
             "name": "FlowPresetHint",
-            "caption": "Durchfluss-Presets (zentral): Basis-Presets (Perl-Regner etc.) sind fest eingebaut; eigene Einträge erscheinen im Valve-Modul nur als Auswahl."
+            "caption": "Durchfluss-Presets (zentral): Basis-Presets sind vorbefüllt und hier änderbar. Valve-Module bieten genau diese Liste zur Auswahl."
         },
         {
             "type": "List",
             "name": "FlowPresets",
-            "caption": "Eigene Durchfluss-Presets",
-            "rowCount": 5,
+            "caption": "Durchfluss-Presets",
+            "rowCount": 6,
             "add": true,
             "delete": true,
             "columns": [
-                { "caption": "Bezeichnung", "name": "label", "width": "160px", "edit": { "type": "ValidationTextBox" }, "add": "Mein Regner", "save": true },
-                { "caption": "Länge/Hinweis", "name": "length", "width": "100px", "edit": { "type": "ValidationTextBox" }, "add": "20 m", "save": true },
-                { "caption": "Druck", "name": "pressure", "width": "80px", "edit": { "type": "ValidationTextBox" }, "add": "2 bar", "save": true },
-                { "caption": "l/h", "name": "litersPerHour", "width": "80px", "edit": { "type": "NumberSpinner", "digits": 1, "minimum": 0 }, "add": 300, "save": true }
+                { "caption": "ID", "name": "id", "width": "130px", "edit": { "type": "ValidationTextBox" }, "add": "", "save": true },
+                { "caption": "Bezeichnung", "name": "label", "width": "150px", "edit": { "type": "ValidationTextBox" }, "add": "Mein Regner", "save": true },
+                { "caption": "Länge/Hinweis", "name": "length", "width": "90px", "edit": { "type": "ValidationTextBox" }, "add": "20 m", "save": true },
+                { "caption": "Druck", "name": "pressure", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "2 bar", "save": true },
+                { "caption": "l/h", "name": "litersPerHour", "width": "70px", "edit": { "type": "NumberSpinner", "digits": 1, "minimum": 0 }, "add": 300, "save": true }
             ]
         }
     ],
@@ -95,6 +96,11 @@
             "type": "Button",
             "caption": "Debug-Log leeren",
             "onClick": "echo GSGW_ClearDebugLog($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Basis-Presets wiederherstellen",
+            "onClick": "echo GSGW_ResetFlowPresetsToDefaults($id);"
         }
     ],
     "status": [
