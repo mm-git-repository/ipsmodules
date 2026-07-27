@@ -49,8 +49,6 @@
         html += '<thead><tr>';
         html += '<th>Ventil</th>';
         html += '<th class="num">Heute</th>';
-        html += '<th class="num">Woche</th>';
-        html += '<th class="num">Jahr</th>';
         html += '<th class="num">Gesamt</th>';
         html += '</tr></thead><tbody>';
 
@@ -60,8 +58,6 @@
             html += '<tr>';
             html += '<td><div class="gs-usage-device">' + esc(valve) + '</div></td>';
             html += '<td class="num">' + esc(liters(o.today)) + '</td>';
-            html += '<td class="num">' + esc(liters(o.week)) + '</td>';
-            html += '<td class="num">' + esc(liters(o.year)) + '</td>';
             html += '<td class="num">' + esc(liters(o.total)) + '</td>';
             html += '</tr>';
         });
