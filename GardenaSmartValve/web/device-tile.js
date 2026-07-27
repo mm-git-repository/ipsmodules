@@ -55,27 +55,32 @@
         return list;
     }
 
-    function valveCard(v) {
+    function valveRow(v) {
+        var open = !!v.open;
         var title = v.name || ('Ventil ' + (v.side || (v.id + 1)));
-        return '<div class="gs-valve">' +
-            '<div class="gs-actions">' +
-            '<button type="button" class="gs-btn primary" data-act="start" data-valve="' +
-            esc(v.id) + '">Start ' + esc(title) + '</button>' +
-            '<button type="button" class="gs-btn danger" data-act="stop" data-valve="' +
-            esc(v.id) + '">Stop ' + esc(title) + '</button>' +
-            '</div></div>';
+        var act = open ? 'stop' : 'start';
+        var label = open ? 'Stop' : 'Start';
+        var btnClass = open ? 'gs-btn danger' : 'gs-btn primary';
+        return '<div class="gs-valve-row">' +
+            '<div class="gs-valve-info">' +
+            '<span class="gs-valve-name">' + esc(title) + '</span>' +
+            '<span class="gs-valve-state">' +
+            '<span class="gs-dot ' + (open ? 'on' : 'off') + '"></span>' +
+            (open ? 'aktiv' : 'inaktiv') +
+            '</span></div>' +
+            '<button type="button" class="' + btnClass + '" data-act="' + act +
+            '" data-valve="' + esc(v.id) + '">' + label + '</button>' +
+            '</div>';
     }
 
     function render() {
         var list = valves();
         var html = '';
-        html += '<div class="gs-head">';
-        html += '<div class="gs-title">' + esc(state.name || 'Ventil') + '</div>';
-        html += '</div>';
-
-        html += '<div class="gs-grid">';
+        html += '<div class="gs-head"><div class="gs-title">' +
+            esc(state.name || 'Ventil') + '</div></div>';
+        html += '<div class="gs-list">';
         list.forEach(function (v) {
-            html += valveCard(v);
+            html += valveRow(v);
         });
         html += '</div>';
         html += '<div class="gs-msg"></div>';

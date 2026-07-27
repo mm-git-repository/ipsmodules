@@ -18,28 +18,55 @@
     letter-spacing: 0.01em;
 }
 
-.gs-grid {
-    display: grid;
-    grid-template-columns: 1fr;
+.gs-list {
+    display: flex;
+    flex-direction: column;
     gap: 10px;
 }
-@media (min-width: 480px) {
-    .gs-grid {
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    }
+
+.gs-valve-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid rgba(128,128,128,0.28);
+    border-radius: 12px;
+    background: rgba(128,128,128,0.06);
 }
 
-.gs-valve {
-    padding: 0;
-    border: none;
-    background: transparent;
+.gs-valve-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+.gs-valve-name {
+    font-weight: 650;
+    font-size: 1.02rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.gs-valve-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.9rem;
+    opacity: 0.8;
 }
 
-.gs-actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
+.gs-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #888;
+    flex: 0 0 auto;
 }
+.gs-dot.on { background: #2f9e44; }
+.gs-dot.off { background: #c92a2a; }
 
 .gs-btn {
     appearance: none;
@@ -47,34 +74,27 @@
     background: rgba(128,128,128,0.08);
     color: inherit;
     border-radius: 12px;
-    padding: 14px 16px;
-    min-height: 52px;
+    padding: 12px 18px;
+    min-height: 48px;
+    min-width: 5.5rem;
     cursor: pointer;
     font: inherit;
-    font-size: 1.05rem;
+    font-size: 1.02rem;
     font-weight: 650;
     letter-spacing: 0.02em;
-    width: 100%;
+    flex: 0 0 auto;
     touch-action: manipulation;
     user-select: none;
 }
 .gs-btn:hover { background: rgba(128,128,128,0.16); }
-.gs-btn:active {
-    transform: scale(0.98);
-}
+.gs-btn:active { transform: scale(0.98); }
 .gs-btn.primary {
     border-color: rgba(47,158,68,0.5);
     background: rgba(47,158,68,0.18);
 }
-.gs-btn.primary:active {
-    background: rgba(47,158,68,0.28);
-}
 .gs-btn.danger {
     border-color: rgba(201,42,42,0.5);
     background: rgba(201,42,42,0.14);
-}
-.gs-btn.danger:active {
-    background: rgba(201,42,42,0.24);
 }
 
 .gs-msg {
