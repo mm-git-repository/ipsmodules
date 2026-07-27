@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 16;
+    private const MODULE_BUILD = 17;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -249,8 +249,41 @@ class GardenaSmartGateway extends IPSModuleStrict
 
             return;
         }
+        $error = $this->runDiscoverAndPush(25);
+        if ($error !== null) {
+            // Schedule read/write leaves websocketd briefly flaky — one soft retry
+            $this->debugLog('Update', 'erster Versuch fehlgeschlagen, Retry: ' . $error);
+            usleep(700000);
+            if ($this->isWssBusy()) {
+                $this->SetSummary($this->buildSummary());
+
+                return;
+            }
+            $error = $this->runDiscoverAndPush(25);
+        }
+        if ($error !== null) {
+            // Keep previous online state if we were reachable; only record soft error
+            // Hard unreachable only when we never had a successful session recently
+            $this->SetValue('LastError', $error);
+            $this->debugLog('Update', 'ERROR: ' . $error);
+            if (!$this->GetValue('Reachable')) {
+                $this->SetStatus(self::IS_UNREACHABLE);
+            } else {
+                // Stay ACTIVE — transient poll failure after schedule ops is common
+                $this->debugLog('Update', 'Status bleibt aktiv (vorübergehender Poll-Fehler)');
+                $this->markWssBusy(20);
+            }
+        }
+        $this->SetSummary($this->buildSummary());
+    }
+
+    /**
+     * Discover + push. Returns null on success, error message on failure.
+     */
+    private function runDiscoverAndPush(int $busySeconds): ?string
+    {
         try {
-            $this->markWssBusy(25);
+            $this->markWssBusy($busySeconds);
             $devices = $this->refreshDeviceCache();
             $this->pushStateToChildren($devices);
             $this->rebuildScheduleOverview($devices);
@@ -259,15 +292,13 @@ class GardenaSmartGateway extends IPSModuleStrict
             $this->SetValue('LastError', '');
             $this->SetValue('DeviceCount', count($devices));
             $this->SetStatus(self::IS_ACTIVE);
+
+            return null;
         } catch (Throwable $e) {
-            $this->SetValue('Reachable', false);
-            $this->SetValue('LastError', $e->getMessage());
-            $this->SetStatus(self::IS_UNREACHABLE);
-            $this->debugLog('Update', 'ERROR: ' . $e->getMessage());
+            return $e->getMessage();
         } finally {
             $this->clearWssBusy();
         }
-        $this->SetSummary($this->buildSummary());
     }
 
     /**
@@ -289,33 +320,42 @@ class GardenaSmartGateway extends IPSModuleStrict
             return json_encode(['ok' => false, 'error' => 'Gateway gerade belegt — bitte kurz warten'], JSON_UNESCAPED_UNICODE) ?: '{}';
         }
         try {
-            $this->markWssBusy(30);
+            $this->markWssBusy(45);
             $devices = $this->refreshDeviceCache();
             if (!isset($devices[$deviceId]) || !is_array($devices[$deviceId])) {
                 return json_encode(['ok' => false, 'error' => 'Gerät nicht im Discover gefunden'], JSON_UNESCAPED_UNICODE) ?: '{}';
             }
             $this->pushStateToChildren($devices);
             $this->rebuildScheduleOverview($devices);
-            $this->rebuildUsageOverview();
-            $this->SetValue('Reachable', true);
-            $this->SetValue('LastError', '');
-            $this->SetValue('DeviceCount', count($devices));
-            $this->SetStatus(self::IS_ACTIVE);
+            try {
+                $this->rebuildUsageOverview();
+            } catch (Throwable $e) {
+                $this->debugLog('FetchDeviceData', 'Usage-Übersicht übersprungen: ' . $e->getMessage());
+            }
+            $this->markGatewayOnline(count($devices));
 
             return json_encode([
                 'ok' => true,
                 'device' => $devices[$deviceId],
             ], JSON_UNESCAPED_UNICODE) ?: '{"ok":false,"error":"JSON-Fehler"}';
         } catch (Throwable $e) {
-            $this->SetValue('Reachable', false);
+            // Do not flip instance to unreachable — schedule pull failure is operational, not offline
             $this->SetValue('LastError', $e->getMessage());
-            $this->SetStatus(self::IS_UNREACHABLE);
             $this->debugLog('FetchDeviceData', 'ERROR: ' . $e->getMessage());
 
             return json_encode(['ok' => false, 'error' => $e->getMessage()], JSON_UNESCAPED_UNICODE) ?: '{}';
         } finally {
-            $this->clearWssBusy();
+            // Cooldown so timer poll does not race a recovering websocketd
+            $this->markWssBusy(15);
         }
+    }
+
+    private function markGatewayOnline(int $deviceCount): void
+    {
+        $this->SetValue('Reachable', true);
+        $this->SetValue('LastError', '');
+        $this->SetValue('DeviceCount', $deviceCount);
+        $this->SetStatus(self::IS_ACTIVE);
     }
 
     /**
@@ -446,21 +486,22 @@ class GardenaSmartGateway extends IPSModuleStrict
                 } catch (Throwable) {
                     // ignore
                 }
-                usleep(1000000);
-                $this->clearWssBusy();
+                usleep(1200000);
                 try {
-                    $this->markWssBusy(30);
+                    $this->markWssBusy(45);
                     $devices = $this->refreshDeviceCache();
                     $this->pushStateToChildren($devices);
                     $this->rebuildScheduleOverview($devices);
-                    $this->SetValue('Reachable', true);
-                    $this->SetValue('LastError', '');
-                    $this->SetValue('DeviceCount', count($devices));
+                    $this->markGatewayOnline(count($devices));
                 } catch (Throwable $e) {
+                    // Write itself succeeded — do not mark gateway unreachable on verify glitch
                     $this->debugLog('Schedule', 'verify discover failed: ' . $e->getMessage());
-                } finally {
-                    $this->clearWssBusy();
+                    $this->SetValue('LastError', 'Zeitplan geschrieben, Verify-Discover: ' . $e->getMessage());
+                    $this->SetStatus(self::IS_ACTIVE);
+                    $this->SetValue('Reachable', true);
                 }
+                // Cooldown: websocketd needs a moment after many schedule writes
+                $this->markWssBusy(20);
             } else {
                 $this->clearWssBusy();
                 $this->UpdateValues();
@@ -468,12 +509,9 @@ class GardenaSmartGateway extends IPSModuleStrict
 
             return $replies;
         } catch (Throwable $e) {
-            $this->clearWssBusy();
+            // Cooldown instead of immediate clear — avoids timer painting unreachable
+            $this->markWssBusy(15);
             throw $e;
-        } finally {
-            if ($action !== 'writeSchedulesGen2') {
-                $this->clearWssBusy();
-            }
         }
     }
 
