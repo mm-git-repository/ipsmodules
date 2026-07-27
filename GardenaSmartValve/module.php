@@ -11,12 +11,13 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 1;
+    private const MODULE_BUILD = 2;
 
     public function Create(): void
     {
         parent::Create();
 
+        $this->RegisterPropertyInteger('GatewayInstanceID', 0);
         $this->RegisterPropertyString('DeviceId', '');
         $this->RegisterPropertyString('ModelNumber', '');
         $this->RegisterPropertyInteger('Generation', 2);
@@ -53,8 +54,7 @@ class GardenaSmartValve extends IPSModuleStrict
     {
         parent::ApplyChanges();
         $this->SetValue('ModuleVersion', self::MODULE_VERSION . ' (Build ' . self::MODULE_BUILD . ')');
-        $parent = $this->GetParentOrZero();
-        $this->SetStatus($parent > 0 ? 102 : 104);
+        $this->SetStatus($this->getGatewayInstanceId() > 0 ? 102 : 104);
         $interval = $this->ReadPropertyBoolean('ScheduleEnabled') ? 60000 : 0;
         $this->SetTimerInterval('Schedule', $interval);
         $this->notifyGatewaySchedules();
@@ -80,12 +80,12 @@ class GardenaSmartValve extends IPSModuleStrict
         return json_encode($form, JSON_UNESCAPED_UNICODE);
     }
 
-    public function GetCompatibleParents(): string
+    public function ApplyDeviceState(string $deviceJson): void
     {
-        return json_encode([
-            'type' => 'connect',
-            'moduleIDs' => [GardenaSmartGuids::GATEWAY],
-        ], JSON_UNESCAPED_UNICODE);
+        $data = json_decode($deviceJson, true);
+        if (is_array($data)) {
+            $this->applyDeviceData($data);
+        }
     }
 
     public function GetVisualizationTile(): string
@@ -112,25 +112,6 @@ class GardenaSmartValve extends IPSModuleStrict
         ];
 
         return $this->buildVisualizationHtml(__DIR__, 'GSVAL', $initial);
-    }
-
-    public function ReceiveData(string $JSONString): string
-    {
-        $buffer = $this->parseReceiveBuffer($JSONString);
-        if ($buffer === null || ($buffer['type'] ?? '') !== 'deviceState') {
-            return '';
-        }
-        $deviceId = $this->ReadPropertyString('DeviceId');
-        if ($deviceId === '' || ($buffer['deviceId'] ?? '') !== $deviceId) {
-            return '';
-        }
-        $data = $buffer['data'] ?? null;
-        if (!is_array($data)) {
-            return '';
-        }
-        $this->applyDeviceData($data);
-
-        return '';
     }
 
     public function RequestAction(string $Ident, mixed $Value): void

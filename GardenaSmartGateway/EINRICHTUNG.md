@@ -38,6 +38,7 @@ systemctl start websocketd
 
 - `websocketd` ist experimentell; nach Firmware-Updates ggf. erneut aktivieren
 - Dual Water Control = **eine** Valve-Instanz mit Ventil A und B
+- Geräte hängen **logisch** am Gateway (`GatewayInstanceID` + Objektbaum-Parent), ohne Symcon-Datenfluss/Splitter
 - Geräte-App-Zeitpläne werden **nur gelesen** angezeigt; IPS-Zeitpläne am Child sind der empfohlene Master
 - Pump / Mäher: noch nicht im MVP
 

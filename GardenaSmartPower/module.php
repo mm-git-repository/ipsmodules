@@ -11,12 +11,13 @@ class GardenaSmartPower extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 1;
+    private const MODULE_BUILD = 2;
 
     public function Create(): void
     {
         parent::Create();
 
+        $this->RegisterPropertyInteger('GatewayInstanceID', 0);
         $this->RegisterPropertyString('DeviceId', '');
         $this->RegisterPropertyString('ModelNumber', '');
         $this->RegisterPropertyInteger('Generation', 1);
@@ -43,7 +44,7 @@ class GardenaSmartPower extends IPSModuleStrict
     {
         parent::ApplyChanges();
         $this->SetValue('ModuleVersion', self::MODULE_VERSION . ' (Build ' . self::MODULE_BUILD . ')');
-        $this->SetStatus($this->GetParentOrZero() > 0 ? 102 : 104);
+        $this->SetStatus($this->getGatewayInstanceId() > 0 ? 102 : 104);
         $this->SetTimerInterval('Schedule', $this->ReadPropertyBoolean('ScheduleEnabled') ? 60000 : 0);
         $this->notifyGatewaySchedules();
         $this->SetSummary($this->ReadPropertyString('DeviceId'));
@@ -68,39 +69,11 @@ class GardenaSmartPower extends IPSModuleStrict
         return json_encode($form, JSON_UNESCAPED_UNICODE);
     }
 
-    public function GetCompatibleParents(): string
+    public function ApplyDeviceState(string $deviceJson): void
     {
-        return json_encode([
-            'type' => 'connect',
-            'moduleIDs' => [GardenaSmartGuids::GATEWAY],
-        ], JSON_UNESCAPED_UNICODE);
-    }
-
-    public function GetVisualizationTile(): string
-    {
-        return $this->buildVisualizationHtml(__DIR__, 'GSPWR', [
-            'kind' => 'power',
-            'name' => IPS_GetName($this->InstanceID),
-            'online' => (bool) $this->GetValue('Online'),
-            'outputOn' => (bool) $this->GetValue('OutputOn'),
-            'deviceSchedules' => (string) $this->GetValue('DeviceSchedules'),
-            'ipsSchedules' => $this->activeScheduleLines($this->loadScheduleRules()),
-            'instanceId' => $this->InstanceID,
-        ]);
-    }
-
-    public function ReceiveData(string $JSONString): string
-    {
-        $buffer = $this->parseReceiveBuffer($JSONString);
-        if ($buffer === null || ($buffer['type'] ?? '') !== 'deviceState') {
-            return '';
-        }
-        if (($buffer['deviceId'] ?? '') !== $this->ReadPropertyString('DeviceId')) {
-            return '';
-        }
-        $data = $buffer['data'] ?? null;
+        $data = json_decode($deviceJson, true);
         if (!is_array($data)) {
-            return '';
+            return;
         }
         $online = GardenaSmartDevices::fieldValue($data['connection_status']['0']['online'] ?? null);
         if (is_bool($online)) {
@@ -117,8 +90,19 @@ class GardenaSmartPower extends IPSModuleStrict
             $lines[] = 'sun_schedule_config vorhanden (' . strlen($raw) . ' bytes b64)';
         }
         $this->SetValue('DeviceSchedules', $lines === [] ? '(keine)' : implode("\n", $lines));
+    }
 
-        return '';
+    public function GetVisualizationTile(): string
+    {
+        return $this->buildVisualizationHtml(__DIR__, 'GSPWR', [
+            'kind' => 'power',
+            'name' => IPS_GetName($this->InstanceID),
+            'online' => (bool) $this->GetValue('Online'),
+            'outputOn' => (bool) $this->GetValue('OutputOn'),
+            'deviceSchedules' => (string) $this->GetValue('DeviceSchedules'),
+            'ipsSchedules' => $this->activeScheduleLines($this->loadScheduleRules()),
+            'instanceId' => $this->InstanceID,
+        ]);
     }
 
     public function RequestAction(string $Ident, mixed $Value): void

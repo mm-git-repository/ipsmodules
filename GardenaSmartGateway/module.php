@@ -9,7 +9,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartClient.php';
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 1;
+    private const MODULE_BUILD = 2;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -73,24 +73,21 @@ class GardenaSmartGateway extends IPSModuleStrict
 
     public function ForwardData(string $JSONString): string
     {
-        $data = json_decode($JSONString, true);
-        if (!is_array($data)) {
-            return '';
-        }
-        $buffer = $data['Buffer'] ?? null;
-        if (is_string($buffer)) {
-            $decoded = json_decode($buffer, true);
-            if (!is_array($decoded) && ctype_xdigit($buffer) && (strlen($buffer) % 2) === 0) {
-                $decoded = json_decode((string) hex2bin($buffer), true);
-            }
-            $buffer = $decoded;
-        }
-        if (!is_array($buffer)) {
+        // Legacy: no dataflow parent/child — keep empty for IPSModuleStrict compatibility
+        return '';
+    }
+
+    /**
+     * Called by child modules (soft parent).
+     */
+    public function DispatchCommand(string $commandJson): string
+    {
+        $command = json_decode($commandJson, true);
+        if (!is_array($command)) {
             return json_encode(['ok' => false, 'error' => 'Ungültiger Befehl'], JSON_UNESCAPED_UNICODE);
         }
-
         try {
-            $result = $this->handleChildCommand($buffer);
+            $result = $this->handleChildCommand($command);
 
             return json_encode(['ok' => true, 'result' => $result], JSON_UNESCAPED_UNICODE);
         } catch (Throwable $e) {
@@ -140,6 +137,8 @@ class GardenaSmartGateway extends IPSModuleStrict
                 $name = GardenaSmartDevices::extractDisplayName($deviceData, $info['name']);
                 if ($existing > 0) {
                     IPS_SetName($existing, $name);
+                    IPS_SetParent($existing, $this->InstanceID);
+                    IPS_SetProperty($existing, 'GatewayInstanceID', $this->InstanceID);
                     IPS_SetProperty($existing, 'DeviceId', $deviceId);
                     IPS_SetProperty($existing, 'ModelNumber', $model);
                     IPS_SetProperty($existing, 'Generation', $info['generation']);
@@ -151,7 +150,7 @@ class GardenaSmartGateway extends IPSModuleStrict
                 $iid = IPS_CreateInstance($moduleId);
                 IPS_SetName($iid, $name);
                 IPS_SetParent($iid, $this->InstanceID);
-                IPS_ConnectInstance($iid, $this->InstanceID);
+                IPS_SetProperty($iid, 'GatewayInstanceID', $this->InstanceID);
                 IPS_SetProperty($iid, 'DeviceId', $deviceId);
                 IPS_SetProperty($iid, 'ModelNumber', $model);
                 IPS_SetProperty($iid, 'Generation', $info['generation']);
@@ -262,16 +261,29 @@ class GardenaSmartGateway extends IPSModuleStrict
     /** @param array<string, array<string, mixed>> $devices */
     private function pushStateToChildren(array $devices): void
     {
-        foreach ($devices as $deviceId => $deviceData) {
-            $payload = [
-                'type' => 'deviceState',
-                'deviceId' => $deviceId,
-                'data' => $deviceData,
-            ];
-            $this->SendDataToChildren(json_encode([
-                'DataID' => GardenaSmartGuids::TX_CHILDREN,
-                'Buffer' => json_encode($payload, JSON_UNESCAPED_UNICODE),
-            ], JSON_UNESCAPED_UNICODE));
+        foreach ([GardenaSmartGuids::VALVE, GardenaSmartGuids::POWER, GardenaSmartGuids::SENSOR] as $moduleId) {
+            foreach (IPS_GetInstanceListByModuleID($moduleId) as $childId) {
+                try {
+                    $gatewayId = (int) IPS_GetProperty($childId, 'GatewayInstanceID');
+                    $deviceId = (string) IPS_GetProperty($childId, 'DeviceId');
+                } catch (Throwable) {
+                    continue;
+                }
+                if ($gatewayId !== $this->InstanceID || $deviceId === '' || !isset($devices[$deviceId])) {
+                    continue;
+                }
+                $json = json_encode($devices[$deviceId], JSON_UNESCAPED_UNICODE);
+                if ($json === false) {
+                    continue;
+                }
+                if ($moduleId === GardenaSmartGuids::VALVE) {
+                    @GSVAL_ApplyDeviceState($childId, $json);
+                } elseif ($moduleId === GardenaSmartGuids::POWER) {
+                    @GSPWR_ApplyDeviceState($childId, $json);
+                } else {
+                    @GSSEN_ApplyDeviceState($childId, $json);
+                }
+            }
         }
     }
 
@@ -313,8 +325,11 @@ class GardenaSmartGateway extends IPSModuleStrict
         $any = false;
         foreach ([GardenaSmartGuids::VALVE, GardenaSmartGuids::POWER, GardenaSmartGuids::SENSOR] as $moduleId) {
             foreach (IPS_GetInstanceListByModuleID($moduleId) as $childId) {
-                $conn = IPS_GetInstance($childId)['ConnectionID'] ?? 0;
-                if ((int) $conn !== $this->InstanceID) {
+                try {
+                    if ((int) IPS_GetProperty($childId, 'GatewayInstanceID') !== $this->InstanceID) {
+                        continue;
+                    }
+                } catch (Throwable) {
                     continue;
                 }
                 $name = IPS_GetName($childId);
@@ -372,11 +387,10 @@ class GardenaSmartGateway extends IPSModuleStrict
     {
         foreach ([GardenaSmartGuids::VALVE, GardenaSmartGuids::POWER, GardenaSmartGuids::SENSOR] as $moduleId) {
             foreach (IPS_GetInstanceListByModuleID($moduleId) as $childId) {
-                $conn = IPS_GetInstance($childId)['ConnectionID'] ?? 0;
-                if ((int) $conn !== $this->InstanceID) {
-                    continue;
-                }
                 try {
+                    if ((int) IPS_GetProperty($childId, 'GatewayInstanceID') !== $this->InstanceID) {
+                        continue;
+                    }
                     if ((string) IPS_GetProperty($childId, 'DeviceId') === $deviceId) {
                         return $childId;
                     }

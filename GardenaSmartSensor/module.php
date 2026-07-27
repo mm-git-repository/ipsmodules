@@ -11,12 +11,13 @@ class GardenaSmartSensor extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 1;
+    private const MODULE_BUILD = 2;
 
     public function Create(): void
     {
         parent::Create();
 
+        $this->RegisterPropertyInteger('GatewayInstanceID', 0);
         $this->RegisterPropertyString('DeviceId', '');
         $this->RegisterPropertyString('ModelNumber', '');
         $this->RegisterPropertyInteger('Generation', 1);
@@ -43,7 +44,7 @@ class GardenaSmartSensor extends IPSModuleStrict
     {
         parent::ApplyChanges();
         $this->SetValue('ModuleVersion', self::MODULE_VERSION . ' (Build ' . self::MODULE_BUILD . ')');
-        $this->SetStatus($this->GetParentOrZero() > 0 ? 102 : 104);
+        $this->SetStatus($this->getGatewayInstanceId() > 0 ? 102 : 104);
         $this->notifyGatewaySchedules();
         $this->SetSummary($this->ReadPropertyString('DeviceId'));
     }
@@ -67,41 +68,11 @@ class GardenaSmartSensor extends IPSModuleStrict
         return json_encode($form, JSON_UNESCAPED_UNICODE);
     }
 
-    public function GetCompatibleParents(): string
+    public function ApplyDeviceState(string $deviceJson): void
     {
-        return json_encode([
-            'type' => 'connect',
-            'moduleIDs' => [GardenaSmartGuids::GATEWAY],
-        ], JSON_UNESCAPED_UNICODE);
-    }
-
-    public function GetVisualizationTile(): string
-    {
-        return $this->buildVisualizationHtml(__DIR__, 'GSSEN', [
-            'kind' => 'sensor',
-            'name' => IPS_GetName($this->InstanceID),
-            'online' => (bool) $this->GetValue('Online'),
-            'battery' => (int) $this->GetValue('Battery'),
-            'moisture' => (int) $this->GetValue('SoilMoisture'),
-            'temperature' => (float) $this->GetValue('Temperature'),
-            'light' => (int) $this->GetValue('Light'),
-            'frost' => (bool) $this->GetValue('FrostWarning'),
-            'instanceId' => $this->InstanceID,
-        ]);
-    }
-
-    public function ReceiveData(string $JSONString): string
-    {
-        $buffer = $this->parseReceiveBuffer($JSONString);
-        if ($buffer === null || ($buffer['type'] ?? '') !== 'deviceState') {
-            return '';
-        }
-        if (($buffer['deviceId'] ?? '') !== $this->ReadPropertyString('DeviceId')) {
-            return '';
-        }
-        $data = $buffer['data'] ?? null;
+        $data = json_decode($deviceJson, true);
         if (!is_array($data)) {
-            return '';
+            return;
         }
         $lb = $data['lemonbeat']['0'] ?? [];
         if (!is_array($lb)) {
@@ -145,8 +116,21 @@ class GardenaSmartSensor extends IPSModuleStrict
         if (is_numeric($frost)) {
             $this->SetValue('FrostWarning', ((int) $frost) !== 0);
         }
+    }
 
-        return '';
+    public function GetVisualizationTile(): string
+    {
+        return $this->buildVisualizationHtml(__DIR__, 'GSSEN', [
+            'kind' => 'sensor',
+            'name' => IPS_GetName($this->InstanceID),
+            'online' => (bool) $this->GetValue('Online'),
+            'battery' => (int) $this->GetValue('Battery'),
+            'moisture' => (int) $this->GetValue('SoilMoisture'),
+            'temperature' => (float) $this->GetValue('Temperature'),
+            'light' => (int) $this->GetValue('Light'),
+            'frost' => (bool) $this->GetValue('FrostWarning'),
+            'instanceId' => $this->InstanceID,
+        ]);
     }
 
     private function ensureProfiles(): void

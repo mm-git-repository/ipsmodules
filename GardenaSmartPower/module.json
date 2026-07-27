@@ -7,12 +7,8 @@
         "Gardena Smart Power"
     ],
     "url": "https://github.com/mm-git-repository/ipsmodule.git",
-    "parentRequirements": [
-        "{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C31}"
-    ],
+    "parentRequirements": [],
     "childRequirements": [],
-    "implemented": [
-        "{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C30}"
-    ],
+    "implemented": [],
     "prefix": "GSPWR"
 }

@@ -3,23 +3,25 @@
 declare(strict_types=1);
 
 /**
- * Shared helpers for Gardena child device modules.
+ * Shared helpers for Gardena child device modules (soft parent via GatewayInstanceID).
  */
 trait GardenaSmartChildTrait
 {
     protected function notifyGatewaySchedules(): void
     {
-        $parent = $this->GetParentOrZero();
-        if ($parent > 0 && IPS_InstanceExists($parent)) {
-            @GSGW_RefreshIpsScheduleOverview($parent);
+        $gatewayId = $this->getGatewayInstanceId();
+        if ($gatewayId > 0 && IPS_InstanceExists($gatewayId)) {
+            @GSGW_RefreshIpsScheduleOverview($gatewayId);
         }
     }
 
-    protected function GetParentOrZero(): int
+    protected function getGatewayInstanceId(): int
     {
-        $parent = IPS_GetInstance($this->InstanceID)['ConnectionID'] ?? 0;
-
-        return is_int($parent) ? $parent : 0;
+        try {
+            return (int) $this->ReadPropertyInteger('GatewayInstanceID');
+        } catch (Throwable) {
+            return 0;
+        }
     }
 
     /**
@@ -28,34 +30,14 @@ trait GardenaSmartChildTrait
      */
     protected function sendCommandToGateway(array $command): array
     {
-        $json = $this->SendDataToParent(json_encode([
-            'DataID' => GardenaSmartGuids::TX_PARENT,
-            'Buffer' => json_encode($command, JSON_UNESCAPED_UNICODE),
-        ], JSON_UNESCAPED_UNICODE));
+        $gatewayId = $this->getGatewayInstanceId();
+        if ($gatewayId <= 0 || !IPS_InstanceExists($gatewayId)) {
+            return ['ok' => false, 'error' => 'Kein Gateway zugewiesen'];
+        }
+        $json = @GSGW_DispatchCommand($gatewayId, json_encode($command, JSON_UNESCAPED_UNICODE) ?: '{}');
         $decoded = json_decode((string) $json, true);
 
         return is_array($decoded) ? $decoded : ['ok' => false, 'error' => 'Keine Antwort vom Gateway'];
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    protected function parseReceiveBuffer(string $JSONString): ?array
-    {
-        $data = json_decode($JSONString, true);
-        if (!is_array($data)) {
-            return null;
-        }
-        $buffer = $data['Buffer'] ?? null;
-        if (is_string($buffer)) {
-            $decoded = json_decode($buffer, true);
-            if (!is_array($decoded) && ctype_xdigit($buffer) && (strlen($buffer) % 2) === 0) {
-                $decoded = json_decode((string) hex2bin($buffer), true);
-            }
-            $buffer = $decoded;
-        }
-
-        return is_array($buffer) ? $buffer : null;
     }
 
     /** @return list<array<string, mixed>> */
@@ -97,7 +79,7 @@ trait GardenaSmartChildTrait
         if (empty($rule['active'])) {
             return false;
         }
-        $w = (int) date('N', $nowTs); // 1=Mo .. 7=So
+        $w = (int) date('N', $nowTs);
         $dayKeys = [1 => 'mo', 2 => 'tu', 3 => 'we', 4 => 'th', 5 => 'fr', 6 => 'sa', 7 => 'so'];
         $key = $dayKeys[$w] ?? 'mo';
         if (empty($rule[$key])) {
