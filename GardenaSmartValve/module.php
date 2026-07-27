@@ -13,7 +13,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 10;
+    private const MODULE_BUILD = 11;
     /** Default manual start + new schedule entry duration (30 min). */
     private const DEFAULT_WATERING_DURATION_SEC = 1800;
 
@@ -284,11 +284,18 @@ class GardenaSmartValve extends IPSModuleStrict
         }
         $rules = $normalized['rules'];
         $intendedFp = GardenaSmartSchedules::rulesFingerprint($rules);
+        $previousMaxSlot = -1;
+        foreach ($this->loadDeviceScheduleRules() as $prev) {
+            if (is_array($prev) && isset($prev['slot'])) {
+                $previousMaxSlot = max($previousMaxSlot, (int) $prev['slot']);
+            }
+        }
         $this->saveDeviceScheduleRules($rules);
         $result = $this->sendCommandToGateway([
             'action' => 'writeSchedulesGen2',
             'deviceId' => $this->ReadPropertyString('DeviceId'),
             'rules' => $rules,
+            'previousMaxSlot' => $previousMaxSlot,
         ]);
         if (empty($result['ok'])) {
             return 'Fehler: ' . (string) ($result['error'] ?? 'unbekannt');

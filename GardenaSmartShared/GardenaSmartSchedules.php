@@ -9,7 +9,8 @@ require_once __DIR__ . '/GardenaSmartDevices.php';
  */
 final class GardenaSmartSchedules
 {
-    public const GEN2_MAX_SLOTS = 4;
+    /** App/marketing: up to 36 watering cycles/day on Dual Water Control. Local LwM2M may expose fewer until created. */
+    public const GEN2_MAX_SLOTS = 36;
 
     public static function supportsDeviceScheduleWrite(int $generation, string $deviceKind = 'valve'): bool
     {
@@ -140,15 +141,17 @@ final class GardenaSmartSchedules
 
     /**
      * @param list<array<string, mixed>> $rules
+     * @param int $previousMaxSlot Highest slot index previously used on device (-1 if unknown)
      * @return array{active: list<array<string, mixed>>, clear: list<array<string, mixed>>}
      */
-    public static function buildGen2WriteRequests(string $deviceId, array $rules): array
+    public static function buildGen2WriteRequests(string $deviceId, array $rules, int $previousMaxSlot = -1): array
     {
         $normalized = self::normalizeRules($rules);
         $activeRules = $normalized['ok'] ? $normalized['rules'] : [];
         $usedSlots = [];
         $active = [];
         $clear = [];
+        $maxUsed = -1;
 
         foreach ($activeRules as $rule) {
             $slot = (string) ($rule['slot'] ?? '');
@@ -161,6 +164,7 @@ final class GardenaSmartSchedules
                 continue;
             }
             $usedSlots[$slot] = true;
+            $maxUsed = max($maxUsed, (int) $slot);
             $fields = [
                 'actuator' => (int) ($rule['valve'] ?? 0),
                 'start_offset_seconds' => $startSec,
@@ -173,7 +177,10 @@ final class GardenaSmartSchedules
             }
         }
 
-        for ($i = 0; $i < self::GEN2_MAX_SLOTS; $i++) {
+        // Clear unused slots that may still hold data (at least 0..3 historically seen on Dual 2814)
+        $clearUntil = max($maxUsed, $previousMaxSlot, 3);
+        $clearUntil = min($clearUntil, self::GEN2_MAX_SLOTS - 1);
+        for ($i = 0; $i <= $clearUntil; $i++) {
             $slot = (string) $i;
             if (isset($usedSlots[$slot])) {
                 continue;

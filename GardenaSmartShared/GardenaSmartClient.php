@@ -387,12 +387,13 @@ final class GardenaSmartClient
      * One field per request; accept any gateway frame as ACK (writes often omit success/request_id).
      *
      * @param list<array<string, mixed>> $rules Editor rules from DeviceScheduleRules
+     * @param int $previousMaxSlot Highest previously used slot (for clearing removed entries)
      * @return list<array<string, mixed>>
      */
-    public function writeGen2Schedules(string $deviceId, array $rules): array
+    public function writeGen2Schedules(string $deviceId, array $rules, int $previousMaxSlot = -1): array
     {
         require_once __DIR__ . '/GardenaSmartSchedules.php';
-        $parts = GardenaSmartSchedules::buildGen2WriteRequests($deviceId, $rules);
+        $parts = GardenaSmartSchedules::buildGen2WriteRequests($deviceId, $rules, $previousMaxSlot);
         $activeRaw = $parts['active'] ?? [];
         $clearRaw = $parts['clear'] ?? [];
         if ($activeRaw === [] && $clearRaw === []) {

@@ -128,7 +128,7 @@
 
             "name": "ScheduleHint",
 
-            "caption": "Geräte-Zeitpläne (Gen2): max. 4 Einträge — Limit des Dual Water Control / LwM2M (Slots 0–3), nicht von IPS. Nach Speichern wird vom Gerät zurückgelesen."
+            "caption": "Geräte-Zeitpläne (Gen2): bis 36 Einträge (wie Gardena-App). Lokal sichtbar sind die vom Gerät gelieferten schedule-Slots. Nach Speichern Abgleich mit dem Gerät."
 
         },
 

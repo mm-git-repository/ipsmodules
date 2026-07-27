@@ -375,7 +375,8 @@ class GardenaSmartGateway extends IPSModuleStrict
                 'powerOff' => $client->setPowerTimer($deviceId, 0),
                 'writeSchedulesGen2' => $client->writeGen2Schedules(
                     $deviceId,
-                    is_array($command['rules'] ?? null) ? $command['rules'] : []
+                    is_array($command['rules'] ?? null) ? $command['rules'] : [],
+                    (int) ($command['previousMaxSlot'] ?? -1)
                 ),
                 'clearSchedulesGen1' => $client->clearGen1ScheduleConfig($deviceId),
                 'clearSunScheduleGen1' => $client->clearGen1SunScheduleConfig($deviceId),

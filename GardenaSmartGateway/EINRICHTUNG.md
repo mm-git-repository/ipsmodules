@@ -50,8 +50,8 @@ Reset: Button **Verbrauchszähler zurücksetzen** am Valve (alle Perioden inkl. 
 
 - **Gen2** (z. B. Dual Water Control 2814): Zeitpläne liegen am Gerät. IPS liest sie beim Poll und kann sie per WSS **`write`** auf `schedule/{slot}/*` zurückschreiben.
 - Bearbeitung in **Instanz-Konfiguration** (Liste „Geräte-Zeitpläne“, +/−) oder **Web-Kachel** (Hinzufügen/Entfernen/Ändern) → Button **An Gerät speichern**
-- Maximal **4 Einträge** (Slots 0–3); entfernte Einträge werden am Gerät geleert
-- Nach dem Speichern: Gateway-Refresh; Änderungen erscheinen typischerweise auch in der Gardena-App (über `cloudadapter`, nicht garantiert offline)
+- Maximal **36 Einträge** (wie Gardena-App / Dual Water Control); entfernte Einträge werden am Gerät geleert
+- Nach dem Speichern: Rücklesen vom Gerät; Abweichungen werden als Warnung gemeldet
 - **Gen1** (ältere Water Control, Power): Binärformat — IPS zeigt read-only; Bearbeitung nur in der Gardena-App. Power: optional **Sonnen-Zeitplan löschen** (leeres `sun_schedule_config`)
 
 ### PoC (Gen2, bestätigt)
