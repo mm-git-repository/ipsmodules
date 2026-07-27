@@ -41,6 +41,11 @@
             "minimum": 30
         },
         {
+            "type": "CheckBox",
+            "name": "Debug",
+            "caption": "Debug-Log aktiv (WSS/Kommandos → Variable Debug-Log + Meldungsarchiv)"
+        },
+        {
             "type": "Label",
             "name": "FlowPresetHint",
             "caption": "Durchfluss-Presets (zentral): werden in den Valve-Modulen zur Auswahl angeboten. Basis-Presets (Perl-Regner etc.) sind fest eingebaut."
@@ -75,6 +80,11 @@
             "type": "Button",
             "caption": "Jetzt aktualisieren",
             "onClick": "GSGW_UpdateValues($id); echo 'OK';"
+        },
+        {
+            "type": "Button",
+            "caption": "Debug-Log leeren",
+            "onClick": "echo GSGW_ClearDebugLog($id);"
         }
     ],
     "status": [

@@ -8,9 +8,11 @@
             "WebSocket-Port": "WebSocket port",
             "TLS-Zertifikat ignorieren (Self-Signed)": "Ignore TLS certificate (self-signed)",
             "Aktualisierungsintervall (Sekunden, mindestens 30)": "Update interval (seconds, minimum 30)",
+            "Debug-Log aktiv (WSS/Kommandos → Variable Debug-Log + Meldungsarchiv)": "Enable debug log (WSS/commands → Debug-Log variable + message archive)",
             "Verbindung testen": "Test connection",
             "Geräte scannen / anlegen": "Scan / create devices",
             "Jetzt aktualisieren": "Update now",
+            "Debug-Log leeren": "Clear debug log",
             "Verbunden": "Connected",
             "Inaktiv": "Inactive",
             "Konfiguration ungültig": "Invalid configuration",
@@ -19,6 +21,8 @@
             "Letzter Fehler": "Last error",
             "Geräteanzahl": "Device count",
             "Zeitplan-Übersicht": "Schedule overview",
+            "Wasserverbrauch-Übersicht": "Water usage overview",
+            "Debug-Log": "Debug log",
             "Modulversion": "Module version"
         }
     }

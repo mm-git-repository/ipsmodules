@@ -17,18 +17,35 @@ final class GardenaSmartClient
     private bool $tlsInsecure;
     private int $timeoutSec;
 
+    /** @var null|callable(string, string): void */
+    private $logger;
+
     public function __construct(
         string $host,
         string $password,
         int $port = 8443,
         bool $tlsInsecure = true,
-        int $timeoutSec = self::DEFAULT_TIMEOUT_SEC
+        int $timeoutSec = self::DEFAULT_TIMEOUT_SEC,
+        ?callable $logger = null
     ) {
         $this->host = trim($host);
         $this->password = $password;
         $this->port = $port > 0 ? $port : 8443;
         $this->tlsInsecure = $tlsInsecure;
         $this->timeoutSec = max(3, $timeoutSec);
+        $this->logger = $logger;
+    }
+
+    private function log(string $topic, string $message): void
+    {
+        if ($this->logger === null) {
+            return;
+        }
+        try {
+            ($this->logger)($topic, $message);
+        } catch (Throwable) {
+            // never break control path due to logging
+        }
     }
 
     /**
@@ -38,6 +55,7 @@ final class GardenaSmartClient
      */
     public function discover(): array
     {
+        $this->log('WSS', 'discover start (lemonbeatd + lwm2mserver)');
         $requests = [
             $this->buildRequest('read', 'lemonbeatd', 'devices'),
             $this->buildRequest('read', 'lwm2mserver', 'devices'),
@@ -46,6 +64,7 @@ final class GardenaSmartClient
         $devices = [];
         foreach ($replies as $msg) {
             if (($msg['success'] ?? null) !== true) {
+                $this->log('WSS', 'discover reply failed: ' . json_encode($msg, JSON_UNESCAPED_UNICODE));
                 continue;
             }
             $payload = $msg['payload'] ?? null;
@@ -58,6 +77,7 @@ final class GardenaSmartClient
                 }
             }
         }
+        $this->log('WSS', 'discover done — ' . count($devices) . ' device(s)');
 
         return ['devices' => $devices, 'raw' => $replies];
     }
@@ -72,6 +92,7 @@ final class GardenaSmartClient
             throw new RuntimeException('Host oder Passwort fehlt');
         }
 
+        $this->log('WSS', 'exchange batch size=' . count($requests) . ' timeout=' . $this->timeoutSec . 's');
         $fp = $this->connect();
         try {
             return $this->exchangeOnConnection($fp, $requests);
@@ -95,13 +116,24 @@ final class GardenaSmartClient
             return [];
         }
 
+        $this->log('WSS', 'exchangeSequential count=' . count($requests) . ' timeout=' . $this->timeoutSec . 's');
         $fp = $this->connect();
         $all = [];
         try {
             foreach ($requests as $idx => $req) {
-                $replies = $this->exchangeOnConnection($fp, [$req]);
-                foreach ($replies as $msg) {
-                    $all[] = $msg;
+                $path = (string) (($req['entity']['path'] ?? '') ?: '?');
+                $op = (string) ($req['op'] ?? '?');
+                $this->log('WSS', sprintf('seq %d/%d %s %s', $idx + 1, count($requests), $op, $path));
+                try {
+                    $replies = $this->exchangeOnConnection($fp, [$req]);
+                    foreach ($replies as $msg) {
+                        $ok = (($msg['success'] ?? null) === true) ? 'ok' : 'fail';
+                        $this->log('WSS', sprintf('seq %d/%d reply=%s', $idx + 1, count($requests), $ok));
+                        $all[] = $msg;
+                    }
+                } catch (Throwable $e) {
+                    $this->log('WSS', sprintf('seq %d/%d ERROR: %s', $idx + 1, count($requests), $e->getMessage()));
+                    throw $e;
                 }
                 if ($idx < count($requests) - 1) {
                     usleep(80000);
@@ -121,7 +153,6 @@ final class GardenaSmartClient
      */
     private function exchangeOnConnection($fp, array $requests): array
     {
-        // Single request: send as one-element array (protocol) but match loosely on reply
         $this->sendJson($fp, $requests);
         $want = [];
         foreach ($requests as $req) {
@@ -133,15 +164,17 @@ final class GardenaSmartClient
         $got = [];
         $deadline = microtime(true) + $this->timeoutSec;
         $buffer = '';
+        $rawCount = 0;
         while ($want !== [] && microtime(true) < $deadline) {
             $raw = $this->recvFrame($fp, max(0.2, $deadline - microtime(true)));
             if ($raw === null) {
                 continue;
             }
+            $rawCount++;
             $buffer .= $raw;
             $decoded = json_decode($buffer, true);
             if (!is_array($decoded)) {
-                // incomplete JSON / fragment piece — keep buffering briefly
+                $this->log('WSS', 'recv non-json/fragment len=' . strlen($buffer) . ' preview=' . substr($buffer, 0, 160));
                 if (strlen($buffer) > 1_000_000) {
                     $buffer = '';
                 }
@@ -159,14 +192,27 @@ final class GardenaSmartClient
                     unset($want[$rid]);
                     continue;
                 }
-                // Some firmware replies omit/alter request_id for writes
                 if ($pending === 1 && count($want) === 1 && array_key_exists('success', $msg)) {
+                    $this->log('WSS', 'matched reply without exact request_id (single outstanding)');
                     $got[] = $msg;
                     $want = [];
+                    continue;
                 }
+                $this->log(
+                    'WSS',
+                    'unmatched reply rid=' . ($rid !== '' ? $rid : '-')
+                    . ' success=' . json_encode($msg['success'] ?? null)
+                    . ' keys=' . implode(',', array_keys($msg))
+                );
             }
         }
         if ($want !== []) {
+            $this->log(
+                'WSS',
+                'TIMEOUT got=' . count($got) . '/' . $pending
+                . ' frames=' . $rawCount
+                . ' missing=' . implode(',', array_keys($want))
+            );
             throw new RuntimeException(
                 'Timeout: nicht alle Antworten vom Gateway erhalten ('
                 . count($got) . '/' . $pending . ')'
@@ -243,6 +289,13 @@ final class GardenaSmartClient
             return $requests;
         };
 
+        $this->log(
+            'Schedule',
+            'writeGen2 device=' . $deviceId
+            . ' activeWrites=' . count($activeRaw)
+            . ' clearWrites=' . count($clearRaw)
+        );
+
         $previousTimeout = $this->timeoutSec;
         $this->timeoutSec = max($previousTimeout, 15);
         $allReplies = [];
@@ -254,20 +307,22 @@ final class GardenaSmartClient
                         $detail = is_string($msg['error'] ?? null)
                             ? (string) $msg['error']
                             : 'Gateway lehnte Zeitplan-Write ab';
+                        $this->log('Schedule', 'active write failed: ' . $detail);
                         throw new RuntimeException($detail);
                     }
                     $allReplies[] = $msg;
                 }
+                $this->log('Schedule', 'active writes OK (' . count($replies) . ')');
             }
-            // Clearing unused slots is best-effort (firmware may be slow/silent)
             if ($clearRaw !== []) {
                 try {
                     $clearReplies = $this->exchangeSequential($toRequests($clearRaw));
                     foreach ($clearReplies as $msg) {
                         $allReplies[] = $msg;
                     }
-                } catch (Throwable) {
-                    // active writes already succeeded
+                    $this->log('Schedule', 'clear writes OK (' . count($clearReplies) . ')');
+                } catch (Throwable $e) {
+                    $this->log('Schedule', 'clear writes best-effort failed: ' . $e->getMessage());
                 }
             }
         } finally {
@@ -422,8 +477,10 @@ final class GardenaSmartClient
         }
         if (!preg_match('#^HTTP/1\.[01] 101#', $response)) {
             fclose($fp);
+            $this->log('WSS', 'handshake failed: ' . trim(strtok($response, "\r\n") ?: 'keine Antwort'));
             throw new RuntimeException('WebSocket-Handshake fehlgeschlagen: ' . trim(strtok($response, "\r\n") ?: 'keine Antwort'));
         }
+        $this->log('WSS', 'connected wss://' . $this->host . ':' . $this->port);
 
         return $fp;
     }
