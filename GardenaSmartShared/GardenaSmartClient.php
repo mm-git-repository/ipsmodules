@@ -450,6 +450,7 @@ final class GardenaSmartClient
 
     /**
      * Send writes one-by-one; any JSON frame counts as ACK. Missing ACKs are tolerated (logged).
+     * Reconnects periodically — long sessions on the Gardena gateway often drop.
      *
      * @param list<array<string, mixed>> $requests
      * @return list<array<string, mixed>>
@@ -463,16 +464,36 @@ final class GardenaSmartClient
         $got = [];
         try {
             foreach ($requests as $idx => $req) {
+                // Fresh connection every 4 writes reduces gateway dropouts
+                if ($idx > 0 && ($idx % 4) === 0) {
+                    fclose($fp);
+                    usleep(250000);
+                    $fp = $this->connect();
+                }
                 $path = (string) (($req['entity']['path'] ?? '') ?: '?');
                 $this->log('WSS', sprintf('write %d/%d %s', $idx + 1, count($requests), $path));
-                $this->sendJson($fp, [$req]);
-                $deadline = microtime(true) + min(4.0, (float) $this->timeoutSec);
+                try {
+                    $this->sendJson($fp, [$req]);
+                } catch (Throwable $e) {
+                    $this->log('WSS', 'send failed, reconnecting: ' . $e->getMessage());
+                    @fclose($fp);
+                    usleep(300000);
+                    $fp = $this->connect();
+                    $this->sendJson($fp, [$req]);
+                }
+                $deadline = microtime(true) + min(3.5, (float) $this->timeoutSec);
                 $acked = false;
                 $idleAfterAck = null;
                 while (microtime(true) < $deadline) {
                     $raw = $this->recvFrame($fp, max(0.15, $deadline - microtime(true)));
                     if ($raw === null) {
-                        if ($acked && $idleAfterAck !== null && (microtime(true) - $idleAfterAck) > 0.35) {
+                        if ($acked && $idleAfterAck !== null && (microtime(true) - $idleAfterAck) > 0.25) {
+                            break;
+                        }
+                        // Connection may have closed
+                        $meta = @stream_get_meta_data($fp);
+                        if (is_array($meta) && !empty($meta['eof'])) {
+                            $this->log('WSS', 'write connection EOF — will reconnect for next field');
                             break;
                         }
                         continue;
@@ -480,7 +501,6 @@ final class GardenaSmartClient
                     $this->log('WSS', 'write frame preview=' . substr($raw, 0, 220));
                     $decoded = json_decode($raw, true);
                     if (!is_array($decoded)) {
-                        // keep waiting — may be fragment
                         continue;
                     }
                     foreach ($this->flattenReplyMessages($decoded) as $msg) {
@@ -490,6 +510,7 @@ final class GardenaSmartClient
                                 : 'Gateway lehnte Write ab (' . $path . ')';
                             throw new RuntimeException($detail);
                         }
+                        // "op":"update" push after write is a valid ACK
                         $got[] = $msg;
                         $acked = true;
                         $idleAfterAck = microtime(true);
@@ -499,11 +520,13 @@ final class GardenaSmartClient
                     $this->log('WSS', sprintf('write %d/%d no ACK (continuing) %s', $idx + 1, count($requests), $path));
                 }
                 if ($idx < count($requests) - 1) {
-                    usleep(60000);
+                    usleep(80000);
                 }
             }
         } finally {
-            fclose($fp);
+            @fclose($fp);
+            // Let websocketd settle before the next discover/poll
+            usleep(400000);
         }
 
         return $got;
@@ -705,22 +728,58 @@ final class GardenaSmartClient
                 'verify_peer' => !$this->tlsInsecure,
                 'verify_peer_name' => !$this->tlsInsecure,
                 'allow_self_signed' => $this->tlsInsecure,
+                'crypto_method' => STREAM_CRYPTO_METHOD_TLS_CLIENT,
             ],
         ]);
-        $errno = 0;
-        $errstr = '';
-        $fp = @stream_socket_client(
-            $remote,
-            $errno,
-            $errstr,
-            $this->timeoutSec,
-            STREAM_CLIENT_CONNECT,
-            $ctx
-        );
+
+        $lastErrno = 0;
+        $lastErrstr = '';
+        $fp = false;
+        for ($attempt = 1; $attempt <= 4; $attempt++) {
+            // Drain stale OpenSSL errors
+            while (openssl_error_string() !== false) {
+                // clear
+            }
+            $errno = 0;
+            $errstr = '';
+            $fp = @stream_socket_client(
+                $remote,
+                $errno,
+                $errstr,
+                max(5, $this->timeoutSec),
+                STREAM_CLIENT_CONNECT,
+                $ctx
+            );
+            if ($fp !== false) {
+                break;
+            }
+            $lastErrno = $errno;
+            $lastErrstr = $errstr;
+            $ssl = [];
+            while (($e = openssl_error_string()) !== false) {
+                $ssl[] = $e;
+            }
+            $this->log(
+                'WSS',
+                sprintf(
+                    'connect attempt %d/4 failed errno=%d err=%s ssl=%s',
+                    $attempt,
+                    $errno,
+                    $errstr !== '' ? $errstr : '-',
+                    $ssl !== [] ? implode(' | ', $ssl) : '-'
+                )
+            );
+            usleep(350000 * $attempt);
+        }
         if ($fp === false) {
-            throw new RuntimeException('TCP/TLS-Verbindung fehlgeschlagen: ' . $errstr . ' (' . $errno . ')');
+            throw new RuntimeException(
+                'TCP/TLS-Verbindung fehlgeschlagen: '
+                . ($lastErrstr !== '' ? $lastErrstr : 'keine Details')
+                . ' (' . $lastErrno . ')'
+            );
         }
         stream_set_timeout($fp, $this->timeoutSec);
+        stream_set_blocking($fp, true);
 
         $key = base64_encode(random_bytes(16));
         $auth = base64_encode('_:' . $this->password);

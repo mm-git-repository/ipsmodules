@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 11;
+    private const MODULE_BUILD = 12;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -238,7 +238,13 @@ class GardenaSmartGateway extends IPSModuleStrict
 
             return;
         }
+        if ($this->isWssBusy()) {
+            $this->debugLog('Update', 'übersprungen — WSS gerade belegt (z. B. Zeitplan-Schreiben)');
+
+            return;
+        }
         try {
+            $this->markWssBusy(25);
             $devices = $this->refreshDeviceCache();
             $this->pushStateToChildren($devices);
             $this->rebuildScheduleOverview($devices);
@@ -252,6 +258,8 @@ class GardenaSmartGateway extends IPSModuleStrict
             $this->SetValue('LastError', $e->getMessage());
             $this->SetStatus(self::IS_UNREACHABLE);
             $this->debugLog('Update', 'ERROR: ' . $e->getMessage());
+        } finally {
+            $this->clearWssBusy();
         }
         $this->SetSummary($this->buildSummary());
     }
@@ -349,42 +357,73 @@ class GardenaSmartGateway extends IPSModuleStrict
         if ($deviceId === '') {
             throw new RuntimeException('deviceId fehlt');
         }
-        $client = $this->createClient();
-        $generation = (int) ($command['generation'] ?? 2);
-        $valveId = (int) ($command['valveId'] ?? 0);
-        $duration = (int) ($command['duration'] ?? 1800);
+        $this->markWssBusy($action === 'writeSchedulesGen2' ? 90 : 30);
+        try {
+            $client = $this->createClient();
+            $generation = (int) ($command['generation'] ?? 2);
+            $valveId = (int) ($command['valveId'] ?? 0);
+            $duration = (int) ($command['duration'] ?? 1800);
 
-        $replies = match ($action) {
-            'startValve' => $generation >= 2
-                ? $client->startValveGen2($deviceId, $valveId, $duration)
-                : $client->setWateringTimerGen1($deviceId, $valveId, $duration),
-            'stopValve' => $generation >= 2
-                ? $client->stopValveGen2($deviceId, $valveId)
-                : $client->setWateringTimerGen1($deviceId, $valveId, 0),
-            'powerOn' => $client->setPowerTimer($deviceId, $duration > 0 ? $duration : 86400),
-            'powerOff' => $client->setPowerTimer($deviceId, 0),
-            'writeSchedulesGen2' => $client->writeGen2Schedules(
-                $deviceId,
-                is_array($command['rules'] ?? null) ? $command['rules'] : []
-            ),
-            'clearSchedulesGen1' => $client->clearGen1ScheduleConfig($deviceId),
-            'clearSunScheduleGen1' => $client->clearGen1SunScheduleConfig($deviceId),
-            default => throw new RuntimeException('Unbekannte Aktion: ' . $action),
-        };
+            $replies = match ($action) {
+                'startValve' => $generation >= 2
+                    ? $client->startValveGen2($deviceId, $valveId, $duration)
+                    : $client->setWateringTimerGen1($deviceId, $valveId, $duration),
+                'stopValve' => $generation >= 2
+                    ? $client->stopValveGen2($deviceId, $valveId)
+                    : $client->setWateringTimerGen1($deviceId, $valveId, 0),
+                'powerOn' => $client->setPowerTimer($deviceId, $duration > 0 ? $duration : 86400),
+                'powerOff' => $client->setPowerTimer($deviceId, 0),
+                'writeSchedulesGen2' => $client->writeGen2Schedules(
+                    $deviceId,
+                    is_array($command['rules'] ?? null) ? $command['rules'] : []
+                ),
+                'clearSchedulesGen1' => $client->clearGen1ScheduleConfig($deviceId),
+                'clearSunScheduleGen1' => $client->clearGen1SunScheduleConfig($deviceId),
+                default => throw new RuntimeException('Unbekannte Aktion: ' . $action),
+            };
 
-        // Refresh after command (schedule writes already took long — softer refresh)
-        if ($action === 'writeSchedulesGen2') {
-            // Do not block save on a second discovery; children already have local copy
-            try {
-                $this->rebuildUsageOverview();
-            } catch (Throwable) {
-                // ignore
+            // Refresh after command (schedule writes already took long — softer refresh)
+            if ($action === 'writeSchedulesGen2') {
+                // Keep busy a bit longer so timer-poll does not collide with websocketd
+                $this->markWssBusy(8);
+                try {
+                    $this->rebuildUsageOverview();
+                } catch (Throwable) {
+                    // ignore
+                }
+            } else {
+                $this->clearWssBusy();
+                $this->UpdateValues();
             }
-        } else {
-            $this->UpdateValues();
-        }
 
-        return $replies;
+            return $replies;
+        } catch (Throwable $e) {
+            $this->clearWssBusy();
+            throw $e;
+        } finally {
+            if ($action !== 'writeSchedulesGen2') {
+                $this->clearWssBusy();
+            }
+        }
+    }
+
+    private function markWssBusy(int $seconds): void
+    {
+        $this->SetBuffer('WssBusyUntil', (string) (time() + max(1, $seconds)));
+    }
+
+    private function clearWssBusy(): void
+    {
+        $this->SetBuffer('WssBusyUntil', '0');
+    }
+
+    private function isWssBusy(): bool
+    {
+        try {
+            return (int) $this->GetBuffer('WssBusyUntil') > time();
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     /** @return array<string, array<string, mixed>> */
