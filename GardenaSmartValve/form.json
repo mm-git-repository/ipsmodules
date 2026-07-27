@@ -48,6 +48,81 @@
         },
         {
             "type": "Label",
+            "name": "UsageHint",
+            "caption": "Wasserverbrauch: Öffnungsdauer × l/h. Presets kommen vom Gateway-Katalog. Nach Preset-Wahl „Preset A/B übernehmen“."
+        },
+        {
+            "type": "CheckBox",
+            "name": "OutletAEnabled",
+            "caption": "Ausgang A: Verbrauch zählen"
+        },
+        {
+            "type": "Select",
+            "name": "OutletAPreset",
+            "caption": "Ausgang A: Preset",
+            "options": [
+                { "caption": "Benutzerdefiniert", "value": "builtin:custom" }
+            ]
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "OutletALabel",
+            "caption": "Ausgang A: Bezeichnung"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "OutletALength",
+            "caption": "Ausgang A: Länge / Hinweis"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "OutletAPressure",
+            "caption": "Ausgang A: Nenndruck"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "OutletALitersPerHour",
+            "caption": "Ausgang A: Durchfluss (l/h)",
+            "digits": 1,
+            "minimum": 0
+        },
+        {
+            "type": "CheckBox",
+            "name": "OutletBEnabled",
+            "caption": "Ausgang B: Verbrauch zählen"
+        },
+        {
+            "type": "Select",
+            "name": "OutletBPreset",
+            "caption": "Ausgang B: Preset",
+            "options": [
+                { "caption": "Benutzerdefiniert", "value": "builtin:custom" }
+            ]
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "OutletBLabel",
+            "caption": "Ausgang B: Bezeichnung"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "OutletBLength",
+            "caption": "Ausgang B: Länge / Hinweis"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "OutletBPressure",
+            "caption": "Ausgang B: Nenndruck"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "OutletBLitersPerHour",
+            "caption": "Ausgang B: Durchfluss (l/h)",
+            "digits": 1,
+            "minimum": 0
+        },
+        {
+            "type": "Label",
             "name": "ScheduleHint",
             "caption": "Geräte-Zeitpläne (Gen2): max. 4 Einträge. Hinzufügen/Entfernen/Ändern möglich. Slots werden automatisch vergeben. Speichern schreibt aufs Gerät."
         },
@@ -74,6 +149,21 @@
         }
     ],
     "actions": [
+        {
+            "type": "Button",
+            "caption": "Preset A übernehmen",
+            "onClick": "IPS_ApplyChanges($id); echo GSVAL_ApplyOutletPreset($id, 'A');"
+        },
+        {
+            "type": "Button",
+            "caption": "Preset B übernehmen",
+            "onClick": "IPS_ApplyChanges($id); echo GSVAL_ApplyOutletPreset($id, 'B');"
+        },
+        {
+            "type": "Button",
+            "caption": "Verbrauchszähler zurücksetzen",
+            "onClick": "echo GSVAL_ResetWaterUsage($id);"
+        },
         {
             "type": "Button",
             "caption": "An Gerät speichern",

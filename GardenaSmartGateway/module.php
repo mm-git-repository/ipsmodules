@@ -6,11 +6,12 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartGuids.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartDevices.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartClient.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartSchedules.php';
+require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php';
 
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 3;
+    private const MODULE_BUILD = 4;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -30,6 +31,7 @@ class GardenaSmartGateway extends IPSModuleStrict
         $this->RegisterPropertyInteger('Port', 8443);
         $this->RegisterPropertyBoolean('TlsInsecure', true);
         $this->RegisterPropertyInteger('UpdateIntervalSeconds', self::UPDATE_DEFAULT_SEC);
+        $this->RegisterPropertyString('FlowPresets', '[]');
 
         $this->RegisterAttributeString('DeviceCache', '{}');
         $this->RegisterAttributeString('DeviceScheduleBlock', '');
@@ -38,9 +40,14 @@ class GardenaSmartGateway extends IPSModuleStrict
         $this->RegisterVariableString('LastError', 'Letzter Fehler', '', 2);
         $this->RegisterVariableInteger('DeviceCount', 'Geräteanzahl', '', 3);
         $this->RegisterVariableString('ScheduleOverview', 'Zeitplan-Übersicht', '', 10);
+        $this->RegisterVariableString('UsageOverview', 'Wasserverbrauch-Übersicht', '', 11);
         $this->RegisterVariableString('ModuleVersion', 'Modulversion', '', 999);
 
         $this->RegisterTimer('Update', 0, 'GSGW_UpdateValues($_IPS[\'TARGET\']);');
+
+        if (method_exists($this, 'SetVisualizationType')) {
+            $this->SetVisualizationType(1);
+        }
     }
 
     public function ApplyChanges(): void
@@ -161,6 +168,7 @@ class GardenaSmartGateway extends IPSModuleStrict
             }
             $this->pushStateToChildren($devices);
             $this->rebuildScheduleOverview($devices);
+            $this->rebuildUsageOverview();
 
             return sprintf(
                 'Scan OK — neu: %d, aktualisiert: %d, übersprungen: %d',
@@ -196,6 +204,7 @@ class GardenaSmartGateway extends IPSModuleStrict
             $devices = $this->refreshDeviceCache();
             $this->pushStateToChildren($devices);
             $this->rebuildScheduleOverview($devices);
+            $this->rebuildUsageOverview();
             $this->SetValue('Reachable', true);
             $this->SetValue('LastError', '');
             $this->SetValue('DeviceCount', count($devices));
@@ -222,6 +231,35 @@ class GardenaSmartGateway extends IPSModuleStrict
         } catch (Throwable) {
             // ignore
         }
+    }
+
+    public function RefreshUsageOverview(): void
+    {
+        $this->rebuildUsageOverview();
+    }
+
+    public function GetVisualizationTile(): string
+    {
+        $payload = $this->collectUsagePayload();
+        $htmlPath = __DIR__ . '/web/usage-tile.html';
+        $cssPath = __DIR__ . '/web/usage-tile.css';
+        $jsPath = __DIR__ . '/web/usage-tile.js';
+        if (!is_file($htmlPath) || !is_file($cssPath) || !is_file($jsPath)) {
+            return '<div>Verbrauchs-Kachel fehlt</div>';
+        }
+        $html = (string) file_get_contents($htmlPath);
+        $css = (string) file_get_contents($cssPath);
+        $js = (string) file_get_contents($jsPath);
+        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS);
+        if ($json === false) {
+            $json = '{}';
+        }
+
+        return str_replace(
+            ['{{INLINE_CSS}}', '{{INLINE_JS}}', '{{INITIAL_JSON}}'],
+            [$css, $js, $json],
+            $html
+        );
     }
 
     /** @param array<string, mixed> $command */
@@ -332,6 +370,130 @@ class GardenaSmartGateway extends IPSModuleStrict
         $deviceBlock = implode("\n", $lines);
         $this->SetValue('ScheduleOverview', $deviceBlock);
         $this->WriteAttributeString('DeviceScheduleBlock', $deviceBlock);
+    }
+
+    private function rebuildUsageOverview(): void
+    {
+        $payload = $this->collectUsagePayload();
+        $lines = ['Wasserverbrauch (geschätzt, L):'];
+        $totals = $payload['totals'];
+        $lines[] = sprintf(
+            'Gateway gesamt — heute %s · Woche %s · Jahr %s · Total %s',
+            GardenaSmartWaterUsage::formatLiters((float) ($totals['today'] ?? 0)),
+            GardenaSmartWaterUsage::formatLiters((float) ($totals['week'] ?? 0)),
+            GardenaSmartWaterUsage::formatLiters((float) ($totals['year'] ?? 0)),
+            GardenaSmartWaterUsage::formatLiters((float) ($totals['total'] ?? 0))
+        );
+        if (($payload['devices'] ?? []) === []) {
+            $lines[] = '  · (keine aktiven Ausgänge konfiguriert)';
+        }
+        foreach ($payload['devices'] as $device) {
+            $lines[] = (string) ($device['name'] ?? 'Gerät') . ':';
+            foreach ($device['outlets'] ?? [] as $outlet) {
+                $live = !empty($outlet['open'])
+                    ? (' offen, Session ' . GardenaSmartWaterUsage::formatLiters((float) ($outlet['session'] ?? 0)))
+                    : '';
+                $lines[] = sprintf(
+                    '  · %s (%s, %s l/h)%s — heute %s · Woche %s · Jahr %s · Total %s',
+                    (string) ($outlet['label'] ?: ('Ausgang ' . ($outlet['side'] ?? '?'))),
+                    (string) ($outlet['valveName'] ?: ('Ventil ' . ($outlet['side'] ?? '?'))),
+                    rtrim(rtrim(number_format((float) ($outlet['litersPerHour'] ?? 0), 1, ',', ''), '0'), ','),
+                    $live,
+                    GardenaSmartWaterUsage::formatLiters((float) ($outlet['today'] ?? 0)),
+                    GardenaSmartWaterUsage::formatLiters((float) ($outlet['week'] ?? 0)),
+                    GardenaSmartWaterUsage::formatLiters((float) ($outlet['year'] ?? 0)),
+                    GardenaSmartWaterUsage::formatLiters((float) ($outlet['total'] ?? 0))
+                );
+            }
+        }
+        $this->SetValue('UsageOverview', implode("\n", $lines));
+    }
+
+    /**
+     * @return array{totals: array<string,float>, devices: list<array<string,mixed>>}
+     */
+    private function collectUsagePayload(): array
+    {
+        $totals = ['today' => 0.0, 'week' => 0.0, 'year' => 0.0, 'total' => 0.0, 'session' => 0.0];
+        $devices = [];
+        foreach (IPS_GetInstanceListByModuleID(GardenaSmartGuids::VALVE) as $childId) {
+            try {
+                if ((int) IPS_GetProperty($childId, 'GatewayInstanceID') !== $this->InstanceID) {
+                    continue;
+                }
+            } catch (Throwable) {
+                continue;
+            }
+            $valveCount = 1;
+            try {
+                $valveCount = max(1, (int) IPS_GetProperty($childId, 'ValveCount'));
+            } catch (Throwable) {
+                // keep 1
+            }
+            $activeOutlets = [];
+            foreach (['A', 'B'] as $idx => $side) {
+                if ($idx >= $valveCount) {
+                    break;
+                }
+                try {
+                    $enabled = (bool) IPS_GetProperty($childId, 'Outlet' . $side . 'Enabled');
+                    $lph = (float) IPS_GetProperty($childId, 'Outlet' . $side . 'LitersPerHour');
+                } catch (Throwable) {
+                    continue;
+                }
+                if (!$enabled || $lph <= 0) {
+                    continue;
+                }
+                $outlet = [
+                    'side' => $side,
+                    'enabled' => true,
+                    'label' => (string) @IPS_GetProperty($childId, 'Outlet' . $side . 'Label'),
+                    'length' => (string) @IPS_GetProperty($childId, 'Outlet' . $side . 'Length'),
+                    'pressure' => (string) @IPS_GetProperty($childId, 'Outlet' . $side . 'Pressure'),
+                    'litersPerHour' => $lph,
+                    'open' => false,
+                    'valveName' => '',
+                    'today' => 0.0,
+                    'week' => 0.0,
+                    'year' => 0.0,
+                    'total' => 0.0,
+                    'session' => 0.0,
+                ];
+                try {
+                    $openId = @IPS_GetObjectIDByIdent('Valve' . $side . 'Open', $childId);
+                    if ($openId) {
+                        $outlet['open'] = (bool) GetValue($openId);
+                    }
+                    $nameId = @IPS_GetObjectIDByIdent('Valve' . $side . 'Name', $childId);
+                    if ($nameId) {
+                        $outlet['valveName'] = (string) GetValue($nameId);
+                    }
+                    foreach (['Today' => 'today', 'Week' => 'week', 'Year' => 'year', 'Total' => 'total', 'Session' => 'session'] as $suffix => $key) {
+                        $vid = @IPS_GetObjectIDByIdent('Usage' . $side . $suffix, $childId);
+                        if ($vid) {
+                            $outlet[$key] = (float) GetValue($vid);
+                        }
+                    }
+                } catch (Throwable) {
+                    // ignore missing vars on old instances
+                }
+                $activeOutlets[] = $outlet;
+                foreach (['today', 'week', 'year', 'total', 'session'] as $k) {
+                    $totals[$k] = round($totals[$k] + (float) ($outlet[$k] ?? 0), 3);
+                }
+            }
+            if ($activeOutlets === []) {
+                continue;
+            }
+            $devices[] = [
+                'instanceId' => $childId,
+                'name' => IPS_GetName($childId),
+                'deviceId' => (string) @IPS_GetProperty($childId, 'DeviceId'),
+                'outlets' => $activeOutlets,
+            ];
+        }
+
+        return ['totals' => $totals, 'devices' => $devices];
     }
 
     private function findChildByDeviceId(string $deviceId): int

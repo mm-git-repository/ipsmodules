@@ -122,3 +122,8 @@
     padding: 4px 8px;
     font-size: 12px;
 }
+.gs-usage-line {
+    font-size: 13px;
+    margin: 0 0 6px;
+    opacity: 0.92;
+}

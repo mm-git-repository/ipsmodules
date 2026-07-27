@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartGuids.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartDevices.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartSchedules.php';
+require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php';
 require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartChildTrait.php';
 
 class GardenaSmartValve extends IPSModuleStrict
@@ -12,7 +13,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 6;
+    private const MODULE_BUILD = 7;
 
     public function Create(): void
     {
@@ -26,9 +27,19 @@ class GardenaSmartValve extends IPSModuleStrict
         $this->RegisterPropertyInteger('DefaultDurationSec', 1800);
         $this->RegisterPropertyString('DeviceScheduleRules', '[]');
 
+        foreach (['A', 'B'] as $side) {
+            $this->RegisterPropertyBoolean('Outlet' . $side . 'Enabled', false);
+            $this->RegisterPropertyString('Outlet' . $side . 'Preset', 'builtin:custom');
+            $this->RegisterPropertyString('Outlet' . $side . 'Label', '');
+            $this->RegisterPropertyString('Outlet' . $side . 'Length', '');
+            $this->RegisterPropertyString('Outlet' . $side . 'Pressure', '');
+            $this->RegisterPropertyFloat('Outlet' . $side . 'LitersPerHour', 0.0);
+        }
+
         $this->RegisterAttributeString('DeviceAppSchedules', '');
         $this->RegisterAttributeString('ScheduleLastSavedBy', '');
         $this->RegisterAttributeString('ScheduleLastSavedAt', '');
+        $this->RegisterAttributeString('UsageState', '{}');
 
         $this->ensureProfiles();
         $this->RegisterVariableBoolean('Online', 'Online', '', 1);
@@ -39,6 +50,15 @@ class GardenaSmartValve extends IPSModuleStrict
         $this->RegisterVariableString('ValveAName', 'Ventil A Name', '', 12);
         $this->RegisterVariableString('ValveBName', 'Ventil B Name', '', 13);
         $this->RegisterVariableString('DeviceSchedules', 'Geräte-Zeitpläne', '', 20);
+
+        foreach (['A' => 30, 'B' => 40] as $side => $base) {
+            $this->RegisterVariableFloat('Usage' . $side . 'Today', 'Verbrauch ' . $side . ' heute', 'GSVAL.Liter', $base);
+            $this->RegisterVariableFloat('Usage' . $side . 'Week', 'Verbrauch ' . $side . ' Woche', 'GSVAL.Liter', $base + 1);
+            $this->RegisterVariableFloat('Usage' . $side . 'Year', 'Verbrauch ' . $side . ' Jahr', 'GSVAL.Liter', $base + 2);
+            $this->RegisterVariableFloat('Usage' . $side . 'Total', 'Verbrauch ' . $side . ' Gesamt', 'GSVAL.Liter', $base + 3);
+            $this->RegisterVariableFloat('Usage' . $side . 'Session', 'Verbrauch ' . $side . ' Session', 'GSVAL.Liter', $base + 4);
+        }
+
         $this->RegisterVariableString('ModuleVersion', 'Modulversion', '', 999);
 
         $this->EnableAction('ValveAOpen');
@@ -55,6 +75,7 @@ class GardenaSmartValve extends IPSModuleStrict
         $this->SetValue('ModuleVersion', self::MODULE_VERSION . ' (Build ' . self::MODULE_BUILD . ')');
         $this->SetStatus($this->getGatewayInstanceId() > 0 ? 102 : 104);
         $this->notifyGatewaySchedules();
+        $this->notifyGatewayUsage();
         $this->SetSummary($this->ReadPropertyString('DeviceId'));
     }
 
@@ -71,6 +92,9 @@ class GardenaSmartValve extends IPSModuleStrict
                     self::MODULE_VERSION,
                     self::MODULE_BUILD
                 );
+            }
+            if (($element['type'] ?? '') === 'Select' && in_array($element['name'] ?? '', ['OutletAPreset', 'OutletBPreset'], true)) {
+                $form['elements'][$idx]['options'] = $this->presetSelectOptions();
             }
         }
 
@@ -104,6 +128,7 @@ class GardenaSmartValve extends IPSModuleStrict
                 'name' => (string) $this->GetValue('ValveBName'),
                 'open' => (bool) $this->GetValue('ValveBOpen'),
             ],
+            'usage' => $this->usageSnapshotForUi(),
             'scheduleRules' => $rules,
             'scheduleWritable' => GardenaSmartSchedules::supportsDeviceScheduleWrite($generation, 'valve'),
             'scheduleMaxSlots' => GardenaSmartSchedules::GEN2_MAX_SLOTS,
@@ -162,6 +187,11 @@ class GardenaSmartValve extends IPSModuleStrict
 
             return;
         }
+        if ($Ident === 'ResetWaterUsage') {
+            echo $this->ResetWaterUsage();
+
+            return;
+        }
         parent::RequestAction($Ident, $Value);
     }
 
@@ -181,6 +211,7 @@ class GardenaSmartValve extends IPSModuleStrict
             return 'Fehler: ' . (string) ($result['error'] ?? 'unbekannt');
         }
         $this->SetValue($valveId === 0 ? 'ValveAOpen' : 'ValveBOpen', true);
+        $this->trackValveOpenState($valveId, true);
 
         return 'OK';
     }
@@ -197,13 +228,11 @@ class GardenaSmartValve extends IPSModuleStrict
             return 'Fehler: ' . (string) ($result['error'] ?? 'unbekannt');
         }
         $this->SetValue($valveId === 0 ? 'ValveAOpen' : 'ValveBOpen', false);
+        $this->trackValveOpenState($valveId, false);
 
         return 'OK';
     }
 
-    /**
-     * Form-Button: Liste zuerst übernehmen, dann vom Property ans Gerät schreiben.
-     */
     public function PushDeviceSchedules(): string
     {
         return $this->SaveDeviceSchedules($this->ReadPropertyString('DeviceScheduleRules'));
@@ -248,6 +277,55 @@ class GardenaSmartValve extends IPSModuleStrict
         $this->notifyGatewaySchedules();
 
         return 'OK — Zeitpläne am Gerät gespeichert (' . count($rules) . '/' . GardenaSmartSchedules::GEN2_MAX_SLOTS . ')';
+    }
+
+    public function ResetWaterUsage(): string
+    {
+        $state = $this->loadUsageState();
+        foreach (['A', 'B'] as $side) {
+            $key = strtolower($side);
+            $valveState = is_array($state[$key] ?? null) ? $state[$key] : GardenaSmartWaterUsage::emptyValveState();
+            $state[$key] = GardenaSmartWaterUsage::resetCounters($valveState);
+            $this->writeUsageVariables($side, $state[$key]);
+        }
+        $this->saveUsageState($state);
+        $this->notifyGatewayUsage();
+
+        return 'OK — Verbrauchszähler zurückgesetzt';
+    }
+
+    public function ApplyOutletPreset(string $side): string
+    {
+        $side = strtoupper($side) === 'B' ? 'B' : 'A';
+        $presetId = $this->ReadPropertyString('Outlet' . $side . 'Preset');
+        foreach ($this->availablePresets() as $preset) {
+            if (($preset['id'] ?? '') !== $presetId) {
+                continue;
+            }
+            if ($presetId === 'builtin:custom') {
+                return 'Benutzerdefiniert — Werte manuell belassen';
+            }
+            IPS_SetProperty($this->InstanceID, 'Outlet' . $side . 'Label', (string) ($preset['label'] ?? ''));
+            IPS_SetProperty($this->InstanceID, 'Outlet' . $side . 'Length', (string) ($preset['length'] ?? ''));
+            IPS_SetProperty($this->InstanceID, 'Outlet' . $side . 'Pressure', (string) ($preset['pressure'] ?? ''));
+            IPS_SetProperty($this->InstanceID, 'Outlet' . $side . 'LitersPerHour', (float) ($preset['litersPerHour'] ?? 0));
+            IPS_ApplyChanges($this->InstanceID);
+
+            return 'OK — Preset übernommen';
+        }
+
+        return 'Preset nicht gefunden';
+    }
+
+    /** @return array<string, mixed> */
+    public function GetUsageExport(): array
+    {
+        return [
+            'instanceId' => $this->InstanceID,
+            'name' => IPS_GetName($this->InstanceID),
+            'deviceId' => $this->ReadPropertyString('DeviceId'),
+            'outlets' => $this->usageSnapshotForUi()['outlets'],
+        ];
     }
 
     /** @param array<string, mixed> $data */
@@ -328,6 +406,7 @@ class GardenaSmartValve extends IPSModuleStrict
                 $open = $running;
             }
             $this->SetValue($prefix . 'Open', $open);
+            $this->trackValveOpenState($id, $open);
         }
     }
 
@@ -341,10 +420,133 @@ class GardenaSmartValve extends IPSModuleStrict
         $t1 = GardenaSmartDevices::fieldValue($lb['watering_timer_1'] ?? null);
         $t2 = GardenaSmartDevices::fieldValue($lb['watering_timer_2'] ?? null);
         if (is_numeric($t1)) {
-            $this->SetValue('ValveAOpen', ((int) $t1) > 0);
+            $open = ((int) $t1) > 0;
+            $this->SetValue('ValveAOpen', $open);
+            $this->trackValveOpenState(0, $open);
         }
         if (is_numeric($t2)) {
-            $this->SetValue('ValveBOpen', ((int) $t2) > 0);
+            $open = ((int) $t2) > 0;
+            $this->SetValue('ValveBOpen', $open);
+            $this->trackValveOpenState(1, $open);
+        }
+    }
+
+    private function trackValveOpenState(int $valveId, bool $open): void
+    {
+        $side = $valveId === 0 ? 'A' : 'B';
+        if ($valveId === 1 && $this->ReadPropertyInteger('ValveCount') < 2) {
+            return;
+        }
+        $enabled = $this->ReadPropertyBoolean('Outlet' . $side . 'Enabled');
+        $lph = (float) $this->ReadPropertyFloat('Outlet' . $side . 'LitersPerHour');
+        $state = $this->loadUsageState();
+        $key = strtolower($side);
+        $valveState = is_array($state[$key] ?? null) ? $state[$key] : GardenaSmartWaterUsage::emptyValveState();
+        $state[$key] = GardenaSmartWaterUsage::tick($valveState, $open, $lph, $enabled, time());
+        $this->saveUsageState($state);
+        $this->writeUsageVariables($side, $state[$key]);
+        $this->notifyGatewayUsage();
+    }
+
+    /** @param array<string, mixed> $valveState */
+    private function writeUsageVariables(string $side, array $valveState): void
+    {
+        $this->SetValue('Usage' . $side . 'Today', (float) ($valveState['day'] ?? 0));
+        $this->SetValue('Usage' . $side . 'Week', (float) ($valveState['week'] ?? 0));
+        $this->SetValue('Usage' . $side . 'Year', (float) ($valveState['year'] ?? 0));
+        $this->SetValue('Usage' . $side . 'Total', (float) ($valveState['total'] ?? 0));
+        $this->SetValue('Usage' . $side . 'Session', (float) ($valveState['sessionLiters'] ?? 0));
+    }
+
+    /** @return array<string, mixed> */
+    private function loadUsageState(): array
+    {
+        $decoded = json_decode($this->ReadAttributeString('UsageState'), true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /** @param array<string, mixed> $state */
+    private function saveUsageState(array $state): void
+    {
+        $this->WriteAttributeString('UsageState', json_encode($state, JSON_UNESCAPED_UNICODE) ?: '{}');
+    }
+
+    /** @return array{outlets: list<array<string, mixed>>} */
+    private function usageSnapshotForUi(): array
+    {
+        $outlets = [];
+        $count = max(1, $this->ReadPropertyInteger('ValveCount'));
+        foreach (['A', 'B'] as $idx => $side) {
+            if ($idx >= $count) {
+                break;
+            }
+            $enabled = $this->ReadPropertyBoolean('Outlet' . $side . 'Enabled');
+            $lph = (float) $this->ReadPropertyFloat('Outlet' . $side . 'LitersPerHour');
+            $outlets[] = [
+                'side' => $side,
+                'enabled' => $enabled && $lph > 0,
+                'label' => $this->ReadPropertyString('Outlet' . $side . 'Label'),
+                'length' => $this->ReadPropertyString('Outlet' . $side . 'Length'),
+                'pressure' => $this->ReadPropertyString('Outlet' . $side . 'Pressure'),
+                'litersPerHour' => $lph,
+                'open' => (bool) $this->GetValue('Valve' . $side . 'Open'),
+                'valveName' => (string) $this->GetValue('Valve' . $side . 'Name'),
+                'today' => (float) $this->GetValue('Usage' . $side . 'Today'),
+                'week' => (float) $this->GetValue('Usage' . $side . 'Week'),
+                'year' => (float) $this->GetValue('Usage' . $side . 'Year'),
+                'total' => (float) $this->GetValue('Usage' . $side . 'Total'),
+                'session' => (float) $this->GetValue('Usage' . $side . 'Session'),
+            ];
+        }
+
+        return ['outlets' => $outlets];
+    }
+
+    /** @return list<array{id:string,label:string,length:string,pressure:string,litersPerHour:float}> */
+    private function availablePresets(): array
+    {
+        $gatewayPresets = [];
+        $gatewayId = $this->getGatewayInstanceId();
+        if ($gatewayId > 0 && IPS_InstanceExists($gatewayId)) {
+            try {
+                $raw = (string) IPS_GetProperty($gatewayId, 'FlowPresets');
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    $gatewayPresets = $decoded;
+                }
+            } catch (Throwable) {
+                // ignore
+            }
+        }
+
+        return GardenaSmartWaterUsage::mergePresets($gatewayPresets);
+    }
+
+    /** @return list<array{caption:string,value:string}> */
+    private function presetSelectOptions(): array
+    {
+        $options = [];
+        foreach ($this->availablePresets() as $preset) {
+            $cap = (string) ($preset['label'] ?? '');
+            $lph = (float) ($preset['litersPerHour'] ?? 0);
+            if ($lph > 0) {
+                $cap .= ' (' . rtrim(rtrim(number_format($lph, 1, ',', ''), '0'), ',') . ' l/h)';
+            }
+            $options[] = [
+                'caption' => $cap,
+                'value' => (string) ($preset['id'] ?? ''),
+            ];
+        }
+
+        return $options;
+    }
+
+    private function notifyGatewayUsage(): void
+    {
+        $gatewayId = $this->getGatewayInstanceId();
+        if ($gatewayId > 0 && IPS_InstanceExists($gatewayId)) {
+            @GSGW_RefreshUsageOverview($gatewayId);
         }
     }
 
@@ -359,6 +561,11 @@ class GardenaSmartValve extends IPSModuleStrict
             IPS_CreateVariableProfile('GSVAL.Temp', 2);
             IPS_SetVariableProfileText('GSVAL.Temp', '', ' °C');
             IPS_SetVariableProfileDigits('GSVAL.Temp', 1);
+        }
+        if (!IPS_VariableProfileExists('GSVAL.Liter')) {
+            IPS_CreateVariableProfile('GSVAL.Liter', 2);
+            IPS_SetVariableProfileText('GSVAL.Liter', '', ' L');
+            IPS_SetVariableProfileDigits('GSVAL.Liter', 2);
         }
     }
 }

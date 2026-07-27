@@ -114,6 +114,34 @@
         return parts.join(' ');
     }
 
+    function liters(v) {
+        var n = Number(v) || 0;
+        if (n >= 100) return Math.round(n).toLocaleString('de-DE') + ' L';
+        if (n >= 10) return n.toFixed(1).replace('.', ',') + ' L';
+        return n.toFixed(2).replace('.', ',') + ' L';
+    }
+
+    function renderUsage() {
+        var outlets = ((state.usage || {}).outlets || []).filter(function (o) { return o.enabled; });
+        if (!outlets.length) {
+            return '';
+        }
+        var html = '<div class="gs-section"><h4>Wasserverbrauch</h4>';
+        outlets.forEach(function (o) {
+            html += '<div class="gs-usage-line">';
+            html += '<strong>' + esc(o.label || ('Ausgang ' + o.side)) + '</strong>';
+            html += ' · heute ' + esc(liters(o.today));
+            html += ' · Woche ' + esc(liters(o.week));
+            html += ' · Gesamt ' + esc(liters(o.total));
+            if (o.open) {
+                html += ' · Session ' + esc(liters(o.session));
+            }
+            html += '</div>';
+        });
+        html += '</div>';
+        return html;
+    }
+
     function renderScheduleEditor() {
         if (!state.scheduleWritable) {
             return '<div class="gs-section"><h4>Geräte-Zeitpläne (read-only)</h4>' +
@@ -188,6 +216,7 @@
         }
         html += '</div>';
 
+        html += renderUsage();
         html += renderScheduleEditor();
         html += '<div class="gs-msg"></div>';
         root.innerHTML = html;

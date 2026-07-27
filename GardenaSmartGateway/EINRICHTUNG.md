@@ -29,10 +29,22 @@ systemctl start websocketd
 
 | Modul | Rolle |
 |-------|--------|
-| Gardena Smart Gateway | WSS-Client, Discovery, Scan-Button, Zeitplan-Übersicht (Geräte-Master) |
-| Gardena Smart Valve | Water / Dual / Pipeline — Steuerung + Geräte-Zeitpläne editieren (Gen2) + Web-Kachel |
+| Gardena Smart Gateway | WSS-Client, Discovery, Scan, Zeitpläne, Wasserverbrauch-Statistik |
+| Gardena Smart Valve | Water / Dual / Pipeline — Steuerung, Zeitpläne (Gen2), Verbrauchsschätzung, Web-Kachel |
 | Gardena Smart Power | Power Adapter — Schalten, Geräte-Zeitpläne read-only (Gen1) + Web-Kachel |
 | Gardena Smart Sensor | Sensor / Sensor II — Messwerte + Web-Kachel |
+
+## Wasserverbrauch (Schätzung)
+
+Kein physikalischer Literzähler nötig. Verbrauch = **Öffnungsdauer × konfigurierte l/h**.
+
+1. Am **Gateway** eigene Presets pflegen (Liste „Eigene Durchfluss-Presets“), z. B. Perl-Regner 20 m / 2 bar / 300 l/h  
+2. Am **Valve** je Ausgang A/B: „Verbrauch zählen“, Preset wählen → **Preset übernehmen**, oder l/h manuell setzen  
+3. Öffnen per IPS, App oder Geräte-Zeitplan wird mitgezählt (Poll + Sofort-Tracking bei IPS-Start/Stop)  
+4. Zähler: heute / Woche / Jahr / Gesamt (+ laufende Session)  
+5. Gateway-Visualisierung und Variable `UsageOverview` zeigen die Statistik (nur Geräte mit aktiven Ausgängen)
+
+Reset: Button **Verbrauchszähler zurücksetzen** am Valve (alle Perioden inkl. Gesamt).
 
 ## Geräte-Zeitpläne (Gateway/Cloud als Master)
 

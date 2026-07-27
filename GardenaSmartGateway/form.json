@@ -39,6 +39,25 @@
             "caption": "Aktualisierungsintervall (Sekunden, mindestens 30)",
             "digits": 0,
             "minimum": 30
+        },
+        {
+            "type": "Label",
+            "name": "FlowPresetHint",
+            "caption": "Durchfluss-Presets (zentral): werden in den Valve-Modulen zur Auswahl angeboten. Basis-Presets (Perl-Regner etc.) sind fest eingebaut."
+        },
+        {
+            "type": "List",
+            "name": "FlowPresets",
+            "caption": "Eigene Durchfluss-Presets",
+            "rowCount": 5,
+            "add": true,
+            "delete": true,
+            "columns": [
+                { "caption": "Bezeichnung", "name": "label", "width": "160px", "edit": { "type": "ValidationTextBox" }, "add": "Mein Regner", "save": true },
+                { "caption": "Länge/Hinweis", "name": "length", "width": "100px", "edit": { "type": "ValidationTextBox" }, "add": "20 m", "save": true },
+                { "caption": "Druck", "name": "pressure", "width": "80px", "edit": { "type": "ValidationTextBox" }, "add": "2 bar", "save": true },
+                { "caption": "l/h", "name": "litersPerHour", "width": "80px", "edit": { "type": "NumberSpinner", "digits": 1, "minimum": 0 }, "add": 300, "save": true }
+            ]
         }
     ],
     "actions": [
