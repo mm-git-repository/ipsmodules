@@ -1,0 +1,14 @@
+{
+    "id": "{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C20}",
+    "name": "GardenaSmartShared",
+    "type": 3,
+    "vendor": "MM-Modules",
+    "aliases": [
+        "Gardena Smart Shared (Internal)"
+    ],
+    "url": "https://github.com/mm-git-repository/ipsmodule.git",
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "GSSH"
+}
