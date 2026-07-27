@@ -30,7 +30,8 @@ systemctl start websocketd
 | Modul | Rolle |
 |-------|--------|
 | Gardena Smart Gateway | WSS-Client, Discovery, Scan, Zeitpläne, Wasserverbrauch-Statistik |
-| Gardena Smart Valve | Water / Dual / Pipeline — Steuerung, Zeitpläne (Gen2), Verbrauchsschätzung, Web-Kachel |
+| Gardena Smart Valve | Water / Dual / Pipeline — Steuerung (Start/Stop), Verbrauchsschätzung, Steuerungs-Kachel |
+| Gardena Smart Valve Zeitplan | Zeitplan-Editor-Kachel (verknüpft mit Valve-Instanz; Gen2 speichern/laden) |
 | Gardena Smart Power | Power Adapter — Schalten, Geräte-Zeitpläne read-only (Gen1) + Web-Kachel |
 | Gardena Smart Sensor | Sensor / Sensor II — Messwerte + Web-Kachel |
 
@@ -49,10 +50,12 @@ Reset: Button **Verbrauchszähler zurücksetzen** am Valve (alle Perioden inkl. 
 ## Geräte-Zeitpläne (Gateway/Cloud als Master)
 
 - **Gen2** (z. B. Dual Water Control 2814): Zeitpläne liegen am Gerät. IPS liest sie beim Poll und kann sie per WSS **`write`** auf `schedule/{slot}/*` zurückschreiben.
-- Bearbeitung in **Instanz-Konfiguration** (Liste „Geräte-Zeitpläne“, +/−) oder **Web-Kachel** (Hinzufügen/Entfernen/Ändern) → Button **An Gerät speichern**
+- Bearbeitung in **Instanz-Konfiguration** (Liste „Geräte-Zeitpläne“, +/−) oder **Zeitplan-Kachel** (`Gardena Smart Valve Zeitplan`) → Button **An Gerät speichern** / **Vom Gerät laden**
+- Beim Geräte-Scan wird für Gen2-Ventile automatisch eine Zeitplan-Instanz angelegt (Name: „… Zeitplan“)
 - Maximal **36 Einträge** (wie Gardena-App / Dual Water Control); entfernte Einträge werden am Gerät geleert
 - Nach dem Speichern: Rücklesen vom Gerät; Abweichungen werden als Warnung gemeldet
 - **Gen1** (ältere Water Control, Power): Binärformat — IPS zeigt read-only; Bearbeitung nur in der Gardena-App. Power: optional **Sonnen-Zeitplan löschen** (leeres `sun_schedule_config`)
+- Valve-Kachel = nur Ventilname + Start/Stop; Zeitplan und Wasserverbrauch haben eigene Kacheln (Valve-Zeitplan bzw. Gateway)
 
 ### PoC (Gen2, bestätigt)
 

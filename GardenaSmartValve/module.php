@@ -13,7 +13,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 11;
+    private const MODULE_BUILD = 14;
     /** Default manual start + new schedule entry duration (30 min). */
     private const DEFAULT_WATERING_DURATION_SEC = 1800;
 
@@ -134,35 +134,68 @@ class GardenaSmartValve extends IPSModuleStrict
     public function GetVisualizationTile(): string
     {
         $valveCount = max(1, $this->ReadPropertyInteger('ValveCount'));
-        $generation = $this->ReadPropertyInteger('Generation');
-        $rules = $this->loadDeviceScheduleRules();
+        $valves = [];
+        foreach (['A', 'B'] as $idx => $side) {
+            if ($idx >= $valveCount) {
+                break;
+            }
+            $name = trim((string) $this->GetValue('Valve' . $side . 'Name'));
+            $valves[] = [
+                'id' => $idx,
+                'side' => $side,
+                'name' => $name !== '' ? $name : ('Ventil ' . $side),
+                'open' => (bool) $this->GetValue('Valve' . $side . 'Open'),
+            ];
+        }
         $initial = [
             'name' => IPS_GetName($this->InstanceID),
             'online' => (bool) $this->GetValue('Online'),
             'battery' => (int) $this->GetValue('Battery'),
             'temperature' => (float) $this->GetValue('Temperature'),
             'valveCount' => $valveCount,
-            'valveA' => [
-                'name' => (string) $this->GetValue('ValveAName'),
-                'open' => (bool) $this->GetValue('ValveAOpen'),
-            ],
-            'valveB' => [
-                'name' => (string) $this->GetValue('ValveBName'),
-                'open' => (bool) $this->GetValue('ValveBOpen'),
-            ],
-            'usage' => $this->usageSnapshotForUi(),
-            'scheduleRules' => $rules,
-            'scheduleWritable' => GardenaSmartSchedules::supportsDeviceScheduleWrite($generation, 'valve'),
-            'scheduleMaxSlots' => GardenaSmartSchedules::GEN2_MAX_SLOTS,
-            'scheduleLastSavedBy' => $this->ReadAttributeString('ScheduleLastSavedBy'),
-            'scheduleLastSavedAt' => $this->ReadAttributeString('ScheduleLastSavedAt'),
+            'valves' => $valves,
             'defaultDuration' => $this->defaultWateringDurationSec(),
-            'defaultScheduleStart' => $this->defaultScheduleWindow()[0],
-            'defaultScheduleEnd' => $this->defaultScheduleWindow()[1],
             'instanceId' => $this->InstanceID,
         ];
 
         return $this->buildVisualizationHtml(__DIR__, 'GSVAL', $initial);
+    }
+
+    /**
+     * Payload for GardenaSmartValveSchedule visualization tile.
+     *
+     * @return array<string, mixed>
+     */
+    public function GetScheduleTileData(): array
+    {
+        $generation = $this->ReadPropertyInteger('Generation');
+        $valveCount = max(1, $this->ReadPropertyInteger('ValveCount'));
+        $valveNames = [];
+        foreach (['A', 'B'] as $idx => $side) {
+            if ($idx >= $valveCount) {
+                break;
+            }
+            $name = trim((string) $this->GetValue('Valve' . $side . 'Name'));
+            $valveNames[] = [
+                'id' => $idx,
+                'side' => $side,
+                'name' => $name !== '' ? $name : ('Ventil ' . $side),
+            ];
+        }
+
+        return [
+            'name' => IPS_GetName($this->InstanceID),
+            'valveCount' => $valveCount,
+            'valveNames' => $valveNames,
+            'scheduleRules' => $this->loadDeviceScheduleRules(),
+            'scheduleWritable' => GardenaSmartSchedules::supportsDeviceScheduleWrite($generation, 'valve'),
+            'scheduleMaxSlots' => GardenaSmartSchedules::GEN2_MAX_SLOTS,
+            'scheduleLastSavedBy' => $this->ReadAttributeString('ScheduleLastSavedBy'),
+            'scheduleLastSavedAt' => $this->ReadAttributeString('ScheduleLastSavedAt'),
+            'defaultScheduleStart' => $this->defaultScheduleWindow()[0],
+            'defaultScheduleEnd' => $this->defaultScheduleWindow()[1],
+            'instanceId' => $this->InstanceID,
+        ];
     }
 
     public function RequestAction(string $Ident, mixed $Value): void
@@ -182,6 +215,18 @@ class GardenaSmartValve extends IPSModuleStrict
             } else {
                 $this->StopValve(1);
             }
+
+            return;
+        }
+        if ($Ident === 'StartValve') {
+            $payload = $this->decodeActionPayload($Value);
+            $this->StartValve((int) ($payload['valveId'] ?? 0), (int) ($payload['duration'] ?? 0));
+
+            return;
+        }
+        if ($Ident === 'StopValve') {
+            $payload = $this->decodeActionPayload($Value);
+            $this->StopValve((int) ($payload['valveId'] ?? 0));
 
             return;
         }
@@ -211,12 +256,39 @@ class GardenaSmartValve extends IPSModuleStrict
 
             return;
         }
+        if ($Ident === 'PullDeviceSchedules') {
+            echo $this->PullDeviceSchedules();
+
+            return;
+        }
         if ($Ident === 'ResetWaterUsage') {
             echo $this->ResetWaterUsage();
 
             return;
         }
         parent::RequestAction($Ident, $Value);
+    }
+
+    /** @return array<string, mixed> */
+    private function decodeActionPayload(mixed $Value): array
+    {
+        if (is_array($Value)) {
+            return $Value;
+        }
+        if (is_string($Value) && $Value !== '') {
+            $decoded = json_decode($Value, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+            if (is_numeric($Value)) {
+                return ['valveId' => (int) $Value];
+            }
+        }
+        if (is_numeric($Value)) {
+            return ['valveId' => (int) $Value];
+        }
+
+        return [];
     }
 
     public function StartValve(int $valveId, int $durationSec = 0): string
@@ -260,6 +332,76 @@ class GardenaSmartValve extends IPSModuleStrict
     public function PushDeviceSchedules(): string
     {
         return $this->SaveDeviceSchedules($this->ReadPropertyString('DeviceScheduleRules'));
+    }
+
+    /**
+     * Discover device schedules and overwrite local IPS editor data.
+     * Returns JSON: {ok, message, rules?}
+     */
+    public function PullDeviceSchedules(): string
+    {
+        $gatewayId = $this->getGatewayInstanceId();
+        $deviceId = $this->ReadPropertyString('DeviceId');
+        if ($gatewayId <= 0 || !IPS_InstanceExists($gatewayId)) {
+            return $this->pullSchedulesResult(false, 'Fehler: Kein Gateway zugewiesen');
+        }
+        if ($deviceId === '') {
+            return $this->pullSchedulesResult(false, 'Fehler: DeviceId fehlt');
+        }
+
+        $raw = @GSGW_FetchDeviceData($gatewayId, $deviceId);
+        $decoded = json_decode((string) $raw, true);
+        if (!is_array($decoded) || empty($decoded['ok'])) {
+            return $this->pullSchedulesResult(
+                false,
+                'Fehler: ' . (string) ($decoded['error'] ?? 'Discover fehlgeschlagen')
+            );
+        }
+        $data = $decoded['device'] ?? null;
+        if (!is_array($data)) {
+            return $this->pullSchedulesResult(false, 'Fehler: Keine Gerätedaten');
+        }
+
+        $this->applyDeviceData($data);
+
+        $generation = $this->ReadPropertyInteger('Generation');
+        $rules = [];
+        if ($generation >= 2) {
+            $rules = GardenaSmartSchedules::parseGen2Rules($data);
+            // Explicit overwrite — also clears local rows when device has none
+            $this->saveDeviceScheduleRules($rules);
+            @IPS_ApplyChanges($this->InstanceID);
+            $lines = $this->deviceScheduleLines($rules);
+        } else {
+            $lines = GardenaSmartDevices::formatDeviceSchedules($data);
+        }
+
+        $text = $lines === [] ? '(keine)' : implode("\n", $lines);
+        $this->SetValue('DeviceSchedules', $text);
+        $this->WriteAttributeString('DeviceAppSchedules', $text);
+        $this->WriteAttributeString('ScheduleLastSavedBy', 'Gerät');
+        $this->WriteAttributeString('ScheduleLastSavedAt', date('c'));
+        $this->notifyGatewaySchedules();
+
+        $message = $generation >= 2
+            ? ('OK — ' . count($rules) . ' Zeitplan(e) vom Gerät nach IPS übernommen (überschrieben)')
+            : 'OK — Gerätezustand aktualisiert (Gen1-Zeitpläne nur Anzeige)';
+
+        return $this->pullSchedulesResult(true, $message, $rules);
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rules
+     */
+    private function pullSchedulesResult(bool $ok, string $message, array $rules = []): string
+    {
+        $payload = [
+            'ok' => $ok,
+            'message' => $message,
+            'rules' => $rules,
+        ];
+
+        return json_encode($payload, JSON_UNESCAPED_UNICODE) ?: '{"ok":false,"message":"JSON-Fehler","rules":[]}';
     }
 
     public function SaveDeviceSchedules(mixed $rulesJson = null): string
@@ -688,8 +830,8 @@ class GardenaSmartValve extends IPSModuleStrict
         }
         if (!IPS_VariableProfileExists('GSVAL.Liter')) {
             IPS_CreateVariableProfile('GSVAL.Liter', 2);
-            IPS_SetVariableProfileText('GSVAL.Liter', '', ' L');
             IPS_SetVariableProfileDigits('GSVAL.Liter', 2);
         }
+        IPS_SetVariableProfileText('GSVAL.Liter', '', ' l');
     }
 }

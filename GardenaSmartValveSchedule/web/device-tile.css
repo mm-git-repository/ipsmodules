@@ -1,4 +1,4 @@
-.gs-tile {
+.gs-sched-tile {
     font-family: "Segoe UI", "Helvetica Neue", sans-serif;
     font-size: 14px;
     line-height: 1.4;
@@ -7,40 +7,19 @@
     padding: 10px 6px;
     color: inherit;
 }
-.gs-tile * { box-sizing: border-box; }
+.gs-sched-tile * { box-sizing: border-box; }
 .gs-head {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     gap: 10px 16px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
 .gs-title { font-size: 1.15rem; font-weight: 650; letter-spacing: 0.01em; }
-.gs-meta { opacity: 0.75; font-size: 13px; }
-.gs-dot {
-    display: inline-block;
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    margin-right: 6px;
-    background: #888;
-}
-.gs-dot.on { background: #2f9e44; }
-.gs-dot.off { background: #c92a2a; }
-.gs-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 10px;
-}
-.gs-valve {
-    padding: 12px;
-    border: 1px solid rgba(128,128,128,0.28);
-    border-radius: 10px;
-    background: rgba(128,128,128,0.06);
-}
-.gs-valve h3 {
+.gs-hint {
+    font-size: 12px;
+    opacity: 0.75;
     margin: 0 0 8px;
-    font-size: 14px;
-    font-weight: 600;
 }
 .gs-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .gs-btn {
@@ -62,6 +41,47 @@
     border-color: rgba(201,42,42,0.45);
     background: rgba(201,42,42,0.1);
 }
+.gs-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.gs-btn-sm {
+    padding: 4px 8px;
+    font-size: 12px;
+}
+.gs-sched {
+    white-space: pre-wrap;
+    font-size: 12.5px;
+    opacity: 0.9;
+    margin: 0;
+}
+.gs-sched-table-wrap {
+    overflow-x: auto;
+    margin-bottom: 8px;
+}
+.gs-sched-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.gs-sched-table th,
+.gs-sched-table td {
+    border: 1px solid rgba(128,128,128,0.25);
+    padding: 4px 6px;
+    text-align: center;
+}
+.gs-sched-table input[type="text"],
+.gs-sched-table select {
+    width: 100%;
+    min-width: 64px;
+    border: 1px solid rgba(128,128,128,0.35);
+    border-radius: 4px;
+    padding: 2px 4px;
+    font: inherit;
+    background: transparent;
+    color: inherit;
+}
+.gs-sched-table .gs-empty { text-align: left; opacity: 0.7; padding: 8px; }
 .gs-msg { margin-top: 8px; font-size: 13px; min-height: 1.2em; }
 .gs-msg.ok { color: #2f9e44; }
 .gs-msg.err { color: #c92a2a; }

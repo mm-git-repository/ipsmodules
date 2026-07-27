@@ -1,0 +1,10 @@
+{
+    "translations": {
+        "en": {
+            "Installierte Modulversion": "Installed module version",
+            "Gardena Smart Valve": "Gardena Smart Valve",
+            "Vom Gerät laden (überschreiben)": "Load from device (overwrite)",
+            "An Gerät speichern": "Save to device"
+        }
+    }
+}

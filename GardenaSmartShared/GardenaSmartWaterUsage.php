@@ -146,13 +146,13 @@ final class GardenaSmartWaterUsage
     public static function formatLiters(float $liters): string
     {
         if ($liters >= 100) {
-            return number_format($liters, 0, ',', '.') . ' L';
+            return number_format($liters, 0, ',', '.') . ' l';
         }
         if ($liters >= 10) {
-            return number_format($liters, 1, ',', '.') . ' L';
+            return number_format($liters, 1, ',', '.') . ' l';
         }
 
-        return number_format($liters, 2, ',', '.') . ' L';
+        return number_format($liters, 2, ',', '.') . ' l';
     }
 
     /**

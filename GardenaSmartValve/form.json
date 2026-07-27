@@ -192,6 +192,16 @@
 
             "type": "Button",
 
+            "caption": "Vom Gerät laden (überschreiben)",
+
+            "onClick": "$r = json_decode(GSVAL_PullDeviceSchedules($id), true); echo is_array($r) ? (string)($r['message'] ?? 'OK') : 'Fehler';"
+
+        },
+
+        {
+
+            "type": "Button",
+
             "caption": "An Gerät speichern",
 
             "onClick": "IPS_ApplyChanges($id); echo GSVAL_PushDeviceSchedules($id);"

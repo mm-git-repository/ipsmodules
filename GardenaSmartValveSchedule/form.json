@@ -1,0 +1,35 @@
+{
+    "elements": [
+        {
+            "type": "Label",
+            "name": "ModuleVersionInfo",
+            "caption": "Installierte Modulversion"
+        },
+        {
+            "type": "SelectInstance",
+            "name": "ValveInstanceID",
+            "caption": "Gardena Smart Valve",
+            "validModules": ["{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C1E}"]
+        },
+        {
+            "type": "Label",
+            "caption": "Diese Instanz stellt nur die Zeitplan-Kachel bereit. Speichern/Laden läuft über die verknüpfte Valve-Instanz."
+        }
+    ],
+    "actions": [
+        {
+            "type": "Button",
+            "caption": "Vom Gerät laden (überschreiben)",
+            "onClick": "$r = json_decode(GSVSC_PullDeviceSchedules($id), true); echo is_array($r) ? (string)($r['message'] ?? 'OK') : 'Fehler';"
+        },
+        {
+            "type": "Button",
+            "caption": "An Gerät speichern",
+            "onClick": "echo GSVSC_PushDeviceSchedules($id);"
+        }
+    ],
+    "status": [
+        { "code": 102, "icon": "active", "caption": "Aktiv" },
+        { "code": 104, "icon": "inactive", "caption": "Keine Valve-Instanz zugewiesen" }
+    ]
+}
