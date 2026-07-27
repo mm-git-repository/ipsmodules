@@ -165,52 +165,28 @@ final class GardenaSmartClient
         $deadline = microtime(true) + $this->timeoutSec;
         $buffer = '';
         $rawCount = 0;
+        $previews = [];
         while ($want !== [] && microtime(true) < $deadline) {
             $raw = $this->recvFrame($fp, max(0.2, $deadline - microtime(true)));
             if ($raw === null) {
                 continue;
             }
             $rawCount++;
+            $previews[] = substr($raw, 0, 220);
             $buffer .= $raw;
-            $decoded = json_decode($buffer, true);
-            if (!is_array($decoded)) {
+            $chunks = $this->extractJsonValues($buffer);
+            if ($chunks === []) {
                 $this->log('WSS', 'recv non-json/fragment len=' . strlen($buffer) . ' preview=' . substr($buffer, 0, 160));
                 if (strlen($buffer) > 1_000_000) {
                     $buffer = '';
                 }
                 continue;
             }
-            $buffer = '';
-            $list = array_is_list($decoded) ? $decoded : [$decoded];
-            foreach ($list as $msg) {
-                if (!is_array($msg)) {
-                    continue;
+            // Keep only unconsumed tail (extractJsonValues clears fully parsed buffer via ref)
+            foreach ($chunks as $decoded) {
+                foreach ($this->flattenReplyMessages($decoded) as $msg) {
+                    $this->consumeReplyMessage($msg, $want, $got);
                 }
-                $rid = isset($msg['request_id']) ? (string) $msg['request_id'] : '';
-                if ($rid !== '' && isset($want[$rid])) {
-                    $got[] = $msg;
-                    unset($want[$rid]);
-                    continue;
-                }
-                // Gateway sometimes omits / remaps request_id — accept success replies FIFO
-                if (array_key_exists('success', $msg) && $want !== []) {
-                    $fallbackId = (string) array_key_first($want);
-                    $this->log(
-                        'WSS',
-                        'matched reply FIFO (want_id=' . $fallbackId
-                        . ' got_rid=' . ($rid !== '' ? $rid : '-')
-                        . ' success=' . json_encode($msg['success'] ?? null) . ')'
-                    );
-                    $got[] = $msg;
-                    unset($want[$fallbackId]);
-                    continue;
-                }
-                $this->log(
-                    'WSS',
-                    'unmatched reply rid=' . ($rid !== '' ? $rid : '-')
-                    . ' success=' . json_encode($msg['success'] ?? null)
-                    . ' keys=' . implode(',', array_keys($msg))
-                );
             }
         }
         if ($want !== []) {
@@ -219,14 +195,312 @@ final class GardenaSmartClient
                 'TIMEOUT got=' . count($got) . '/' . $pending
                 . ' frames=' . $rawCount
                 . ' missing=' . implode(',', array_keys($want))
+                . ' preview=' . implode(' || ', $previews)
             );
             throw new RuntimeException(
                 'Timeout: nicht alle Antworten vom Gateway erhalten ('
-                . count($got) . '/' . $pending . ')'
+                . count($got) . '/' . $pending
+                . ', frames=' . $rawCount . ')'
             );
         }
 
         return $got;
+    }
+
+    /**
+     * Parse one or more JSON values from a growing buffer (handles concat / multi-value streams).
+     *
+     * @return list<mixed>
+     */
+    private function extractJsonValues(string &$buffer): array
+    {
+        $out = [];
+        $buffer = ltrim($buffer);
+        while ($buffer !== '') {
+            $decoded = json_decode($buffer, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $out[] = $decoded;
+                $buffer = '';
+                break;
+            }
+            // Try progressive trim: find a complete JSON value by scanning braces/brackets
+            $len = strlen($buffer);
+            $complete = false;
+            for ($i = 1; $i <= $len; $i++) {
+                $slice = substr($buffer, 0, $i);
+                $decoded = json_decode($slice, true);
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    continue;
+                }
+                $out[] = $decoded;
+                $buffer = ltrim(substr($buffer, $i));
+                $complete = true;
+                break;
+            }
+            if (!$complete) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param mixed $decoded
+     * @return list<array<string, mixed>>
+     */
+    private function flattenReplyMessages(mixed $decoded): array
+    {
+        if (!is_array($decoded)) {
+            return [];
+        }
+        if ($decoded === []) {
+            return [];
+        }
+        if (array_is_list($decoded)) {
+            $out = [];
+            foreach ($decoded as $item) {
+                foreach ($this->flattenReplyMessages($item) as $msg) {
+                    $out[] = $msg;
+                }
+            }
+
+            return $out;
+        }
+        foreach (['responses', 'results', 'datas', 'data', 'payload'] as $key) {
+            if (!isset($decoded[$key]) || !is_array($decoded[$key])) {
+                continue;
+            }
+            // payload may be value object (vi/vs) — only flatten list-like wrappers
+            if ($key === 'payload' && !array_is_list($decoded[$key]) && (
+                array_key_exists('vi', $decoded[$key])
+                || array_key_exists('vs', $decoded[$key])
+                || array_key_exists('vo', $decoded[$key])
+            )) {
+                continue;
+            }
+            $inner = $this->flattenReplyMessages($decoded[$key]);
+            if ($inner !== []) {
+                return $inner;
+            }
+        }
+
+        return [$decoded];
+    }
+
+    /**
+     * @param array<string, mixed> $msg
+     * @param array<string, true> $want
+     * @param list<array<string, mixed>> $got
+     */
+    private function consumeReplyMessage(array $msg, array &$want, array &$got): void
+    {
+        if ($want === []) {
+            return;
+        }
+        $rid = isset($msg['request_id']) ? (string) $msg['request_id'] : '';
+        if ($rid !== '' && isset($want[$rid])) {
+            $got[] = $msg;
+            unset($want[$rid]);
+            $this->log('WSS', 'matched exact request_id=' . $rid);
+
+            return;
+        }
+        // Accept any object as one outstanding reply (gateway often omits/changes request_id)
+        $fallbackId = (string) array_key_first($want);
+        $got[] = $msg;
+        unset($want[$fallbackId]);
+        $this->log(
+            'WSS',
+            'matched FIFO want_id=' . $fallbackId
+            . ' got_rid=' . ($rid !== '' ? $rid : '-')
+            . ' keys=' . implode(',', array_keys($msg))
+            . ' preview=' . substr((string) json_encode($msg, JSON_UNESCAPED_UNICODE), 0, 180)
+        );
+    }
+
+    /**
+     * Write Gen2 device schedules (lwm2mserver schedule/*).
+     * One field per request; accept any gateway frame as ACK (writes often omit success/request_id).
+     *
+     * @param list<array<string, mixed>> $rules Editor rules from DeviceScheduleRules
+     * @return list<array<string, mixed>>
+     */
+    public function writeGen2Schedules(string $deviceId, array $rules): array
+    {
+        require_once __DIR__ . '/GardenaSmartSchedules.php';
+        $parts = GardenaSmartSchedules::buildGen2WriteRequests($deviceId, $rules);
+        $activeRaw = $parts['active'] ?? [];
+        $clearRaw = $parts['clear'] ?? [];
+        if ($activeRaw === [] && $clearRaw === []) {
+            throw new RuntimeException('Keine gültigen Zeitplan-Einträge zum Speichern');
+        }
+
+        $toRequests = function (array $raw) use ($deviceId): array {
+            $requests = [];
+            foreach ($raw as $item) {
+                $entity = $item['entity'] ?? [];
+                $requests[] = $this->buildRequest(
+                    (string) ($item['op'] ?? 'write'),
+                    (string) ($entity['service'] ?? 'lwm2mserver'),
+                    (string) ($entity['path'] ?? ''),
+                    is_array($item['payload'] ?? null) ? $item['payload'] : null,
+                    (string) ($entity['device'] ?? $deviceId)
+                );
+            }
+
+            return $requests;
+        };
+
+        $activeReqs = $toRequests($activeRaw);
+        $clearReqs = $toRequests($clearRaw);
+
+        $this->log(
+            'Schedule',
+            'writeGen2 device=' . $deviceId
+            . ' activeWrites=' . count($activeReqs)
+            . ' clearWrites=' . count($clearReqs)
+        );
+
+        $previousTimeout = $this->timeoutSec;
+        $this->timeoutSec = max($previousTimeout, 8);
+        $allReplies = [];
+        try {
+            $allReplies = $this->exchangeWritesLoosely($activeReqs);
+            $this->assertNoWriteFailures($allReplies);
+            $this->log('Schedule', 'active writes done (acks=' . count($allReplies) . '/' . count($activeReqs) . ')');
+
+            if ($clearReqs !== []) {
+                try {
+                    $this->exchangeFireAndForget($clearReqs, 2.5);
+                    $this->log('Schedule', 'clear writes sent best-effort (' . count($clearReqs) . ')');
+                } catch (Throwable $e) {
+                    $this->log('Schedule', 'clear writes best-effort failed: ' . $e->getMessage());
+                }
+            }
+        } finally {
+            $this->timeoutSec = $previousTimeout;
+        }
+
+        return $allReplies;
+    }
+
+    /**
+     * Send writes one-by-one; any JSON frame counts as ACK. Missing ACKs are tolerated (logged).
+     *
+     * @param list<array<string, mixed>> $requests
+     * @return list<array<string, mixed>>
+     */
+    private function exchangeWritesLoosely(array $requests): array
+    {
+        if ($requests === []) {
+            return [];
+        }
+        $fp = $this->connect();
+        $got = [];
+        try {
+            foreach ($requests as $idx => $req) {
+                $path = (string) (($req['entity']['path'] ?? '') ?: '?');
+                $this->log('WSS', sprintf('write %d/%d %s', $idx + 1, count($requests), $path));
+                $this->sendJson($fp, [$req]);
+                $deadline = microtime(true) + min(4.0, (float) $this->timeoutSec);
+                $acked = false;
+                $idleAfterAck = null;
+                while (microtime(true) < $deadline) {
+                    $raw = $this->recvFrame($fp, max(0.15, $deadline - microtime(true)));
+                    if ($raw === null) {
+                        if ($acked && $idleAfterAck !== null && (microtime(true) - $idleAfterAck) > 0.35) {
+                            break;
+                        }
+                        continue;
+                    }
+                    $this->log('WSS', 'write frame preview=' . substr($raw, 0, 220));
+                    $decoded = json_decode($raw, true);
+                    if (!is_array($decoded)) {
+                        // keep waiting — may be fragment
+                        continue;
+                    }
+                    foreach ($this->flattenReplyMessages($decoded) as $msg) {
+                        if ($this->isExplicitWriteFailure($msg)) {
+                            $detail = is_string($msg['error'] ?? null)
+                                ? (string) $msg['error']
+                                : 'Gateway lehnte Write ab (' . $path . ')';
+                            throw new RuntimeException($detail);
+                        }
+                        $got[] = $msg;
+                        $acked = true;
+                        $idleAfterAck = microtime(true);
+                    }
+                }
+                if (!$acked) {
+                    $this->log('WSS', sprintf('write %d/%d no ACK (continuing) %s', $idx + 1, count($requests), $path));
+                }
+                if ($idx < count($requests) - 1) {
+                    usleep(60000);
+                }
+            }
+        } finally {
+            fclose($fp);
+        }
+
+        return $got;
+    }
+
+    /** @param array<string, mixed> $msg */
+    private function isExplicitWriteFailure(array $msg): bool
+    {
+        if (array_key_exists('success', $msg) && $msg['success'] === false) {
+            return true;
+        }
+        if (array_key_exists('ok', $msg) && $msg['ok'] === false) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $replies
+     */
+    private function assertNoWriteFailures(array $replies): void
+    {
+        foreach ($replies as $msg) {
+            if ($this->isExplicitWriteFailure($msg)) {
+                $detail = is_string($msg['error'] ?? null)
+                    ? (string) $msg['error']
+                    : 'Gateway lehnte Zeitplan-Write ab';
+                throw new RuntimeException($detail);
+            }
+        }
+    }
+
+    /**
+     * Send requests and wait briefly for replies without failing on incomplete responses.
+     *
+     * @param list<array<string, mixed>> $requests
+     */
+    private function exchangeFireAndForget(array $requests, float $waitSec = 3.0): void
+    {
+        if ($requests === []) {
+            return;
+        }
+        $fp = $this->connect();
+        try {
+            $this->sendJson($fp, $requests);
+            $deadline = microtime(true) + max(0.5, $waitSec);
+            while (microtime(true) < $deadline) {
+                $raw = $this->recvFrame($fp, max(0.15, $deadline - microtime(true)));
+                if ($raw === null) {
+                    if (microtime(true) + 0.4 >= $deadline) {
+                        break;
+                    }
+                    continue;
+                }
+                $this->log('WSS', 'forget frame preview=' . substr($raw, 0, 180));
+            }
+        } finally {
+            fclose($fp);
+        }
     }
 
     /**
@@ -262,129 +536,6 @@ final class GardenaSmartClient
         );
 
         return $this->exchange([$req]);
-    }
-
-    /**
-     * Write Gen2 device schedules (lwm2mserver schedule/*).
-     * Strategy: one WSS round-trip per slot (all fields batched), then best-effort clear of unused slots.
-     *
-     * @param list<array<string, mixed>> $rules Editor rules from DeviceScheduleRules
-     * @return list<array<string, mixed>>
-     */
-    public function writeGen2Schedules(string $deviceId, array $rules): array
-    {
-        require_once __DIR__ . '/GardenaSmartSchedules.php';
-        $parts = GardenaSmartSchedules::buildGen2WriteRequests($deviceId, $rules);
-        $activeRaw = $parts['active'] ?? [];
-        $clearRaw = $parts['clear'] ?? [];
-        if ($activeRaw === [] && $clearRaw === []) {
-            throw new RuntimeException('Keine gültigen Zeitplan-Einträge zum Speichern');
-        }
-
-        $toRequests = function (array $raw) use ($deviceId): array {
-            $requests = [];
-            foreach ($raw as $item) {
-                $entity = $item['entity'] ?? [];
-                $requests[] = $this->buildRequest(
-                    (string) ($item['op'] ?? 'write'),
-                    (string) ($entity['service'] ?? 'lwm2mserver'),
-                    (string) ($entity['path'] ?? ''),
-                    is_array($item['payload'] ?? null) ? $item['payload'] : null,
-                    (string) ($entity['device'] ?? $deviceId)
-                );
-            }
-
-            return $requests;
-        };
-
-        $activeReqs = $toRequests($activeRaw);
-        $clearReqs = $toRequests($clearRaw);
-
-        // Group by schedule slot → one batch per slot (typically 5 fields)
-        $bySlot = [];
-        foreach ($activeReqs as $req) {
-            $path = (string) ($req['entity']['path'] ?? '');
-            if (preg_match('#^schedule/(\d+)/#', $path, $m)) {
-                $bySlot[$m[1]][] = $req;
-            } else {
-                $bySlot['_'][] = $req;
-            }
-        }
-
-        $this->log(
-            'Schedule',
-            'writeGen2 device=' . $deviceId
-            . ' slots=' . count($bySlot)
-            . ' activeWrites=' . count($activeReqs)
-            . ' clearWrites=' . count($clearReqs)
-        );
-
-        $previousTimeout = $this->timeoutSec;
-        $this->timeoutSec = max($previousTimeout, 20);
-        $allReplies = [];
-        try {
-            $slotIndex = 0;
-            foreach ($bySlot as $slot => $reqs) {
-                $slotIndex++;
-                $this->log('Schedule', sprintf('slot %s batch %d/%d fields=%d', (string) $slot, $slotIndex, count($bySlot), count($reqs)));
-                $replies = $this->exchange($reqs);
-                foreach ($replies as $msg) {
-                    if (($msg['success'] ?? null) !== true) {
-                        $detail = is_string($msg['error'] ?? null)
-                            ? (string) $msg['error']
-                            : 'Gateway lehnte Zeitplan-Write ab (Slot ' . $slot . ')';
-                        $this->log('Schedule', 'slot write failed: ' . $detail);
-                        throw new RuntimeException($detail);
-                    }
-                    $allReplies[] = $msg;
-                }
-                if ($slotIndex < count($bySlot)) {
-                    usleep(120000);
-                }
-            }
-            $this->log('Schedule', 'active writes OK (' . count($allReplies) . ')');
-
-            if ($clearReqs !== []) {
-                // Do not block save on clearing unused slots — send and briefly drain
-                try {
-                    $this->exchangeFireAndForget($clearReqs, 3.0);
-                    $this->log('Schedule', 'clear writes sent best-effort (' . count($clearReqs) . ')');
-                } catch (Throwable $e) {
-                    $this->log('Schedule', 'clear writes best-effort failed: ' . $e->getMessage());
-                }
-            }
-        } finally {
-            $this->timeoutSec = $previousTimeout;
-        }
-
-        return $allReplies;
-    }
-
-    /**
-     * Send requests and wait briefly for replies without failing on incomplete responses.
-     *
-     * @param list<array<string, mixed>> $requests
-     */
-    private function exchangeFireAndForget(array $requests, float $waitSec = 3.0): void
-    {
-        if ($requests === []) {
-            return;
-        }
-        $fp = $this->connect();
-        try {
-            $this->sendJson($fp, $requests);
-            $deadline = microtime(true) + max(0.5, $waitSec);
-            while (microtime(true) < $deadline) {
-                if ($this->recvFrame($fp, max(0.15, $deadline - microtime(true))) === null) {
-                    // idle — stop early if nothing more arrives
-                    if (microtime(true) + 0.4 >= $deadline) {
-                        break;
-                    }
-                }
-            }
-        } finally {
-            fclose($fp);
-        }
     }
 
     /**
