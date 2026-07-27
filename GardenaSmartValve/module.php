@@ -13,7 +13,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 7;
+    private const MODULE_BUILD = 8;
 
     public function Create(): void
     {
@@ -28,8 +28,9 @@ class GardenaSmartValve extends IPSModuleStrict
         $this->RegisterPropertyString('DeviceScheduleRules', '[]');
 
         foreach (['A', 'B'] as $side) {
+            // Preset ID only in UI; Enabled/Label/Length/Pressure/LPH kept for legacy instances + gateway export cache
             $this->RegisterPropertyBoolean('Outlet' . $side . 'Enabled', false);
-            $this->RegisterPropertyString('Outlet' . $side . 'Preset', 'builtin:custom');
+            $this->RegisterPropertyString('Outlet' . $side . 'Preset', '');
             $this->RegisterPropertyString('Outlet' . $side . 'Label', '');
             $this->RegisterPropertyString('Outlet' . $side . 'Length', '');
             $this->RegisterPropertyString('Outlet' . $side . 'Pressure', '');
@@ -96,6 +97,12 @@ class GardenaSmartValve extends IPSModuleStrict
             if (($element['type'] ?? '') === 'Select' && in_array($element['name'] ?? '', ['OutletAPreset', 'OutletBPreset'], true)) {
                 $form['elements'][$idx]['options'] = $this->presetSelectOptions();
             }
+        }
+        if ($this->ReadPropertyInteger('ValveCount') < 2) {
+            $form['elements'] = array_values(array_filter(
+                $form['elements'] ?? [],
+                static fn ($el) => ($el['name'] ?? '') !== 'OutletBPreset'
+            ));
         }
 
         return json_encode($form, JSON_UNESCAPED_UNICODE);
@@ -294,29 +301,6 @@ class GardenaSmartValve extends IPSModuleStrict
         return 'OK — Verbrauchszähler zurückgesetzt';
     }
 
-    public function ApplyOutletPreset(string $side): string
-    {
-        $side = strtoupper($side) === 'B' ? 'B' : 'A';
-        $presetId = $this->ReadPropertyString('Outlet' . $side . 'Preset');
-        foreach ($this->availablePresets() as $preset) {
-            if (($preset['id'] ?? '') !== $presetId) {
-                continue;
-            }
-            if ($presetId === 'builtin:custom') {
-                return 'Benutzerdefiniert — Werte manuell belassen';
-            }
-            IPS_SetProperty($this->InstanceID, 'Outlet' . $side . 'Label', (string) ($preset['label'] ?? ''));
-            IPS_SetProperty($this->InstanceID, 'Outlet' . $side . 'Length', (string) ($preset['length'] ?? ''));
-            IPS_SetProperty($this->InstanceID, 'Outlet' . $side . 'Pressure', (string) ($preset['pressure'] ?? ''));
-            IPS_SetProperty($this->InstanceID, 'Outlet' . $side . 'LitersPerHour', (float) ($preset['litersPerHour'] ?? 0));
-            IPS_ApplyChanges($this->InstanceID);
-
-            return 'OK — Preset übernommen';
-        }
-
-        return 'Preset nicht gefunden';
-    }
-
     /** @return array<string, mixed> */
     public function GetUsageExport(): array
     {
@@ -437,12 +421,17 @@ class GardenaSmartValve extends IPSModuleStrict
         if ($valveId === 1 && $this->ReadPropertyInteger('ValveCount') < 2) {
             return;
         }
-        $enabled = $this->ReadPropertyBoolean('Outlet' . $side . 'Enabled');
-        $lph = (float) $this->ReadPropertyFloat('Outlet' . $side . 'LitersPerHour');
+        $outlet = $this->resolveOutlet($side);
         $state = $this->loadUsageState();
         $key = strtolower($side);
         $valveState = is_array($state[$key] ?? null) ? $state[$key] : GardenaSmartWaterUsage::emptyValveState();
-        $state[$key] = GardenaSmartWaterUsage::tick($valveState, $open, $lph, $enabled, time());
+        $state[$key] = GardenaSmartWaterUsage::tick(
+            $valveState,
+            $open,
+            (float) $outlet['litersPerHour'],
+            (bool) $outlet['enabled'],
+            time()
+        );
         $this->saveUsageState($state);
         $this->writeUsageVariables($side, $state[$key]);
         $this->notifyGatewayUsage();
@@ -481,15 +470,15 @@ class GardenaSmartValve extends IPSModuleStrict
             if ($idx >= $count) {
                 break;
             }
-            $enabled = $this->ReadPropertyBoolean('Outlet' . $side . 'Enabled');
-            $lph = (float) $this->ReadPropertyFloat('Outlet' . $side . 'LitersPerHour');
+            $outlet = $this->resolveOutlet($side);
             $outlets[] = [
                 'side' => $side,
-                'enabled' => $enabled && $lph > 0,
-                'label' => $this->ReadPropertyString('Outlet' . $side . 'Label'),
-                'length' => $this->ReadPropertyString('Outlet' . $side . 'Length'),
-                'pressure' => $this->ReadPropertyString('Outlet' . $side . 'Pressure'),
-                'litersPerHour' => $lph,
+                'enabled' => (bool) $outlet['enabled'],
+                'label' => (string) $outlet['label'],
+                'length' => (string) $outlet['length'],
+                'pressure' => (string) $outlet['pressure'],
+                'litersPerHour' => (float) $outlet['litersPerHour'],
+                'presetId' => (string) $outlet['presetId'],
                 'open' => (bool) $this->GetValue('Valve' . $side . 'Open'),
                 'valveName' => (string) $this->GetValue('Valve' . $side . 'Name'),
                 'today' => (float) $this->GetValue('Usage' . $side . 'Today'),
@@ -501,6 +490,57 @@ class GardenaSmartValve extends IPSModuleStrict
         }
 
         return ['outlets' => $outlets];
+    }
+
+    /**
+     * Resolve outlet config from selected preset (source of truth).
+     *
+     * @return array{enabled:bool,presetId:string,label:string,length:string,pressure:string,litersPerHour:float}
+     */
+    private function resolveOutlet(string $side): array
+    {
+        $side = strtoupper($side) === 'B' ? 'B' : 'A';
+        $presetId = trim($this->ReadPropertyString('Outlet' . $side . 'Preset'));
+        if ($presetId !== '' && $presetId !== 'none' && $presetId !== 'builtin:custom') {
+            foreach ($this->availablePresets() as $preset) {
+                if ((string) ($preset['id'] ?? '') !== $presetId) {
+                    continue;
+                }
+                $lph = max(0.0, (float) ($preset['litersPerHour'] ?? 0));
+
+                return [
+                    'enabled' => $lph > 0,
+                    'presetId' => $presetId,
+                    'label' => (string) ($preset['label'] ?? ''),
+                    'length' => (string) ($preset['length'] ?? ''),
+                    'pressure' => (string) ($preset['pressure'] ?? ''),
+                    'litersPerHour' => $lph,
+                ];
+            }
+        }
+
+        // Legacy: older instances with "Benutzerdefiniert" + manuelle l/h
+        $legacyEnabled = $this->ReadPropertyBoolean('Outlet' . $side . 'Enabled');
+        $legacyLph = max(0.0, (float) $this->ReadPropertyFloat('Outlet' . $side . 'LitersPerHour'));
+        if ($presetId === 'builtin:custom' && $legacyEnabled && $legacyLph > 0) {
+            return [
+                'enabled' => true,
+                'presetId' => $presetId,
+                'label' => $this->ReadPropertyString('Outlet' . $side . 'Label'),
+                'length' => $this->ReadPropertyString('Outlet' . $side . 'Length'),
+                'pressure' => $this->ReadPropertyString('Outlet' . $side . 'Pressure'),
+                'litersPerHour' => $legacyLph,
+            ];
+        }
+
+        return [
+            'enabled' => false,
+            'presetId' => $presetId,
+            'label' => '',
+            'length' => '',
+            'pressure' => '',
+            'litersPerHour' => 0.0,
+        ];
     }
 
     /** @return list<array{id:string,label:string,length:string,pressure:string,litersPerHour:float}> */
@@ -526,16 +566,34 @@ class GardenaSmartValve extends IPSModuleStrict
     /** @return list<array{caption:string,value:string}> */
     private function presetSelectOptions(): array
     {
-        $options = [];
+        $options = [
+            ['caption' => '— Kein Verbrauch —', 'value' => ''],
+        ];
         foreach ($this->availablePresets() as $preset) {
-            $cap = (string) ($preset['label'] ?? '');
+            $id = (string) ($preset['id'] ?? '');
+            if ($id === '' || $id === 'builtin:custom') {
+                continue;
+            }
+            $cap = (string) ($preset['label'] ?? $id);
+            $extra = [];
+            $length = trim((string) ($preset['length'] ?? ''));
+            $pressure = trim((string) ($preset['pressure'] ?? ''));
             $lph = (float) ($preset['litersPerHour'] ?? 0);
+            if ($length !== '') {
+                $extra[] = $length;
+            }
+            if ($pressure !== '') {
+                $extra[] = $pressure;
+            }
             if ($lph > 0) {
-                $cap .= ' (' . rtrim(rtrim(number_format($lph, 1, ',', ''), '0'), ',') . ' l/h)';
+                $extra[] = rtrim(rtrim(number_format($lph, 1, ',', ''), '0'), ',') . ' l/h';
+            }
+            if ($extra !== []) {
+                $cap .= ' (' . implode(', ', $extra) . ')';
             }
             $options[] = [
                 'caption' => $cap,
-                'value' => (string) ($preset['id'] ?? ''),
+                'value' => $id,
             ];
         }
 

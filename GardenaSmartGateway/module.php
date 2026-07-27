@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 5;
+    private const MODULE_BUILD = 6;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -459,55 +459,76 @@ class GardenaSmartGateway extends IPSModuleStrict
                 // keep 1
             }
             $activeOutlets = [];
-            foreach (['A', 'B'] as $idx => $side) {
-                if ($idx >= $valveCount) {
-                    break;
+            // Prefer live export (resolves preset → l/h); fall back to stored properties
+            $exported = null;
+            try {
+                if (function_exists('GSVAL_GetUsageExport')) {
+                    $exported = GSVAL_GetUsageExport($childId);
                 }
-                try {
-                    $enabled = (bool) IPS_GetProperty($childId, 'Outlet' . $side . 'Enabled');
-                    $lph = (float) IPS_GetProperty($childId, 'Outlet' . $side . 'LitersPerHour');
-                } catch (Throwable) {
-                    continue;
-                }
-                if (!$enabled || $lph <= 0) {
-                    continue;
-                }
-                $outlet = [
-                    'side' => $side,
-                    'enabled' => true,
-                    'label' => (string) @IPS_GetProperty($childId, 'Outlet' . $side . 'Label'),
-                    'length' => (string) @IPS_GetProperty($childId, 'Outlet' . $side . 'Length'),
-                    'pressure' => (string) @IPS_GetProperty($childId, 'Outlet' . $side . 'Pressure'),
-                    'litersPerHour' => $lph,
-                    'open' => false,
-                    'valveName' => '',
-                    'today' => 0.0,
-                    'week' => 0.0,
-                    'year' => 0.0,
-                    'total' => 0.0,
-                    'session' => 0.0,
-                ];
-                try {
-                    $openId = @IPS_GetObjectIDByIdent('Valve' . $side . 'Open', $childId);
-                    if ($openId) {
-                        $outlet['open'] = (bool) GetValue($openId);
+            } catch (Throwable) {
+                $exported = null;
+            }
+            if (is_array($exported) && isset($exported['outlets']) && is_array($exported['outlets'])) {
+                foreach ($exported['outlets'] as $outlet) {
+                    if (!is_array($outlet) || empty($outlet['enabled'])) {
+                        continue;
                     }
-                    $nameId = @IPS_GetObjectIDByIdent('Valve' . $side . 'Name', $childId);
-                    if ($nameId) {
-                        $outlet['valveName'] = (string) GetValue($nameId);
+                    $activeOutlets[] = $outlet;
+                    foreach (['today', 'week', 'year', 'total', 'session'] as $k) {
+                        $totals[$k] = round($totals[$k] + (float) ($outlet[$k] ?? 0), 3);
                     }
-                    foreach (['Today' => 'today', 'Week' => 'week', 'Year' => 'year', 'Total' => 'total', 'Session' => 'session'] as $suffix => $key) {
-                        $vid = @IPS_GetObjectIDByIdent('Usage' . $side . $suffix, $childId);
-                        if ($vid) {
-                            $outlet[$key] = (float) GetValue($vid);
+                }
+            } else {
+                foreach (['A', 'B'] as $idx => $side) {
+                    if ($idx >= $valveCount) {
+                        break;
+                    }
+                    try {
+                        $enabled = (bool) IPS_GetProperty($childId, 'Outlet' . $side . 'Enabled');
+                        $lph = (float) IPS_GetProperty($childId, 'Outlet' . $side . 'LitersPerHour');
+                    } catch (Throwable) {
+                        continue;
+                    }
+                    if (!$enabled || $lph <= 0) {
+                        continue;
+                    }
+                    $outlet = [
+                        'side' => $side,
+                        'enabled' => true,
+                        'label' => (string) @IPS_GetProperty($childId, 'Outlet' . $side . 'Label'),
+                        'length' => (string) @IPS_GetProperty($childId, 'Outlet' . $side . 'Length'),
+                        'pressure' => (string) @IPS_GetProperty($childId, 'Outlet' . $side . 'Pressure'),
+                        'litersPerHour' => $lph,
+                        'open' => false,
+                        'valveName' => '',
+                        'today' => 0.0,
+                        'week' => 0.0,
+                        'year' => 0.0,
+                        'total' => 0.0,
+                        'session' => 0.0,
+                    ];
+                    try {
+                        $openId = @IPS_GetObjectIDByIdent('Valve' . $side . 'Open', $childId);
+                        if ($openId) {
+                            $outlet['open'] = (bool) GetValue($openId);
                         }
+                        $nameId = @IPS_GetObjectIDByIdent('Valve' . $side . 'Name', $childId);
+                        if ($nameId) {
+                            $outlet['valveName'] = (string) GetValue($nameId);
+                        }
+                        foreach (['Today' => 'today', 'Week' => 'week', 'Year' => 'year', 'Total' => 'total', 'Session' => 'session'] as $suffix => $key) {
+                            $vid = @IPS_GetObjectIDByIdent('Usage' . $side . $suffix, $childId);
+                            if ($vid) {
+                                $outlet[$key] = (float) GetValue($vid);
+                            }
+                        }
+                    } catch (Throwable) {
+                        // ignore missing vars on old instances
                     }
-                } catch (Throwable) {
-                    // ignore missing vars on old instances
-                }
-                $activeOutlets[] = $outlet;
-                foreach (['today', 'week', 'year', 'total', 'session'] as $k) {
-                    $totals[$k] = round($totals[$k] + (float) ($outlet[$k] ?? 0), 3);
+                    $activeOutlets[] = $outlet;
+                    foreach (['today', 'week', 'year', 'total', 'session'] as $k) {
+                        $totals[$k] = round($totals[$k] + (float) ($outlet[$k] ?? 0), 3);
+                    }
                 }
             }
             if ($activeOutlets === []) {

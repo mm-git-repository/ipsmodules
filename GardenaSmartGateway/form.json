@@ -48,7 +48,7 @@
         {
             "type": "Label",
             "name": "FlowPresetHint",
-            "caption": "Durchfluss-Presets (zentral): werden in den Valve-Modulen zur Auswahl angeboten. Basis-Presets (Perl-Regner etc.) sind fest eingebaut."
+            "caption": "Durchfluss-Presets (zentral): Basis-Presets (Perl-Regner etc.) sind fest eingebaut; eigene Einträge erscheinen im Valve-Modul nur als Auswahl."
         },
         {
             "type": "List",
