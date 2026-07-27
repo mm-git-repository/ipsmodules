@@ -1,0 +1,25 @@
+{
+    "translations": {
+        "en": {
+            "Installierte Modulversion": "Installed module version",
+            "Aktiv": "Active",
+            "Gateway Host (IP oder Hostname)": "Gateway host (IP or hostname)",
+            "Passwort (erste 8 Zeichen der Geräte-ID)": "Password (first 8 characters of device ID)",
+            "WebSocket-Port": "WebSocket port",
+            "TLS-Zertifikat ignorieren (Self-Signed)": "Ignore TLS certificate (self-signed)",
+            "Aktualisierungsintervall (Sekunden, mindestens 30)": "Update interval (seconds, minimum 30)",
+            "Verbindung testen": "Test connection",
+            "Geräte scannen / anlegen": "Scan / create devices",
+            "Jetzt aktualisieren": "Update now",
+            "Verbunden": "Connected",
+            "Inaktiv": "Inactive",
+            "Konfiguration ungültig": "Invalid configuration",
+            "Gateway nicht erreichbar": "Gateway unreachable",
+            "Erreichbar": "Reachable",
+            "Letzter Fehler": "Last error",
+            "Geräteanzahl": "Device count",
+            "Zeitplan-Übersicht": "Schedule overview",
+            "Modulversion": "Module version"
+        }
+    }
+}

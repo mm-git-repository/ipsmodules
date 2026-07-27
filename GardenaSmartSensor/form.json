@@ -1,0 +1,56 @@
+{
+    "elements": [
+        {
+            "type": "Label",
+            "name": "ModuleVersionInfo",
+            "caption": "Installierte Modulversion"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "DeviceId",
+            "caption": "Geräte-ID"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "ModelNumber",
+            "caption": "Modellnummer"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "Generation",
+            "caption": "Generation",
+            "digits": 0,
+            "minimum": 1,
+            "maximum": 2
+        },
+        {
+            "type": "CheckBox",
+            "name": "ScheduleEnabled",
+            "caption": "IPS-Zeitpläne aktiv (nur Übersicht, Sensor steuert nicht)"
+        },
+        {
+            "type": "List",
+            "name": "ScheduleRules",
+            "caption": "IPS-Zeitpläne (optional, nur Anzeige am Gateway)",
+            "rowCount": 2,
+            "add": true,
+            "delete": true,
+            "columns": [
+                { "caption": "Aktiv", "name": "active", "width": "50px", "edit": { "type": "CheckBox" }, "add": false, "save": true },
+                { "caption": "Start", "name": "start", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "00:00", "save": true },
+                { "caption": "Ende", "name": "end", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "00:00", "save": true },
+                { "caption": "Mo", "name": "mo", "width": "40px", "edit": { "type": "CheckBox" }, "add": false, "save": true },
+                { "caption": "Di", "name": "tu", "width": "40px", "edit": { "type": "CheckBox" }, "add": false, "save": true },
+                { "caption": "Mi", "name": "we", "width": "40px", "edit": { "type": "CheckBox" }, "add": false, "save": true },
+                { "caption": "Do", "name": "th", "width": "40px", "edit": { "type": "CheckBox" }, "add": false, "save": true },
+                { "caption": "Fr", "name": "fr", "width": "40px", "edit": { "type": "CheckBox" }, "add": false, "save": true },
+                { "caption": "Sa", "name": "sa", "width": "40px", "edit": { "type": "CheckBox" }, "add": false, "save": true },
+                { "caption": "So", "name": "so", "width": "40px", "edit": { "type": "CheckBox" }, "add": false, "save": true }
+            ]
+        }
+    ],
+    "status": [
+        { "code": 102, "icon": "active", "caption": "Aktiv" },
+        { "code": 104, "icon": "inactive", "caption": "Kein Parent" }
+    ]
+}

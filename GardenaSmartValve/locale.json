@@ -1,0 +1,14 @@
+{
+    "translations": {
+        "en": {
+            "Installierte Modulversion": "Installed module version",
+            "Geräte-ID": "Device ID",
+            "Modellnummer": "Model number",
+            "IPS-Zeitpläne aktiv": "IPS schedules enabled",
+            "Ventil A starten": "Start valve A",
+            "Ventil A stoppen": "Stop valve A",
+            "Ventil B starten": "Start valve B",
+            "Ventil B stoppen": "Stop valve B"
+        }
+    }
+}

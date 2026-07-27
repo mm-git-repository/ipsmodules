@@ -1,0 +1,18 @@
+{
+    "id": "{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C1D}",
+    "name": "GardenaSmartGateway",
+    "type": 2,
+    "vendor": "MM-Modules",
+    "aliases": [
+        "Gardena Smart Gateway"
+    ],
+    "url": "https://github.com/mm-git-repository/ipsmodule.git",
+    "parentRequirements": [],
+    "childRequirements": [
+        "{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C30}"
+    ],
+    "implemented": [
+        "{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C31}"
+    ],
+    "prefix": "GSGW"
+}

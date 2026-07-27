@@ -11,25 +11,12 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 23;
+    private const MODULE_BUILD = 18;
 
-    private const IS_CREATING = 101;
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
-    private const IS_NOTCREATED = 105;
     private const IS_INVALID_HOST = 201;
     private const IS_UNREACHABLE = 202;
-
-    private const STARTUP_GUARD_MS = 30000;
-    private const STARTUP_GUARD_FAST_MS = 10000;
-    private const CONFIG_VALIDATION_GRACE_SEC = 60;
-
-    private const IPS_KERNEL_MESSAGE = 10100;
-    private const KR_INIT_RUNLEVEL = 10102;
-    private const KR_READY_RUNLEVEL = 10103;
-    private const IPS_KERNEL_STARTED_MESSAGE = 10001;
-
-    private bool $applyChangesInProgress = false;
 
     private const UPDATE_INTERVAL_DEFAULT_SEC = 30;
     private const UPDATE_INTERVAL_MIN_SEC = 15;
@@ -82,13 +69,10 @@ class WifiWhirl extends IPSModuleStrict
 
         $this->RegisterTimer('Update', 0, 'WWHL_UpdateValues($_IPS[\'TARGET\']);');
         $this->RegisterTimer('Automation', 0, 'WWHL_RunAutomation($_IPS[\'TARGET\']);');
-        $this->RegisterTimer('StartupGuard', self::STARTUP_GUARD_FAST_MS, 'WWHL_StartupGuardRecovery($_IPS[\'TARGET\']);');
 
         if (method_exists($this, 'SetVisualizationType')) {
             $this->SetVisualizationType(1);
         }
-
-        $this->ensureKernelLifecycleMessages();
     }
 
     public function Migrate(string $JSONData): string
@@ -214,7 +198,6 @@ class WifiWhirl extends IPSModuleStrict
         }
 
         $this->ApplyChanges();
-        $this->savePersistentConfigurationBackup($this->captureCurrentPersistentConfiguration());
 
         return true;
     }
@@ -277,55 +260,18 @@ class WifiWhirl extends IPSModuleStrict
 
     public function ApplyChanges(): void
     {
-        if ($this->applyChangesInProgress) {
-            return;
-        }
-        $this->applyChangesInProgress = true;
-        try {
-            $this->runApplyChangesBody();
-        } finally {
-            $this->applyChangesInProgress = false;
-        }
-    }
-
-    private function runApplyChangesBody(): void
-    {
         $snapshot = $this->takePersistentConfigurationSnapshot();
         $this->ensureConfigurationDefaults();
-        $invokeParent = $this->shouldInvokeParentApplyChanges();
-        if ($invokeParent) {
+        parent::ApplyChanges();
+        $restored = $this->restorePersistentConfigurationFromSnapshot($snapshot);
+        if ($restored > 0) {
+            $this->SendDebug(
+                'Konfiguration',
+                $restored . ' gespeicherte Einstellung(en) nach IPS-Neustart wiederhergestellt.',
+                0,
+            );
             parent::ApplyChanges();
-            $restoredFromSnapshot = $this->restorePersistentConfigurationFromSnapshot($snapshot);
-            if ($restoredFromSnapshot > 0) {
-                parent::ApplyChanges();
-                $this->SendDebug(
-                    'Konfiguration',
-                    $restoredFromSnapshot . ' Einstellung(en) aus Konfigurations-Snapshot wiederhergestellt.',
-                    0,
-                );
-            }
-        } else {
-            $this->SendDebug(
-                'Konfiguration',
-                'parent::ApplyChanges() übersprungen (Backup vorhanden, keine offenen Konfig-Änderungen).',
-                0,
-            );
         }
-
-        $restoredFromBackup = $this->restoreFromPersistentBackup();
-        if ($restoredFromBackup > 0) {
-            if ($invokeParent) {
-                parent::ApplyChanges();
-            } else {
-                $this->applyRestoredConfiguration();
-            }
-            $this->SendDebug(
-                'Konfiguration',
-                $restoredFromBackup . ' Einstellung(en) aus Backup-Datei wiederhergestellt.',
-                0,
-            );
-        }
-        $this->syncAutomationEnabledFromPersisted();
 
         $this->sanitizeConfigurationProperties();
 
@@ -342,7 +288,6 @@ class WifiWhirl extends IPSModuleStrict
         $this->updateInstanceStatus();
         $this->SetSummary($this->buildSummary());
         $this->savePersistentConfigurationBackup($this->captureCurrentPersistentConfiguration());
-        $this->ensureKernelLifecycleMessages();
     }
 
     public function GetConfigurationForm(): string
@@ -431,7 +376,7 @@ class WifiWhirl extends IPSModuleStrict
             $this->SetValue($Ident, $Value);
         }
 
-        if ($this->readAutomationEnabledProperty() && in_array($Ident, self::MANUAL_OVERRIDE_IDENTS, true)) {
+        if ($this->ReadPropertyBoolean('AutomationEnabled') && in_array($Ident, self::MANUAL_OVERRIDE_IDENTS, true)) {
             $this->applyManualOverride($Ident);
             $this->syncAutomationManualPauseVariable();
         }
@@ -512,51 +457,6 @@ class WifiWhirl extends IPSModuleStrict
         return $this->runButtonCommand(WifiWhirlEntities::buttonCommand(6), 'WifiWhirl-Neustart gesendet');
     }
 
-    public function StartupGuardRecovery(): void
-    {
-        if (!$this->ReadPropertyBoolean('Active')) {
-            return;
-        }
-        if (!$this->isIpsKernelReady()) {
-            $this->armStartupGuardTimer(true);
-
-            return;
-        }
-        $this->markConfigValidationGrace();
-        $restored = $this->restoreFromPersistentBackup();
-        if ($restored > 0) {
-            $this->applyRestoredConfiguration();
-            $this->SendDebug(
-                'Konfiguration',
-                $restored . ' Einstellung(en) aus Backup wiederhergestellt (StartupGuard).',
-                0,
-            );
-        }
-        $this->syncAutomationEnabledFromPersisted();
-        if ($this->handlePostKernelRestartIfNeeded()) {
-            $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
-
-            return;
-        }
-        if ($this->needsRecoveryAfterKernelRestart()) {
-            $this->configureTimer();
-            $this->configureAutomationTimer();
-            $this->RunAutomation();
-            $this->SendDebug('Start', 'Timer/Automatisierung nach IPS-Neustart reaktiviert.', 0);
-        }
-        $this->ensureKernelLifecycleMessages();
-        $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
-    }
-
-    public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
-    {
-        unset($TimeStamp);
-        if ($SenderID !== 0) {
-            return;
-        }
-        $this->handleKernelMessage($Message, $Data);
-    }
-
     public function RunAutomation(): void
     {
         $this->clearExpiredManualOverrides(time());
@@ -564,7 +464,7 @@ class WifiWhirl extends IPSModuleStrict
         $surplusW = $this->readPvSurplusW();
         $this->SetValue('AutomationPvSurplus', $surplusW);
 
-        if (!$this->readAutomationEnabledProperty()) {
+        if (!$this->ReadPropertyBoolean('AutomationEnabled')) {
             $this->SetValue('AutomationStatus', 'Automatisierung deaktiviert');
             $this->SetValue('AutomationPvGateOpen', false);
             $this->SetValue('AutomationPumpDesired', false);
@@ -673,27 +573,12 @@ class WifiWhirl extends IPSModuleStrict
 
         IPS_Sleep(250);
         $this->UpdateValues();
-
-        $driftMessages = $this->detectAutomationStateDrift(
-            $rules,
-            $now,
-            $result['pump'],
-            $result['heater'],
-            $result['pumpWindowActive'],
-            $result['heaterWindowActive'],
-        );
-        if ($driftMessages !== []) {
-            $status .= ' | ' . implode(' | ', $driftMessages);
-            $this->SetValue('AutomationStatus', $status);
-        }
-
         $this->syncAutomationManualPauseVariable();
     }
 
     public function ClearAutomationOverride(): string
     {
         $this->clearAutomationOverrideBuffers();
-        $this->resetAutomationLastCommandBuffers();
         $this->RunAutomation();
         $this->syncAutomationManualPauseVariable();
 
@@ -704,67 +589,6 @@ class WifiWhirl extends IPSModuleStrict
     {
         $this->SetBuffer('AutoOverridePumpUntil', '0');
         $this->SetBuffer('AutoOverrideHeaterUntil', '0');
-    }
-
-    private function resetAutomationLastCommandBuffers(): void
-    {
-        $this->SetBuffer('AutoLastPump', '0');
-        $this->SetBuffer('AutoLastHeater', '0');
-    }
-
-    /**
-     * @param list<array<string, mixed>> $rules
-     * @return list<string>
-     */
-    private function detectAutomationStateDrift(
-        array $rules,
-        DateTimeImmutable $now,
-        bool $desiredPump,
-        bool $desiredHeater,
-        bool $pumpWindowActive,
-        bool $heaterWindowActive,
-    ): array {
-        $nowUnix = (int) $now->getTimestamp();
-        $messages = [];
-
-        if ($pumpWindowActive && !$this->isManualOverrideActive('pump', $nowUnix)) {
-            $actualPump = $this->readAutomationSwitchValue('Pump');
-            if ($actualPump !== null && $actualPump !== $desiredPump) {
-                $end = WifiWhirlAutomation::activeWindowEndUnix($rules, WifiWhirlAutomation::TYPE_PUMP, $now);
-                if ($end !== null && $end > $nowUnix) {
-                    $this->SetBuffer('AutoOverridePumpUntil', (string) $end);
-                    $this->SetBuffer('AutoLastPump', $actualPump ? '1' : '0');
-                    $messages[] = $desiredPump
-                        ? 'Pumpe: Soll an, Ist aus — Pause bis ' . date('H:i', $end)
-                        : 'Pumpe: Soll aus, Ist an — Pause bis ' . date('H:i', $end);
-                }
-            }
-        }
-
-        if ($heaterWindowActive && !$this->isManualOverrideActive('heater', $nowUnix)) {
-            $actualHeater = $this->readAutomationSwitchValue('Heater');
-            if ($actualHeater !== null && $actualHeater !== $desiredHeater) {
-                $end = WifiWhirlAutomation::activeWindowEndUnix($rules, WifiWhirlAutomation::TYPE_HEATER, $now);
-                if ($end !== null && $end > $nowUnix) {
-                    $this->SetBuffer('AutoOverrideHeaterUntil', (string) $end);
-                    $this->SetBuffer('AutoLastHeater', $actualHeater ? '1' : '0');
-                    $messages[] = $desiredHeater
-                        ? 'Heizung: Soll an, Ist aus — Pause bis ' . date('H:i', $end)
-                        : 'Heizung: Soll aus, Ist an — Pause bis ' . date('H:i', $end);
-                }
-            }
-        }
-
-        return $messages;
-    }
-
-    private function readAutomationSwitchValue(string $ident): ?bool
-    {
-        try {
-            return (bool) $this->GetValue($ident);
-        } catch (Throwable) {
-            return null;
-        }
     }
 
     private function prepareAutomationResume(): void
@@ -778,7 +602,7 @@ class WifiWhirl extends IPSModuleStrict
 
     private function handleAutomationEnabledTransition(): void
     {
-        $enabled = $this->readAutomationEnabledProperty();
+        $enabled = $this->ReadPropertyBoolean('AutomationEnabled');
         $raw = $this->GetBuffer('AutoWasAutomationEnabled');
         if ($raw === false || $raw === '') {
             $this->SetBuffer('AutoWasAutomationEnabled', $enabled ? '1' : '0');
@@ -902,7 +726,7 @@ class WifiWhirl extends IPSModuleStrict
         ?array $heaterPropertyRows = null,
     ): array {
         return [
-            'enabled' => $enabled ?? $this->readAutomationEnabledProperty(),
+            'enabled' => $enabled ?? $this->ReadPropertyBoolean('AutomationEnabled'),
             'status' => $this->getAutomationStatusSafe(),
             'pumpRules' => WifiWhirlRuleEditor::editorRowsFromProperty(
                 $pumpPropertyRows ?? $this->readRulesPropertyRaw('AutomationPumpRules'),
@@ -913,8 +737,6 @@ class WifiWhirl extends IPSModuleStrict
                 true,
             ),
             'manualPause' => $this->isAutomationManualPauseActive(),
-            'pvGateOpen' => $this->getAutomationPvGateOpenSafe(),
-            'pvSurplus' => $this->getAutomationPvSurplusSafe(),
             'message' => $message ?? '',
             'messageOk' => $messageOk,
         ];
@@ -999,7 +821,6 @@ class WifiWhirl extends IPSModuleStrict
         } else {
             $this->ApplyChanges();
         }
-        $this->savePersistentConfigurationBackup($this->captureCurrentPersistentConfiguration());
         $this->configureAutomationTimer();
         $this->pushEditorVisualization($this->buildEditorPayload());
     }
@@ -1050,26 +871,6 @@ class WifiWhirl extends IPSModuleStrict
             return (string) $this->GetValue('AutomationStatus');
         } catch (Throwable) {
             return '';
-        }
-    }
-
-    private function getAutomationPvGateOpenSafe(): bool
-    {
-        try {
-            return (bool) $this->GetValue('AutomationPvGateOpen');
-        } catch (Throwable) {
-            return false;
-        }
-    }
-
-    private function getAutomationPvSurplusSafe(): float
-    {
-        try {
-            $value = $this->GetValue('AutomationPvSurplus');
-
-            return is_numeric($value) ? (float) $value : 0.0;
-        } catch (Throwable) {
-            return 0.0;
         }
     }
 
@@ -1204,7 +1005,7 @@ class WifiWhirl extends IPSModuleStrict
         $interval = max(self::AUTOMATION_INTERVAL_MIN_SEC, (int) $this->ReadPropertyInteger('AutomationIntervalSec'));
         if (
             $this->ReadPropertyBoolean('Active')
-            && $this->readAutomationEnabledProperty()
+            && $this->ReadPropertyBoolean('AutomationEnabled')
             && $this->readHostProperty() !== ''
         ) {
             $this->SetTimerInterval('Automation', $interval * 1000);
@@ -1508,72 +1309,6 @@ class WifiWhirl extends IPSModuleStrict
         return '';
     }
 
-    private function readAutomationEnabledProperty(): bool
-    {
-        if ($this->ReadPropertyBoolean('AutomationEnabled')) {
-            return true;
-        }
-
-        if ($this->readAutomationEnabledFromPersistedOnly()) {
-            return true;
-        }
-
-        $backup = $this->loadPersistentConfigurationBackup();
-        if (
-            $backup !== null
-            && array_key_exists('AutomationEnabled', $backup)
-            && (bool) $backup['AutomationEnabled']
-        ) {
-            return true;
-        }
-
-        return false;
-    }
-
-    private function readAutomationEnabledFromPersistedOnly(): bool
-    {
-        $persisted = $this->getPersistedConfigurationValues();
-        if ($persisted !== null && array_key_exists('AutomationEnabled', $persisted)) {
-            return (bool) $persisted['AutomationEnabled'];
-        }
-
-        return false;
-    }
-
-    private function syncAutomationEnabledFromPersisted(): bool
-    {
-        if ($this->ReadPropertyBoolean('AutomationEnabled')) {
-            return false;
-        }
-        if (!$this->readAutomationEnabledFromPersistedOnly()) {
-            return false;
-        }
-        if (!function_exists('IPS_SetProperty')) {
-            return false;
-        }
-
-        IPS_SetProperty($this->InstanceID, 'AutomationEnabled', true);
-        $this->applyRestoredConfiguration();
-        $this->configureAutomationTimer();
-        $this->handleAutomationEnabledTransition();
-        $this->SendDebug(
-            'Konfiguration',
-            'AutomationEnabled aus persistierter Konfiguration reaktiviert (Runtime war false).',
-            0,
-        );
-
-        return true;
-    }
-
-    private function applyRestoredConfiguration(): void
-    {
-        if (!function_exists('IPS_ApplyChanges')) {
-            return;
-        }
-
-        IPS_ApplyChanges($this->InstanceID);
-    }
-
     private function readPvSurplusVarId(): int
     {
         $current = 0;
@@ -1587,22 +1322,25 @@ class WifiWhirl extends IPSModuleStrict
             $current = (int) $this->ReadPropertyInteger('PvSurplusVar');
         }
         if ($current > 0) {
-            return $current;
+            if (!function_exists('IPS_VariableExists') || IPS_VariableExists($current)) {
+                return $current;
+            }
+
+            return 0;
         }
 
         $persisted = $this->getPersistedConfigurationValues();
         if ($persisted !== null && array_key_exists('PvSurplusVar', $persisted)) {
             $current = $this->coerceVariableIdFromStoredValue($persisted['PvSurplusVar']);
-            if ($current > 0) {
+            if ($current > 0 && $this->isValidPvSurplusVarId($persisted['PvSurplusVar'])) {
                 return $current;
             }
         }
 
         $backup = $this->loadPersistentConfigurationBackup();
         if ($backup !== null && array_key_exists('PvSurplusVar', $backup)) {
-            $current = $this->coerceVariableIdFromStoredValue($backup['PvSurplusVar']);
-            if ($current > 0) {
-                return $current;
+            if ($this->isValidPvSurplusVarId($backup['PvSurplusVar'])) {
+                return $this->coerceVariableIdFromStoredValue($backup['PvSurplusVar']);
             }
         }
 
@@ -1640,13 +1378,7 @@ class WifiWhirl extends IPSModuleStrict
             }
             if ($key === 'PvSurplusVar') {
                 $id = $this->coerceVariableIdFromStoredValue($config[$key]);
-                if ($id <= 0) {
-                    continue;
-                }
-            }
-            if ($key === 'AutomationEnabled') {
-                $enabled = (bool) $config[$key];
-                if (!$enabled && $this->readAutomationEnabledFromPersistedOnly()) {
+                if ($id <= 0 || !$this->isValidPvSurplusVarId($config[$key])) {
                     continue;
                 }
             }
@@ -1690,7 +1422,7 @@ class WifiWhirl extends IPSModuleStrict
         foreach (self::PERSISTENT_CONFIGURATION_KEYS as $key) {
             $config[$key] = match ($key) {
                 'Host' => $this->readHostProperty(),
-                'AutomationEnabled' => $this->readAutomationEnabledProperty(),
+                'AutomationEnabled' => $this->ReadPropertyBoolean('AutomationEnabled'),
                 'AutomationPumpRules' => $this->readRulesPropertyRaw('AutomationPumpRules'),
                 'AutomationHeaterRules' => $this->readRulesPropertyRaw('AutomationHeaterRules'),
                 'PvSurplusVar' => $this->readPvSurplusVarId(),
@@ -1826,12 +1558,6 @@ class WifiWhirl extends IPSModuleStrict
         if (!function_exists('IPS_SetProperty')) {
             return;
         }
-        if ($this->isInConfigValidationGrace()) {
-            return;
-        }
-        if (!function_exists('IPS_HasChanges') || !IPS_HasChanges($this->InstanceID)) {
-            return;
-        }
 
         $pvId = (int) $this->ReadPropertyInteger('PvSurplusVar');
         if ($pvId <= 0) {
@@ -1881,17 +1607,12 @@ class WifiWhirl extends IPSModuleStrict
     private function shouldRestorePropertyFromSnapshot(string $key, mixed $stored): bool
     {
         if ($key === 'Host') {
-            $current = trim($this->ReadPropertyString('Host'));
-            $storedHost = trim((string) $stored);
-
-            return $storedHost !== '' && ($current === '' || $current !== $storedHost);
+            return trim($this->ReadPropertyString('Host')) === '' && trim((string) $stored) !== '';
         }
 
         if ($key === 'PvSurplusVar') {
-            $current = (int) $this->ReadPropertyInteger('PvSurplusVar');
-            $storedId = $this->coerceVariableIdFromStoredValue($stored);
-
-            return $storedId > 0 && ($current <= 0 || $current !== $storedId);
+            return (int) $this->ReadPropertyInteger('PvSurplusVar') <= 0
+                && $this->isValidPvSurplusVarId($stored);
         }
 
         if ($key === 'AutomationPumpRules' || $key === 'AutomationHeaterRules') {
@@ -1900,10 +1621,7 @@ class WifiWhirl extends IPSModuleStrict
         }
 
         if ($key === 'AutomationEnabled') {
-            $current = $this->ReadPropertyBoolean('AutomationEnabled');
-            $storedBool = (bool) $stored;
-
-            return !$current && $storedBool;
+            return !$this->ReadPropertyBoolean('AutomationEnabled') && (bool) $stored;
         }
 
         return false;
@@ -1923,280 +1641,6 @@ class WifiWhirl extends IPSModuleStrict
         }
 
         return max(0, (int) $stored);
-    }
-
-    private function getInstanceStatus(): int
-    {
-        if (!function_exists('IPS_GetInstance')) {
-            return self::IS_ACTIVE;
-        }
-
-        return (int) (IPS_GetInstance($this->InstanceID)['InstanceStatus'] ?? 0);
-    }
-
-    private function shouldInvokeParentApplyChanges(): bool
-    {
-        $status = $this->getInstanceStatus();
-        if ($status === self::IS_CREATING || $status === self::IS_NOTCREATED) {
-            return true;
-        }
-        if (function_exists('IPS_HasChanges') && IPS_HasChanges($this->InstanceID)) {
-            return true;
-        }
-
-        return !$this->hasUsablePersistentConfigurationBackup();
-    }
-
-    private function hasUsablePersistentConfigurationBackup(): bool
-    {
-        $backup = $this->loadPersistentConfigurationBackup();
-        if ($backup === null || $backup === []) {
-            return false;
-        }
-
-        return isset($backup['Host']) && trim((string) $backup['Host']) !== '';
-    }
-
-    private function restoreFromPersistentBackup(): int
-    {
-        $backup = $this->loadPersistentConfigurationBackup();
-        if ($backup === null || $backup === []) {
-            return 0;
-        }
-
-        return $this->restorePersistentConfigurationFromSnapshot($backup);
-    }
-
-    private function markConfigValidationGrace(): void
-    {
-        $this->SetBuffer('ConfigGraceUntil', (string) (time() + self::CONFIG_VALIDATION_GRACE_SEC));
-    }
-
-    private function isInConfigValidationGrace(): bool
-    {
-        $untilRaw = $this->GetBuffer('ConfigGraceUntil');
-        if (is_numeric($untilRaw) && time() < (int) $untilRaw) {
-            return true;
-        }
-        $start = $this->getKernelStartTime();
-        if ($start > 0) {
-            return (time() - $start) <= self::CONFIG_VALIDATION_GRACE_SEC;
-        }
-
-        return $this->needsRecoveryAfterKernelRestart();
-    }
-
-    private function getKernelStartTime(): int
-    {
-        if (!function_exists('IPS_GetKernelStartTime')) {
-            return 0;
-        }
-
-        return (int) IPS_GetKernelStartTime();
-    }
-
-    private function isIpsKernelReady(): bool
-    {
-        if (!function_exists('IPS_GetKernelRunlevel')) {
-            return true;
-        }
-
-        return IPS_GetKernelRunlevel() >= $this->getKrReadyRunlevel();
-    }
-
-    private function getIpsKernelMessageId(): int
-    {
-        return defined('IPS_KERNELMESSAGE') ? (int) IPS_KERNELMESSAGE : self::IPS_KERNEL_MESSAGE;
-    }
-
-    private function getKrReadyRunlevel(): int
-    {
-        return defined('KR_READY') ? (int) KR_READY : self::KR_READY_RUNLEVEL;
-    }
-
-    private function getKrInitRunlevel(): int
-    {
-        return defined('KR_INIT') ? (int) KR_INIT : self::KR_INIT_RUNLEVEL;
-    }
-
-    private function ensureKernelLifecycleMessages(): void
-    {
-        $this->registerKernelMessageIfMissing($this->getIpsKernelMessageId());
-        $this->armStartupGuardTimer();
-    }
-
-    private function registerKernelMessageIfMissing(int $messageId): void
-    {
-        $list = $this->GetMessageList();
-        if (is_array($list) && isset($list[0]) && is_array($list[0])) {
-            if (in_array($messageId, $list[0], true)) {
-                return;
-            }
-        }
-        $this->RegisterMessage(0, $messageId);
-    }
-
-    private function armStartupGuardTimer(bool $forceFast = false): void
-    {
-        if (!$this->ReadPropertyBoolean('Active')) {
-            return;
-        }
-        $ms = $forceFast ? self::STARTUP_GUARD_FAST_MS : self::STARTUP_GUARD_MS;
-        if ($forceFast || $this->GetTimerInterval('StartupGuard') <= 0) {
-            $this->setTimerIntervalSafe('StartupGuard', $ms);
-        }
-    }
-
-    private function setTimerIntervalSafe(string $ident, int $intervalMs): void
-    {
-        try {
-            $this->SetTimerInterval($ident, $intervalMs);
-        } catch (Throwable $e) {
-            $this->SendDebug(__FUNCTION__, $ident . ': ' . $e->getMessage(), 0);
-        }
-    }
-
-    /** @param array<int, mixed> $data */
-    private function kernelRunlevelFromMessageData(array $data): ?int
-    {
-        if (!isset($data[0]) || !is_numeric($data[0])) {
-            return null;
-        }
-
-        return (int) $data[0];
-    }
-
-    /** @param array<int, mixed> $data */
-    private function isKernelReadyMessage(int $message, array $data): bool
-    {
-        if ($message === $this->getKrReadyRunlevel()) {
-            return true;
-        }
-        if ($message !== $this->getIpsKernelMessageId()) {
-            return false;
-        }
-        $runlevel = $this->kernelRunlevelFromMessageData($data);
-        if ($runlevel === null) {
-            return $this->isIpsKernelReady();
-        }
-
-        return $runlevel === $this->getKrReadyRunlevel();
-    }
-
-    /** @param array<int, mixed> $data */
-    private function isKernelInitMessage(int $message, array $data): bool
-    {
-        if ($message !== $this->getIpsKernelMessageId()) {
-            return false;
-        }
-
-        return $this->kernelRunlevelFromMessageData($data) === $this->getKrInitRunlevel();
-    }
-
-    /** @param array<int, mixed> $data */
-    private function isKernelStartedMessage(int $message, array $data): bool
-    {
-        if ($message === self::IPS_KERNEL_STARTED_MESSAGE) {
-            return true;
-        }
-        if ($message !== $this->getIpsKernelMessageId()) {
-            return false;
-        }
-
-        return $this->kernelRunlevelFromMessageData($data) === self::IPS_KERNEL_STARTED_MESSAGE;
-    }
-
-    /** @param array<int, mixed> $data */
-    private function handleKernelMessage(int $message, array $data): void
-    {
-        if ($this->isKernelInitMessage($message, $data)) {
-            $this->markConfigValidationGrace();
-            $this->registerKernelMessageIfMissing($this->getIpsKernelMessageId());
-            $this->armStartupGuardTimer(true);
-
-            return;
-        }
-        if ($this->isKernelReadyMessage($message, $data)) {
-            $this->onIpsKernelReady();
-
-            return;
-        }
-        if ($this->isKernelStartedMessage($message, $data)) {
-            $this->StartupGuardRecovery();
-        }
-    }
-
-    private function onIpsKernelReady(): void
-    {
-        if ($this->handlePostKernelRestartIfNeeded()) {
-            return;
-        }
-        $this->StartupGuardRecovery();
-    }
-
-    private function handlePostKernelRestartIfNeeded(): bool
-    {
-        if (!$this->ReadPropertyBoolean('Active')) {
-            return false;
-        }
-        if (!$this->isIpsKernelReady()) {
-            return false;
-        }
-        $this->markConfigValidationGrace();
-        $kernelStart = $this->getKernelStartTime();
-        if ($kernelStart <= 0) {
-            return false;
-        }
-        $handledRaw = $this->GetBuffer('HandledKernelStartAt');
-        $handled = is_numeric($handledRaw) ? (int) $handledRaw : 0;
-        if ($handled === $kernelStart) {
-            return false;
-        }
-
-        $restored = $this->restoreFromPersistentBackup();
-        if ($restored > 0) {
-            $this->applyRestoredConfiguration();
-            $this->SendDebug(
-                'Konfiguration',
-                $restored . ' Einstellung(en) nach IPS-Neustart aus Backup geladen.',
-                0,
-            );
-        }
-        $this->syncAutomationEnabledFromPersisted();
-        $this->configureTimer();
-        $this->configureAutomationTimer();
-        $this->RunAutomation();
-        $this->SetBuffer('HandledKernelStartAt', (string) $kernelStart);
-        $this->SendDebug('Start', 'IPS-Neustart: Konfiguration und Automatisierung wiederhergestellt.', 0);
-
-        return true;
-    }
-
-    private function needsRecoveryAfterKernelRestart(): bool
-    {
-        if (!function_exists('IPS_GetKernelStartTime')) {
-            return false;
-        }
-        $kernelStart = $this->getKernelStartTime();
-        if ($kernelStart <= 0) {
-            return false;
-        }
-        $handledRaw = $this->GetBuffer('HandledKernelStartAt');
-        $handled = is_numeric($handledRaw) ? (int) $handledRaw : 0;
-        if ($handled !== $kernelStart) {
-            return true;
-        }
-        if ($this->readHostProperty() === '') {
-            return false;
-        }
-        if ($this->GetTimerInterval('Update') <= 0) {
-            return true;
-        }
-        if ($this->readAutomationEnabledProperty() && $this->GetTimerInterval('Automation') <= 0) {
-            return true;
-        }
-
-        return false;
     }
 
     private function ensureProfiles(): void

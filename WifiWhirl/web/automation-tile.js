@@ -7,8 +7,6 @@
         pump: [],
         heater: [],
         manualPause: false,
-        pvGateOpen: false,
-        pvSurplus: 0,
         message: '',
         messageOk: true,
     };
@@ -230,25 +228,6 @@
         return rows;
     }
 
-    function formatPvSurplus(watts) {
-        var n = parseFloat(watts);
-        if (isNaN(n)) {
-            return '0';
-        }
-        return String(Math.round(n));
-    }
-
-    function renderPvGateBadge() {
-        var open = !!state.pvGateOpen;
-        var label = open ? t('Offen') : t('Geschlossen');
-        var surplus = formatPvSurplus(state.pvSurplus);
-        return '<div class="wwhl-auto-pv-gate' + (open ? ' open' : ' closed') + '" title="' + esc(t('Automatisierung PV-Überschuss')) + '">'
-            + '<span class="wwhl-auto-pv-gate-label">' + esc(t('PV-Freigabe')) + '</span>'
-            + '<span class="wwhl-auto-pv-gate-state">' + esc(label) + '</span>'
-            + '<span class="wwhl-auto-pv-gate-watts">' + esc(surplus) + ' W</span>'
-            + '</div>';
-    }
-
     function render() {
         var root = document.getElementById('wwhl-auto-root');
         if (!root) {
@@ -259,12 +238,9 @@
             + '<div class="wwhl-auto-header">'
             + '  <label class="wwhl-auto-enabled"><input type="checkbox" id="wwhl-enabled"' + (state.enabled ? ' checked' : '') + '> ' + esc(t('Automatisierung aktiv')) + '</label>'
             + '</div>'
-            + '<div class="wwhl-auto-status-row">'
-            + '  <div class="wwhl-auto-zeitfenster">'
-            + '    <div class="wwhl-auto-status" id="wwhl-status">' + esc(state.status || '') + '</div>'
-            + '    <button type="button" class="wwhl-auto-btn wwhl-auto-btn-secondary wwhl-auto-clear-pause" id="wwhl-clear-pause"' + (state.manualPause ? '' : ' disabled') + '>' + esc(t('Manuelle Pause aufheben')) + '</button>'
-            + '  </div>'
-            + '  ' + renderPvGateBadge()
+            + '<div class="wwhl-auto-zeitfenster">'
+            + '  <div class="wwhl-auto-status" id="wwhl-status">' + esc(state.status || '') + '</div>'
+            + '  <button type="button" class="wwhl-auto-btn wwhl-auto-btn-secondary wwhl-auto-clear-pause" id="wwhl-clear-pause"' + (state.manualPause ? '' : ' disabled') + '>' + esc(t('Manuelle Pause aufheben')) + '</button>'
             + '</div>'
             + '<div class="wwhl-auto-section">'
             + '  <h3>' + esc(t('Pumpen-Zeitpläne')) + '</h3>'
@@ -382,12 +358,6 @@
         }
         if (typeof data.manualPause === 'boolean') {
             state.manualPause = data.manualPause;
-        }
-        if (typeof data.pvGateOpen === 'boolean') {
-            state.pvGateOpen = data.pvGateOpen;
-        }
-        if (typeof data.pvSurplus === 'number') {
-            state.pvSurplus = data.pvSurplus;
         }
         if (typeof data.message === 'string') {
             state.message = data.message ? t(data.message) : '';

@@ -1,0 +1,94 @@
+{
+    "elements": [
+        {
+            "type": "Label",
+            "name": "ModuleVersionInfo",
+            "caption": "Installierte Modulversion"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "DeviceId",
+            "caption": "Geräte-ID"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "ModelNumber",
+            "caption": "Modellnummer"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "Generation",
+            "caption": "Generation (1/2)",
+            "digits": 0,
+            "minimum": 1,
+            "maximum": 2
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "ValveCount",
+            "caption": "Anzahl Ventile",
+            "digits": 0,
+            "minimum": 1,
+            "maximum": 6
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "DefaultDurationSec",
+            "caption": "Standard-Bewässerungsdauer (Sekunden)",
+            "digits": 0,
+            "minimum": 60
+        },
+        {
+            "type": "CheckBox",
+            "name": "ScheduleEnabled",
+            "caption": "IPS-Zeitpläne aktiv"
+        },
+        {
+            "type": "List",
+            "name": "ScheduleRules",
+            "caption": "IPS-Bewässerungs-Zeitpläne",
+            "rowCount": 5,
+            "add": true,
+            "delete": true,
+            "columns": [
+                { "caption": "Aktiv", "name": "active", "width": "50px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
+                { "caption": "Ventil", "name": "valve", "width": "60px", "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 5, "digits": 0 }, "add": 0, "save": true },
+                { "caption": "Start", "name": "start", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "06:00", "save": true },
+                { "caption": "Ende", "name": "end", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "06:30", "save": true },
+                { "caption": "Mo", "name": "mo", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
+                { "caption": "Di", "name": "tu", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
+                { "caption": "Mi", "name": "we", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
+                { "caption": "Do", "name": "th", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
+                { "caption": "Fr", "name": "fr", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
+                { "caption": "Sa", "name": "sa", "width": "40px", "edit": { "type": "CheckBox" }, "add": false, "save": true },
+                { "caption": "So", "name": "so", "width": "40px", "edit": { "type": "CheckBox" }, "add": false, "save": true }
+            ]
+        }
+    ],
+    "actions": [
+        {
+            "type": "Button",
+            "caption": "Ventil A starten",
+            "onClick": "GSVAL_StartValve($id, 0, 0); echo 'OK';"
+        },
+        {
+            "type": "Button",
+            "caption": "Ventil A stoppen",
+            "onClick": "GSVAL_StopValve($id, 0); echo 'OK';"
+        },
+        {
+            "type": "Button",
+            "caption": "Ventil B starten",
+            "onClick": "GSVAL_StartValve($id, 1, 0); echo 'OK';"
+        },
+        {
+            "type": "Button",
+            "caption": "Ventil B stoppen",
+            "onClick": "GSVAL_StopValve($id, 1); echo 'OK';"
+        }
+    ],
+    "status": [
+        { "code": 102, "icon": "active", "caption": "Aktiv" },
+        { "code": 104, "icon": "inactive", "caption": "Kein Parent" }
+    ]
+}

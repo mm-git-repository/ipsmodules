@@ -247,8 +247,7 @@ final class WifiWhirlAutomation
      *   pvState: array{gateOpen: bool, aboveSince: int, belowSince: int},
      *   pumpWindowActive: bool,
      *   heaterWindowActive: bool,
-     *   pvGatedHeaterWindow: bool,
-     *   hasPvGatedHeaterRules: bool
+     *   pvGatedHeaterWindow: bool
      * }
      */
     public static function evaluate(
@@ -264,12 +263,9 @@ final class WifiWhirlAutomation
         $pumpWindowActive = false;
         $heaterWindowActive = false;
         $pvGatedHeaterWindow = false;
-        $hasPvGatedHeaterRules = false;
+        $heaterTargetTemps = [];
 
         foreach ($rules as $rule) {
-            if (($rule['type'] ?? '') === self::TYPE_HEATER && ($rule['active'] ?? false) && ($rule['pvGated'] ?? false)) {
-                $hasPvGatedHeaterRules = true;
-            }
             if (!self::isInWindow($rule, $now)) {
                 continue;
             }
@@ -284,12 +280,19 @@ final class WifiWhirlAutomation
             }
         }
 
+        $needsPvGate = $heaterWindowActive && $pvGatedHeaterWindow;
         $updatedPvState = $pvState;
-        if ($hasPvGatedHeaterRules && $pvVariableConfigured) {
+        if ($needsPvGate && $pvVariableConfigured) {
             $updatedPvState = self::evaluatePvGate($surplusW, $pvConfig, $pvState, $nowUnix);
+        } elseif (!$needsPvGate) {
+            $updatedPvState = [
+                'gateOpen' => false,
+                'aboveSince' => 0,
+                'belowSince' => 0,
+            ];
         }
 
-        $pvGateOpen = $hasPvGatedHeaterRules && $pvVariableConfigured && $updatedPvState['gateOpen'];
+        $pvGateOpen = $needsPvGate && $pvVariableConfigured && $updatedPvState['gateOpen'];
 
         $pumpDesired = $pumpWindowActive;
         $heaterDesired = false;
@@ -312,7 +315,6 @@ final class WifiWhirlAutomation
             $heaterDesired,
             $heaterWindowActive,
             $pvGatedHeaterWindow,
-            $hasPvGatedHeaterRules,
             $pvVariableConfigured,
             $pvGateOpen,
             $surplusW,
@@ -329,7 +331,6 @@ final class WifiWhirlAutomation
             'pumpWindowActive' => $pumpWindowActive,
             'heaterWindowActive' => $heaterWindowActive,
             'pvGatedHeaterWindow' => $pvGatedHeaterWindow,
-            'hasPvGatedHeaterRules' => $hasPvGatedHeaterRules,
         ];
     }
 
@@ -338,7 +339,6 @@ final class WifiWhirlAutomation
         bool $heaterDesired,
         bool $heaterWindowActive,
         bool $pvGatedHeaterWindow,
-        bool $hasPvGatedHeaterRules,
         bool $pvVariableConfigured,
         bool $pvGateOpen,
         float $surplusW,
@@ -359,17 +359,6 @@ final class WifiWhirlAutomation
         } elseif ($heaterWindowActive) {
             $parts[] = 'Heizung: aus';
         }
-
-        if (!$heaterWindowActive && $hasPvGatedHeaterRules) {
-            if (!$pvVariableConfigured) {
-                $parts[] = 'PV-Freigabe: Variable fehlt';
-            } elseif ($pvGateOpen) {
-                $parts[] = 'PV-Freigabe offen (Heizfenster inaktiv)';
-            } else {
-                $parts[] = sprintf('PV-Freigabe wartet (%.0f W, Schwelle %.0f W)', $surplusW, $thresholdW);
-            }
-        }
-
         if ($parts === []) {
             return 'Kein aktives Zeitfenster';
         }

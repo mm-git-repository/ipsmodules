@@ -4,11 +4,9 @@
     "type": 3,
     "vendor": "MM-Modules",
     "aliases": [
-        "PIXOO Energy Viewer",
-        "Pixoo Energy Viewer",
-        "Pixoo Energie-Anzeige"
+        "Pixoo Energy Viewer"
     ],
-    "url": "https://github.com",
+    "url": "https://github.com/mm-git-repository/ipsmodule.git",
     "parentRequirements": [],
     "childRequirements": [],
     "implemented": [],
