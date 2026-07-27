@@ -17,6 +17,11 @@
         return n.toFixed(2).replace('.', ',') + ' L';
     }
 
+    function lph(v) {
+        var n = Number(v) || 0;
+        return String(n).replace('.', ',') + ' l/h';
+    }
+
     function totalBox(label, value) {
         return '<div class="gs-usage-total"><div class="k">' + esc(label) + '</div><div class="v">' +
             esc(liters(value)) + '</div></div>';
@@ -24,45 +29,72 @@
 
     var totals = data.totals || {};
     var devices = data.devices || [];
+    var rows = [];
+    devices.forEach(function (device) {
+        (device.outlets || []).forEach(function (o) {
+            rows.push({
+                device: device.name || 'Gerät',
+                outlet: o
+            });
+        });
+    });
+
     var html = '';
-    html += '<div class="gs-usage-head"><div class="gs-usage-title">Wasserverbrauch</div>';
+    html += '<div class="gs-usage-head"><div class="gs-usage-title">Wasserverbrauch</div></div>';
     html += '<div class="gs-usage-totals">';
     html += totalBox('Heute', totals.today);
     html += totalBox('Woche', totals.week);
     html += totalBox('Jahr', totals.year);
     html += totalBox('Gesamt', totals.total);
-    html += '</div></div>';
+    html += '</div>';
 
-    if (!devices.length) {
-        html += '<div class="gs-usage-empty">Keine aktiven Ausgänge konfiguriert. Am Valve „Verbrauch zählen“ aktivieren und l/h setzen.</div>';
-    }
+    html += '<div class="gs-usage-body">';
+    if (!rows.length) {
+        html += '<div class="gs-usage-empty">Keine aktiven Ausgänge.<br>' +
+            'Am Valve ein Durchfluss-Preset wählen und speichern.</div>';
+    } else {
+        html += '<table class="gs-usage-table">';
+        html += '<thead><tr>';
+        html += '<th>Gerät</th>';
+        html += '<th>Ausgang</th>';
+        html += '<th class="st">Status</th>';
+        html += '<th class="num">Durchfluss</th>';
+        html += '<th class="num">Heute</th>';
+        html += '<th class="num">Woche</th>';
+        html += '<th class="num">Jahr</th>';
+        html += '<th class="num">Gesamt</th>';
+        html += '<th class="num">Session</th>';
+        html += '</tr></thead><tbody>';
 
-    devices.forEach(function (device) {
-        html += '<div class="gs-usage-device"><h3>' + esc(device.name || 'Gerät') + '</h3>';
-        html += '<div class="gs-usage-outlets">';
-        (device.outlets || []).forEach(function (o) {
+        rows.forEach(function (row) {
+            var o = row.outlet;
             var open = !!o.open;
-            html += '<div class="gs-usage-card' + (open ? ' live' : '') + '">';
-            html += '<div class="name">' + esc(o.label || ('Ausgang ' + (o.side || '?'))) + '</div>';
-            html += '<div class="meta"><span class="gs-dot ' + (open ? 'on' : 'off') + '"></span>' +
-                (open ? 'offen' : 'zu') +
-                ' · ' + esc(o.valveName || ('Ventil ' + (o.side || '?'))) +
-                ' · ' + esc(String(o.litersPerHour || 0).replace('.', ',')) + ' l/h';
-            if (o.length) html += ' · ' + esc(o.length);
-            if (o.pressure) html += ' · ' + esc(o.pressure);
-            html += '</div>';
-            if (open) {
-                html += '<div class="meta">Session: <strong>' + esc(liters(o.session)) + '</strong></div>';
-            }
-            html += '<div class="stats">';
-            html += '<div>Heute<br><strong>' + esc(liters(o.today)) + '</strong></div>';
-            html += '<div>Woche<br><strong>' + esc(liters(o.week)) + '</strong></div>';
-            html += '<div>Jahr<br><strong>' + esc(liters(o.year)) + '</strong></div>';
-            html += '<div>Gesamt<br><strong>' + esc(liters(o.total)) + '</strong></div>';
-            html += '</div></div>';
+            var metaParts = [];
+            if (o.length) metaParts.push(o.length);
+            if (o.pressure) metaParts.push(o.pressure);
+            var label = o.label || ('Ausgang ' + (o.side || '?'));
+            var valve = o.valveName || ('Ventil ' + (o.side || '?'));
+
+            html += '<tr class="' + (open ? 'live' : '') + '">';
+            html += '<td><div class="gs-usage-device">' + esc(row.device) + '</div></td>';
+            html += '<td><div class="gs-usage-outlet">' + esc(label) + '</div>';
+            html += '<span class="gs-usage-meta">' + esc(valve);
+            if (metaParts.length) html += ' · ' + esc(metaParts.join(' · '));
+            html += '</span></td>';
+            html += '<td class="st"><span class="gs-status"><span class="gs-dot ' +
+                (open ? 'on' : 'off') + '"></span>' + (open ? 'offen' : 'zu') + '</span></td>';
+            html += '<td class="num">' + esc(lph(o.litersPerHour)) + '</td>';
+            html += '<td class="num">' + esc(liters(o.today)) + '</td>';
+            html += '<td class="num">' + esc(liters(o.week)) + '</td>';
+            html += '<td class="num">' + esc(liters(o.year)) + '</td>';
+            html += '<td class="num">' + esc(liters(o.total)) + '</td>';
+            html += '<td class="num">' + (open ? esc(liters(o.session)) : '—') + '</td>';
+            html += '</tr>';
         });
-        html += '</div></div>';
-    });
+
+        html += '</tbody></table>';
+    }
+    html += '</div>';
 
     root.innerHTML = html;
 })();
