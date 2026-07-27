@@ -56,31 +56,22 @@
     }
 
     function valveCard(v) {
-        var open = !!v.open;
         var title = v.name || ('Ventil ' + (v.side || (v.id + 1)));
         return '<div class="gs-valve">' +
-            '<h3>' + esc(title) +
-            ' <span class="gs-dot ' + (open ? 'on' : 'off') + '"></span>' +
-            (open ? 'offen' : 'zu') + '</h3>' +
             '<div class="gs-actions">' +
             '<button type="button" class="gs-btn primary" data-act="start" data-valve="' +
-            esc(v.id) + '">Start</button>' +
+            esc(v.id) + '">Start ' + esc(title) + '</button>' +
             '<button type="button" class="gs-btn danger" data-act="stop" data-valve="' +
-            esc(v.id) + '">Stop</button>' +
+            esc(v.id) + '">Stop ' + esc(title) + '</button>' +
             '</div></div>';
     }
 
     function render() {
-        var online = !!state.online;
         var list = valves();
         var html = '';
         html += '<div class="gs-head">';
         html += '<div class="gs-title">' + esc(state.name || 'Ventil') + '</div>';
-        html += '<div class="gs-meta"><span class="gs-dot ' + (online ? 'on' : 'off') + '"></span>' +
-            (online ? 'online' : 'offline') +
-            ' · Batterie ' + esc(state.battery) + '%' +
-            (state.temperature != null ? ' · ' + esc(state.temperature) + ' °C' : '') +
-            '</div></div>';
+        html += '</div>';
 
         html += '<div class="gs-grid">';
         list.forEach(function (v) {

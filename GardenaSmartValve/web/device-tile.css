@@ -10,36 +10,18 @@
 }
 .gs-tile * { box-sizing: border-box; }
 .gs-head {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
 }
 .gs-title {
     font-size: 1.25rem;
     font-weight: 650;
     letter-spacing: 0.01em;
 }
-.gs-meta {
-    opacity: 0.75;
-    font-size: 0.92rem;
-}
-.gs-dot {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    margin-right: 6px;
-    background: #888;
-    vertical-align: middle;
-}
-.gs-dot.on { background: #2f9e44; }
-.gs-dot.off { background: #c92a2a; }
 
 .gs-grid {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 12px;
+    gap: 10px;
 }
 @media (min-width: 480px) {
     .gs-grid {
@@ -48,26 +30,15 @@
 }
 
 .gs-valve {
-    padding: 14px 14px 16px;
-    border: 1px solid rgba(128,128,128,0.28);
-    border-radius: 12px;
-    background: rgba(128,128,128,0.06);
-}
-.gs-valve h3 {
-    margin: 0 0 12px;
-    font-size: 1.05rem;
-    font-weight: 650;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 8px;
+    padding: 0;
+    border: none;
+    background: transparent;
 }
 
 .gs-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 10px;
-    margin-top: 0;
 }
 
 .gs-btn {
