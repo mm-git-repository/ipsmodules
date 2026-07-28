@@ -54,8 +54,15 @@
         rows.forEach(function (row) {
             var o = row.outlet;
             var valve = o.valveName || o.label || ('Ventil ' + (o.side || '?'));
+            var warn = o.warning ? String(o.warning) : '';
             html += '<tr>';
-            html += '<td><div class="gs-usage-device">' + esc(valve) + '</div></td>';
+            html += '<td><div class="gs-usage-device">' + esc(valve) + '</div>';
+            if (warn) {
+                html += '<div class="gs-usage-warn">' + esc(warn) + '</div>';
+            } else if (!o.enabled) {
+                html += '<div class="gs-usage-warn">Kein Durchfluss-Preset</div>';
+            }
+            html += '</td>';
             html += '<td class="num">' + esc(liters(o.today)) + '</td>';
             html += '<td class="num">' + esc(liters(o.total)) + '</td>';
             html += '</tr>';

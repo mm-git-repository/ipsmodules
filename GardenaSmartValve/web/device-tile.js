@@ -5,6 +5,7 @@
     var root = document.getElementById('gs-tile-root');
     if (!root) return;
     var pending = false;
+    var DURATION_PRESETS = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45];
 
     function esc(s) {
         return String(s == null ? '' : s)
@@ -12,6 +13,17 @@
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
+    }
+
+    function defaultDurationMin() {
+        var sec = parseInt(state.defaultDuration || 1800, 10) || 1800;
+        var min = Math.round(sec / 60);
+        if (DURATION_PRESETS.indexOf(min) >= 0) return min;
+        return 30;
+    }
+
+    if (!state.selectedDurationMin || DURATION_PRESETS.indexOf(state.selectedDurationMin) < 0) {
+        state.selectedDurationMin = defaultDurationMin();
     }
 
     function request(ident, value) {
@@ -77,6 +89,22 @@
         state.valves = list;
     }
 
+    function anyOpen() {
+        return valves().some(function (v) { return !!v.open; });
+    }
+
+    function durationSelectHtml(disabled) {
+        var html = '<label class="gs-dur"><span class="gs-dur-label">Dauer</span>';
+        html += '<select class="gs-dur-select" data-duration="1"' + (disabled || pending ? ' disabled' : '') + '>';
+        DURATION_PRESETS.forEach(function (m) {
+            html += '<option value="' + m + '"' +
+                (m === state.selectedDurationMin ? ' selected' : '') + '>' +
+                m + ' Min</option>';
+        });
+        html += '</select></label>';
+        return html;
+    }
+
     function valveRow(v) {
         var open = !!v.open;
         var title = v.name || ('Ventil ' + (v.side || (v.id + 1)));
@@ -90,10 +118,23 @@
             '<span class="gs-dot ' + (open ? 'on' : 'off') + '"></span>' +
             (open ? 'aktiv' : 'inaktiv') +
             '</span></div>' +
+            '<div class="gs-valve-actions">' +
+            (open ? '' : durationSelectHtml(false)) +
             '<button type="button" class="' + btnClass + '" data-act="' + act +
             '" data-valve="' + esc(v.id) + '"' + (pending ? ' disabled' : '') + '>' +
             label + '</button>' +
-            '</div>';
+            '</div></div>';
+    }
+
+    function bindDurationSelect() {
+        root.querySelectorAll('[data-duration]').forEach(function (sel) {
+            sel.addEventListener('change', function () {
+                var m = parseInt(sel.value || '30', 10);
+                if (DURATION_PRESETS.indexOf(m) >= 0) {
+                    state.selectedDurationMin = m;
+                }
+            });
+        });
     }
 
     function render() {
@@ -109,6 +150,8 @@
         html += '<div class="gs-msg"></div>';
         root.innerHTML = html;
 
+        bindDurationSelect();
+
         root.querySelectorAll('[data-act]').forEach(function (btn) {
             btn.addEventListener('click', function () {
                 if (pending) return;
@@ -120,15 +163,16 @@
                     if (v.id === valve) prevOpen = !!v.open;
                 });
 
-                // Optimistic UI update immediately
+                var durationSec = Math.max(60, (parseInt(state.selectedDurationMin, 10) || 30) * 60);
+
                 pending = true;
                 setValveOpen(valve, wantOpen);
                 render();
-                setMsg(wantOpen ? 'Starte…' : 'Stoppe…', true);
+                setMsg(wantOpen ? ('Starte ' + (durationSec / 60) + ' Min…') : 'Stoppe…', true);
 
                 var ident = wantOpen ? 'StartValve' : 'StopValve';
                 var value = wantOpen
-                    ? JSON.stringify({ valveId: valve, duration: parseInt(state.defaultDuration || 1800, 10) })
+                    ? JSON.stringify({ valveId: valve, duration: durationSec })
                     : JSON.stringify({ valveId: valve });
                 request(ident, value).then(function (res) {
                     pending = false;

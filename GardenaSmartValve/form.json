@@ -1,262 +1,100 @@
 {
-
     "elements": [
-
         {
-
             "type": "Label",
-
             "name": "ModuleVersionInfo",
-
             "caption": "Installierte Modulversion"
-
         },
-
         {
-
             "type": "SelectInstance",
-
             "name": "GatewayInstanceID",
-
             "caption": "Gateway-Instanz",
-
             "validModules": [
-
                 "{8F3A2C1D-9E4B-4A7C-B2D1-6E5F4A3B2C1D}"
-
             ]
-
         },
-
         {
-
             "type": "ValidationTextBox",
-
             "name": "DeviceId",
-
             "caption": "Geräte-ID"
-
         },
-
         {
-
             "type": "ValidationTextBox",
-
             "name": "ModelNumber",
-
             "caption": "Modellnummer"
-
         },
-
         {
-
             "type": "NumberSpinner",
-
             "name": "Generation",
-
             "caption": "Generation (1/2)",
-
             "digits": 0,
-
             "minimum": 1,
-
             "maximum": 2
-
         },
-
         {
-
             "type": "NumberSpinner",
-
             "name": "ValveCount",
-
             "caption": "Anzahl Ventile",
-
             "digits": 0,
-
             "minimum": 1,
-
             "maximum": 6
-
         },
-
         {
-
             "type": "Label",
-
             "name": "UsageHint",
-
-            "caption": "Wasserverbrauch: Preset am Gateway anlegen, hier wählen und speichern — Werte (l/h …) und Zählung kommen automatisch aus dem Preset."
-
+            "caption": "Wasserverbrauch: Preset am Gateway anlegen, hier je Ausgang wählen und speichern — sonst wird der Verbrauch nicht gezählt (auch bei Zeitplan aus der App)."
         },
-
         {
-
             "type": "Select",
-
             "name": "OutletAPreset",
-
             "caption": "Ausgang A: Durchfluss-Preset",
-
             "options": [
-
                 { "caption": "— Kein Verbrauch —", "value": "" }
-
             ]
-
         },
-
         {
-
             "type": "Select",
-
             "name": "OutletBPreset",
-
             "caption": "Ausgang B: Durchfluss-Preset",
-
             "options": [
-
                 { "caption": "— Kein Verbrauch —", "value": "" }
-
             ]
-
         },
-
         {
-
             "type": "Label",
-
             "name": "ScheduleHint",
-
-            "caption": "Geräte-Zeitpläne (Gen2): bis 36 Einträge (wie Gardena-App). Lokal sichtbar sind die vom Gerät gelieferten schedule-Slots. Nach Speichern Abgleich mit dem Gerät."
-
-        },
-
-        {
-
-            "type": "List",
-
-            "name": "DeviceScheduleRules",
-
-            "caption": "Geräte-Zeitpläne",
-
-            "rowCount": 5,
-
-            "add": true,
-
-            "delete": true,
-
-            "columns": [
-
-                { "caption": "Aktiv", "name": "active", "width": "50px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-
-                { "caption": "Ventil", "name": "valve", "width": "60px", "edit": { "type": "NumberSpinner", "minimum": 0, "maximum": 5, "digits": 0 }, "add": 0, "save": true },
-
-                { "caption": "Start", "name": "start", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "06:00", "save": true },
-
-                { "caption": "Ende", "name": "end", "width": "70px", "edit": { "type": "ValidationTextBox" }, "add": "06:30", "save": true },
-
-                { "caption": "Mo", "name": "mo", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-
-                { "caption": "Di", "name": "tu", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-
-                { "caption": "Mi", "name": "we", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-
-                { "caption": "Do", "name": "th", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-
-                { "caption": "Fr", "name": "fr", "width": "40px", "edit": { "type": "CheckBox" }, "add": true, "save": true },
-
-                { "caption": "Sa", "name": "sa", "width": "40px", "edit": { "type": "CheckBox" }, "add": false, "save": true },
-
-                { "caption": "So", "name": "so", "width": "40px", "edit": { "type": "CheckBox" }, "add": false, "save": true }
-
-            ]
-
+            "caption": "Geräte-Zeitpläne: IPS zeigt den Stand vom Gerät (Variable „Geräte-Zeitpläne“ / Zeitplan-Kachel). Bearbeitung nur in der Gardena-App."
         }
-
     ],
-
     "actions": [
-
         {
-
             "type": "Button",
-
             "caption": "Verbrauchszähler zurücksetzen",
-
             "onClick": "echo GSVAL_ResetWaterUsage($id);"
-
         },
-
         {
-
             "type": "Button",
-
-            "caption": "Vom Gerät laden (überschreiben)",
-
-            "onClick": "$r = json_decode(GSVAL_PullDeviceSchedules($id), true); echo is_array($r) ? (string)($r['message'] ?? 'OK') : 'Fehler';"
-
-        },
-
-        {
-
-            "type": "Button",
-
-            "caption": "An Gerät speichern",
-
-            "onClick": "IPS_ApplyChanges($id); echo GSVAL_PushDeviceSchedules($id);"
-
-        },
-
-        {
-
-            "type": "Button",
-
             "caption": "Ventil A starten",
-
             "onClick": "GSVAL_StartValve($id, 0, 0); echo 'OK';"
-
         },
-
         {
-
             "type": "Button",
-
             "caption": "Ventil A stoppen",
-
             "onClick": "GSVAL_StopValve($id, 0); echo 'OK';"
-
         },
-
         {
-
             "type": "Button",
-
             "caption": "Ventil B starten",
-
             "onClick": "GSVAL_StartValve($id, 1, 0); echo 'OK';"
-
         },
-
         {
-
             "type": "Button",
-
             "caption": "Ventil B stoppen",
-
             "onClick": "GSVAL_StopValve($id, 1); echo 'OK';"
-
         }
-
     ],
-
     "status": [
-
         { "code": 102, "icon": "active", "caption": "Aktiv" },
-
         { "code": 104, "icon": "inactive", "caption": "Kein Gateway" }
-
     ]
-
 }
-

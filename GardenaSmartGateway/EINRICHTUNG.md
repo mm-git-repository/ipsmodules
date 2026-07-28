@@ -47,40 +47,25 @@ Kein physikalischer Literzähler nötig. Verbrauch = **Öffnungsdauer × konfigu
 
 Reset: Button **Verbrauchszähler zurücksetzen** am Valve (alle Perioden inkl. Gesamt).
 
-## Geräte-Zeitpläne (Gateway/Cloud als Master)
+## Geräte-Zeitpläne (Anzeige only)
 
-- **Gen2** (z. B. Dual Water Control 2814): Zeitpläne liegen am Gerät. IPS liest sie beim Poll und kann sie per WSS **`write`** auf `schedule/{slot}/*` zurückschreiben.
-- Bearbeitung in **Instanz-Konfiguration** (Liste „Geräte-Zeitpläne“, +/−) oder **Zeitplan-Kachel** (`Gardena Smart Valve Zeitplan`) → Button **An Gerät speichern** / **Vom Gerät laden**
+- **Gen2** (z. B. Dual Water Control 2814): Zeitpläne liegen am Gerät und werden in der **Gardena-App** bearbeitet.
+- IPS zeigt den Stand beim Poll in Variable **„Geräte-Zeitpläne“** und in der **Zeitplan-Kachel** (read-only).
 - Beim Geräte-Scan wird für Gen2-Ventile automatisch eine Zeitplan-Instanz angelegt (Name: „… Zeitplan“)
-- Maximal **36 Einträge** (wie Gardena-App / Dual Water Control); entfernte Einträge werden am Gerät geleert
-- Nach dem Speichern: Rücklesen vom Gerät; Abweichungen werden als Warnung gemeldet
-- **Gen1** (ältere Water Control, Power): Binärformat — IPS zeigt read-only; Bearbeitung nur in der Gardena-App. Power: optional **Sonnen-Zeitplan löschen** (leeres `sun_schedule_config`)
-- Valve-Kachel = nur Ventilname + Start/Stop; Zeitplan und Wasserverbrauch haben eigene Kacheln (Valve-Zeitplan bzw. Gateway)
+- **Gen1** (ältere Water Control, Power): Binärformat — ebenfalls read-only in IPS. Power: optional **Sonnen-Zeitplan löschen**
+- Valve-Kachel = Ventilname + Dauer-Auswahl + Start/Stop; Zeitplan und Wasserverbrauch haben eigene Kacheln
 
-### PoC (Gen2, bestätigt)
+## Manuelle Bewässerung
 
-Am Dual 2814 funktioniert z. B.:
-
-```json
-{
-  "op": "write",
-  "entity": {
-    "device": "<deviceId>",
-    "service": "lwm2mserver",
-    "path": "schedule/0/start_offset_seconds"
-  },
-  "payload": { "vi": 21600 }
-}
-```
-
-Änderungen überleben Gateway-Reconnect und sind in der App sichtbar.
+- Auf der Valve-Kachel Dauer wählen (1–45 Min) und Start tippen. Gen2 sendet die Dauer an das Gerät; das Ventil schließt nach Ablauf selbst.
+- Stop beendet vorzeitig.
 
 ## Hinweise
 
 - `websocketd` ist experimentell; nach Firmware-Updates ggf. erneut aktivieren
 - Dual Water Control = **eine** Valve-Instanz mit Ventil A und B
 - Geräte hängen **logisch** am Gateway (`GatewayInstanceID` + Objektbaum-Parent), ohne Symcon-Datenfluss/Splitter
-- Parallelbearbeitung in IPS und Gardena-App kann Pläne überschreiben — UI zeigt „Zuletzt gespeichert von IPS“
+- Für Literzählung je Ausgang ein **Durchfluss-Preset** setzen — sonst erscheint 0 Liter trotz laufendem Ventil
 - **Debug:** Am Gateway „Debug-Log aktiv“ einschalten und **Übernehmen**, dann „Debug-Test“ — Variable `Debug-Log` + Formularvorschau zeigen WSS-/Kommando-Details; Button „Debug-Log leeren“
 - Pump / Mäher: noch nicht im MVP
 
@@ -90,8 +75,4 @@ Am Dual 2814 funktioniert z. B.:
 - Auth: HTTP Basic `_ : PASSWORD`
 - Discovery: JSON-Array mit `op=read` auf `devices` für `lemonbeatd` und `lwm2mserver`
 - Gen2-Ventil: `execute` auf `actuator/{id}/start|stop` mit Payload `as: ["18", "<seconds>"]`
-### Gen2-Zeitplan (Write)
-
-- Pro Slot ein JSON-Array (`start_offset_seconds`, `end_offset_seconds`, `actuator`, `repetition_value`, `repetition_type`) — Fire-and-Forget (ACKs oft ausbleibend)
-- **Neue WSS-Verbindung pro Slot** (eine lange Session lässt spätere Slots sonst oft still fallen)
-- Verify per Discover mit Retries (websocketd kurz flaky nach Writes)
+- Gen2-Zeitpläne: IPS liest nur (`schedule/*`); Schreiben erfolgt über die Gardena-App

@@ -10,7 +10,7 @@ class GardenaSmartValveSchedule extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 3;
+    private const MODULE_BUILD = 4;
 
     public function Create(): void
     {
@@ -68,62 +68,6 @@ class GardenaSmartValveSchedule extends IPSModuleStrict
         return $this->buildVisualizationHtml(__DIR__, 'GSVSC', $data);
     }
 
-    public function RequestAction(string $Ident, mixed $Value): void
-    {
-        if ($Ident === 'SaveDeviceSchedules') {
-            $json = is_string($Value) ? $Value : json_encode($Value, JSON_UNESCAPED_UNICODE);
-            echo $this->SaveDeviceSchedules($json ?: null);
-
-            return;
-        }
-        if ($Ident === 'PullDeviceSchedules') {
-            echo $this->PullDeviceSchedules();
-
-            return;
-        }
-        parent::RequestAction($Ident, $Value);
-    }
-
-    public function PushDeviceSchedules(): string
-    {
-        $valveId = $this->requireValveInstanceId();
-        if ($valveId <= 0) {
-            return 'Fehler: Keine Valve-Instanz zugewiesen';
-        }
-
-        return (string) @GSVAL_PushDeviceSchedules($valveId);
-    }
-
-    public function SaveDeviceSchedules(mixed $rulesJson = null): string
-    {
-        $valveId = $this->requireValveInstanceId();
-        if ($valveId <= 0) {
-            return 'Fehler: Keine Valve-Instanz zugewiesen';
-        }
-        if (is_array($rulesJson)) {
-            $rulesJson = json_encode($rulesJson, JSON_UNESCAPED_UNICODE) ?: '[]';
-        }
-        if (!is_string($rulesJson) || $rulesJson === '') {
-            return (string) @GSVAL_PushDeviceSchedules($valveId);
-        }
-
-        return (string) @GSVAL_SaveDeviceSchedules($valveId, $rulesJson);
-    }
-
-    public function PullDeviceSchedules(): string
-    {
-        $valveId = $this->requireValveInstanceId();
-        if ($valveId <= 0) {
-            return json_encode([
-                'ok' => false,
-                'message' => 'Fehler: Keine Valve-Instanz zugewiesen',
-                'rules' => [],
-            ], JSON_UNESCAPED_UNICODE) ?: '{}';
-        }
-
-        return (string) @GSVAL_PullDeviceSchedules($valveId);
-    }
-
     private function getValveInstanceId(): int
     {
         try {
@@ -162,6 +106,7 @@ class GardenaSmartValveSchedule extends IPSModuleStrict
             if (function_exists('GSVAL_GetScheduleTileData')) {
                 $data = GSVAL_GetScheduleTileData($valveId);
                 if (is_array($data)) {
+                    $data['scheduleWritable'] = false;
                     $data['scheduleInstanceId'] = $this->InstanceID;
 
                     return $data;
@@ -171,13 +116,22 @@ class GardenaSmartValveSchedule extends IPSModuleStrict
             // fall through
         }
 
+        $text = '';
+        try {
+            $vid = @IPS_GetObjectIDByIdent('DeviceSchedules', $valveId);
+            if ($vid) {
+                $text = (string) GetValue($vid);
+            }
+        } catch (Throwable) {
+            // ignore
+        }
+
         return [
             'name' => IPS_GetName($valveId),
             'scheduleRules' => [],
+            'scheduleText' => $text,
+            'scheduleLines' => $text === '' || $text === '(keine)' ? [] : preg_split('/\r\n|\r|\n/', $text) ?: [],
             'scheduleWritable' => false,
-            'scheduleMaxSlots' => 36,
-            'scheduleLastSavedBy' => '',
-            'scheduleLastSavedAt' => '',
             'valveNames' => [],
             'instanceId' => $valveId,
             'scheduleInstanceId' => $this->InstanceID,

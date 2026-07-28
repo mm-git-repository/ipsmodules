@@ -11,7 +11,7 @@ require_once dirname(__DIR__) . '/GardenaSmartShared/GardenaSmartWaterUsage.php'
 class GardenaSmartGateway extends IPSModuleStrict
 {
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 24;
+    private const MODULE_BUILD = 25;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -455,9 +455,8 @@ class GardenaSmartGateway extends IPSModuleStrict
         if ($deviceId === '') {
             throw new RuntimeException('deviceId fehlt');
         }
-        // Schedule writes keep one WSS session; valve start/stop should stay short-lived
+        // Valve start/stop / power should stay short-lived
         $busySec = match ($action) {
-            'writeSchedulesGen2' => 25,
             'startValve', 'stopValve', 'powerOn', 'powerOff' => 8,
             default => 20,
         };
@@ -477,62 +476,18 @@ class GardenaSmartGateway extends IPSModuleStrict
                     : $client->setWateringTimerGen1($deviceId, $valveId, 0),
                 'powerOn' => $client->setPowerTimer($deviceId, $duration > 0 ? $duration : 86400),
                 'powerOff' => $client->setPowerTimer($deviceId, 0),
-                'writeSchedulesGen2' => $client->writeGen2Schedules(
-                    $deviceId,
-                    is_array($command['rules'] ?? null) ? $command['rules'] : [],
-                    (int) ($command['previousMaxSlot'] ?? -1)
-                ),
                 'clearSchedulesGen1' => $client->clearGen1ScheduleConfig($deviceId),
                 'clearSunScheduleGen1' => $client->clearGen1SunScheduleConfig($deviceId),
                 default => throw new RuntimeException('Unbekannte Aktion: ' . $action),
             };
 
-            // Refresh after command (schedule writes already took long — softer refresh)
-            if ($action === 'writeSchedulesGen2') {
-                $this->debugLog('Schedule', 'active writes OK — settle + verify discover');
-                // Brief settle, then read back from device so IPS matches reality
-                $this->markWssBusy(10);
-                try {
-                    $this->rebuildUsageOverview();
-                } catch (Throwable) {
-                    // ignore
-                }
-                usleep(1500000);
-                $verified = false;
-                $lastVerifyError = '';
-                for ($attempt = 1; $attempt <= 4; $attempt++) {
-                    try {
-                        $this->markWssBusy(15);
-                        $devices = $this->refreshDeviceCache();
-                        $this->pushStateToChildren($devices);
-                        $this->rebuildScheduleOverview($devices);
-                        $this->markGatewayOnline(count($devices));
-                        $verified = true;
-                        break;
-                    } catch (Throwable $e) {
-                        $lastVerifyError = $e->getMessage();
-                        $this->debugLog('Schedule', 'verify discover attempt ' . $attempt . '/4 failed: ' . $lastVerifyError);
-                        usleep(2000000 * $attempt);
-                    }
-                }
-                if (!$verified) {
-                    // Write itself succeeded — do not mark gateway unreachable on verify glitch
-                    $this->SetValue('LastError', 'Zeitplan geschrieben, Verify-Discover: ' . $lastVerifyError);
-                    $this->SetStatus(self::IS_ACTIVE);
-                    $this->SetValue('Reachable', true);
-                }
-                // Short cooldown so poll can resume soon
-                $this->markWssBusy(5);
-            } else {
-                // start/stop/power: return immediately — full discover would delay UI/device feedback
-                $this->clearWssBusy();
-            }
+            // start/stop/power: return immediately — full discover would delay UI/device feedback
+            $this->clearWssBusy();
 
             return $replies;
         } catch (Throwable $e) {
             $this->debugLog('Command', 'failed action=' . $action . ': ' . $e->getMessage());
-            // Short cooldown — do not leave gateway "busy" for a long time after connect crash
-            $this->markWssBusy($action === 'writeSchedulesGen2' ? 6 : 5);
+            $this->markWssBusy(5);
             throw $e;
         }
     }
@@ -690,12 +645,20 @@ class GardenaSmartGateway extends IPSModuleStrict
             }
             if (is_array($exported) && isset($exported['outlets']) && is_array($exported['outlets'])) {
                 foreach ($exported['outlets'] as $outlet) {
-                    if (!is_array($outlet) || empty($outlet['enabled'])) {
+                    if (!is_array($outlet)) {
+                        continue;
+                    }
+                    $include = !empty($outlet['enabled'])
+                        || !empty($outlet['open'])
+                        || trim((string) ($outlet['warning'] ?? '')) !== '';
+                    if (!$include) {
                         continue;
                     }
                     $activeOutlets[] = $outlet;
-                    foreach (['today', 'week', 'year', 'total', 'session'] as $k) {
-                        $totals[$k] = round($totals[$k] + (float) ($outlet[$k] ?? 0), 3);
+                    if (!empty($outlet['enabled'])) {
+                        foreach (['today', 'week', 'year', 'total', 'session'] as $k) {
+                            $totals[$k] = round($totals[$k] + (float) ($outlet[$k] ?? 0), 3);
+                        }
                     }
                 }
             } else {

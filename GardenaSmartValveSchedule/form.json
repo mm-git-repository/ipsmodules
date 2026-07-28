@@ -13,21 +13,10 @@
         },
         {
             "type": "Label",
-            "caption": "Diese Instanz stellt nur die Zeitplan-Kachel bereit. Speichern/Laden läuft über die verknüpfte Valve-Instanz."
+            "caption": "Anzeige der Geräte-Zeitpläne (read-only). Bearbeitung nur in der Gardena-App; IPS aktualisiert beim Poll."
         }
     ],
-    "actions": [
-        {
-            "type": "Button",
-            "caption": "Vom Gerät laden (überschreiben)",
-            "onClick": "$r = json_decode(GSVSC_PullDeviceSchedules($id), true); echo is_array($r) ? (string)($r['message'] ?? 'OK') : 'Fehler';"
-        },
-        {
-            "type": "Button",
-            "caption": "An Gerät speichern",
-            "onClick": "echo GSVSC_PushDeviceSchedules($id);"
-        }
-    ],
+    "actions": [],
     "status": [
         { "code": 102, "icon": "active", "caption": "Aktiv" },
         { "code": 104, "icon": "inactive", "caption": "Keine Valve-Instanz zugewiesen" }

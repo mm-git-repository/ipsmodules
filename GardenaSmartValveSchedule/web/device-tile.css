@@ -128,6 +128,11 @@
     opacity: 0.9;
     margin: 0;
 }
+.gs-hint {
+    margin-top: 10px;
+    font-size: 0.85rem;
+    opacity: 0.7;
+}
 .gs-msg { margin-top: 10px; font-size: 13px; min-height: 1.2em; }
 .gs-msg.ok { color: #2f9e44; }
 .gs-msg.err { color: #c92a2a; }

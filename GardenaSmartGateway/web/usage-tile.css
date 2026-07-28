@@ -108,3 +108,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
 }
+.gs-usage-warn {
+    margin-top: 4px;
+    font-size: 0.82rem;
+    font-weight: 550;
+    color: #c92a2a;
+    white-space: normal;
+}

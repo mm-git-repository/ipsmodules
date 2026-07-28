@@ -13,7 +13,7 @@ class GardenaSmartValve extends IPSModuleStrict
     use GardenaSmartChildTrait;
 
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 21;
+    private const MODULE_BUILD = 22;
     /** Default manual start + new schedule entry duration (30 min). */
     private const DEFAULT_WATERING_DURATION_SEC = 1800;
 
@@ -28,6 +28,7 @@ class GardenaSmartValve extends IPSModuleStrict
         $this->RegisterPropertyInteger('ValveCount', 2);
         // Kept for compatibility; no longer shown in form — used as default watering window
         $this->RegisterPropertyInteger('DefaultDurationSec', self::DEFAULT_WATERING_DURATION_SEC);
+        // Legacy property kept so older instances do not break on upgrade
         $this->RegisterPropertyString('DeviceScheduleRules', '[]');
 
         foreach (['A', 'B'] as $side) {
@@ -77,8 +78,6 @@ class GardenaSmartValve extends IPSModuleStrict
     public function ApplyChanges(): void
     {
         parent::ApplyChanges();
-        // Form list edits land in the property — mirror into live attribute for tile/pull
-        $this->syncScheduleRulesFromProperty();
         $this->SetValue('ModuleVersion', self::MODULE_VERSION . ' (Build ' . self::MODULE_BUILD . ')');
         $this->SetStatus($this->getGatewayInstanceId() > 0 ? 102 : 104);
         $this->notifyGatewaySchedules();
@@ -102,20 +101,6 @@ class GardenaSmartValve extends IPSModuleStrict
             }
             if (($element['type'] ?? '') === 'Select' && in_array($element['name'] ?? '', ['OutletAPreset', 'OutletBPreset'], true)) {
                 $form['elements'][$idx]['options'] = $this->presetSelectOptions();
-            }
-            if (($element['type'] ?? '') === 'List' && ($element['name'] ?? '') === 'DeviceScheduleRules') {
-                [$start, $end] = $this->defaultScheduleWindow();
-                foreach ($form['elements'][$idx]['columns'] ?? [] as $cIdx => $col) {
-                    $name = (string) ($col['name'] ?? '');
-                    if ($name === 'start') {
-                        $form['elements'][$idx]['columns'][$cIdx]['add'] = $start;
-                    }
-                    if ($name === 'end') {
-                        $form['elements'][$idx]['columns'][$cIdx]['add'] = $end;
-                    }
-                }
-                // Show live rules (attribute), not stale pre-ApplyChanges property
-                $form['elements'][$idx]['values'] = $this->loadDeviceScheduleRules();
             }
         }
         if ($this->ReadPropertyInteger('ValveCount') < 2) {
@@ -167,13 +152,12 @@ class GardenaSmartValve extends IPSModuleStrict
     }
 
     /**
-     * Payload for GardenaSmartValveSchedule visualization tile.
+     * Payload for GardenaSmartValveSchedule visualization tile (read-only).
      *
      * @return array<string, mixed>
      */
     public function GetScheduleTileData(): array
     {
-        $generation = $this->ReadPropertyInteger('Generation');
         $valveCount = max(1, $this->ReadPropertyInteger('ValveCount'));
         $valveNames = [];
         foreach (['A', 'B'] as $idx => $side) {
@@ -187,18 +171,19 @@ class GardenaSmartValve extends IPSModuleStrict
                 'name' => $name !== '' ? $name : ('Ventil ' . $side),
             ];
         }
+        $text = (string) $this->GetValue('DeviceSchedules');
+        $lines = ($text === '' || $text === '(keine)')
+            ? []
+            : array_values(array_filter(preg_split('/\r\n|\r|\n/', $text) ?: [], static fn ($l) => trim((string) $l) !== ''));
 
         return [
             'name' => IPS_GetName($this->InstanceID),
             'valveCount' => $valveCount,
             'valveNames' => $valveNames,
-            'scheduleRules' => $this->loadDeviceScheduleRules(),
-            'scheduleWritable' => GardenaSmartSchedules::supportsDeviceScheduleWrite($generation, 'valve'),
-            'scheduleMaxSlots' => GardenaSmartSchedules::GEN2_MAX_SLOTS,
-            'scheduleLastSavedBy' => $this->ReadAttributeString('ScheduleLastSavedBy'),
-            'scheduleLastSavedAt' => $this->ReadAttributeString('ScheduleLastSavedAt'),
-            'defaultScheduleStart' => $this->defaultScheduleWindow()[0],
-            'defaultScheduleEnd' => $this->defaultScheduleWindow()[1],
+            'scheduleText' => $text,
+            'scheduleLines' => $lines,
+            'scheduleRules' => [],
+            'scheduleWritable' => false,
             'instanceId' => $this->InstanceID,
         ];
     }
@@ -252,17 +237,6 @@ class GardenaSmartValve extends IPSModuleStrict
         }
         if ($Ident === 'StopValveB') {
             $this->StopValve(1);
-
-            return;
-        }
-        if ($Ident === 'SaveDeviceSchedules') {
-            $json = is_string($Value) ? $Value : json_encode($Value, JSON_UNESCAPED_UNICODE);
-            echo $this->SaveDeviceSchedules($json ?: null);
-
-            return;
-        }
-        if ($Ident === 'PullDeviceSchedules') {
-            echo $this->PullDeviceSchedules();
 
             return;
         }
@@ -355,148 +329,6 @@ class GardenaSmartValve extends IPSModuleStrict
         ], JSON_UNESCAPED_UNICODE) ?: '{"ok":true,"open":false}';
     }
 
-    public function PushDeviceSchedules(): string
-    {
-        return $this->SaveDeviceSchedules($this->loadDeviceScheduleRules());
-    }
-
-    /**
-     * Discover device schedules and overwrite local IPS editor data.
-     * Returns JSON: {ok, message, rules?}
-     */
-    public function PullDeviceSchedules(): string
-    {
-        $gatewayId = $this->getGatewayInstanceId();
-        $deviceId = $this->ReadPropertyString('DeviceId');
-        if ($gatewayId <= 0 || !IPS_InstanceExists($gatewayId)) {
-            return $this->pullSchedulesResult(false, 'Fehler: Kein Gateway zugewiesen');
-        }
-        if ($deviceId === '') {
-            return $this->pullSchedulesResult(false, 'Fehler: DeviceId fehlt');
-        }
-
-        $raw = @GSGW_FetchDeviceData($gatewayId, $deviceId);
-        $decoded = json_decode((string) $raw, true);
-        if (!is_array($decoded) || empty($decoded['ok'])) {
-            return $this->pullSchedulesResult(
-                false,
-                'Fehler: ' . (string) ($decoded['error'] ?? 'Discover fehlgeschlagen')
-            );
-        }
-        $data = $decoded['device'] ?? null;
-        if (!is_array($data)) {
-            return $this->pullSchedulesResult(false, 'Fehler: Keine Gerätedaten');
-        }
-
-        $this->applyDeviceData($data);
-
-        $generation = $this->ReadPropertyInteger('Generation');
-        $rules = [];
-        if ($generation >= 2) {
-            $rules = GardenaSmartSchedules::parseGen2Rules($data);
-            // Explicit overwrite — also clears local rows when device has none
-            $this->saveDeviceScheduleRules($rules);
-            // Do NOT IPS_ApplyChanges here: breaks visualization RequestAction
-            // Live rules are in attribute DeviceScheduleRulesData (readable immediately)
-            $lines = $this->deviceScheduleLines($rules);
-        } else {
-            $lines = GardenaSmartDevices::formatDeviceSchedules($data);
-        }
-
-        $text = $lines === [] ? '(keine)' : implode("\n", $lines);
-        $this->SetValue('DeviceSchedules', $text);
-        $this->WriteAttributeString('DeviceAppSchedules', $text);
-        $this->WriteAttributeString('ScheduleLastSavedBy', 'Gerät');
-        $this->WriteAttributeString('ScheduleLastSavedAt', date('c'));
-        $this->notifyGatewaySchedules();
-        try {
-            $this->ReloadForm();
-        } catch (Throwable) {
-            // optional — form may not be open
-        }
-
-        $message = $generation >= 2
-            ? ('OK — ' . count($rules) . ' Zeitplan(e) vom Gerät nach IPS übernommen (überschrieben)')
-            : 'OK — Gerätezustand aktualisiert (Gen1-Zeitpläne nur Anzeige)';
-
-        return $this->pullSchedulesResult(true, $message, $rules);
-    }
-
-    /**
-     * @param list<array<string, mixed>> $rules
-     */
-    private function pullSchedulesResult(bool $ok, string $message, array $rules = []): string
-    {
-        $payload = [
-            'ok' => $ok,
-            'message' => $message,
-            'rules' => $rules,
-        ];
-
-        return json_encode($payload, JSON_UNESCAPED_UNICODE) ?: '{"ok":false,"message":"JSON-Fehler","rules":[]}';
-    }
-
-    public function SaveDeviceSchedules(mixed $rulesJson = null): string
-    {
-        $generation = $this->ReadPropertyInteger('Generation');
-        if (!GardenaSmartSchedules::supportsDeviceScheduleWrite($generation, 'valve')) {
-            return 'Fehler: Geräte-Zeitpläne können für Gen1 nur in der Gardena-App bearbeitet werden';
-        }
-        if (is_array($rulesJson)) {
-            $rules = $rulesJson;
-        } elseif (is_string($rulesJson) && $rulesJson !== '') {
-            $rules = json_decode($rulesJson, true);
-            if (!is_array($rules)) {
-                return 'Fehler: Ungültige Zeitplan-Daten';
-            }
-        } else {
-            $rules = $this->loadDeviceScheduleRules();
-        }
-        $normalized = GardenaSmartSchedules::normalizeRules($rules);
-        if (!$normalized['ok']) {
-            return 'Fehler: ' . $normalized['error'];
-        }
-        $rules = $normalized['rules'];
-        $intendedFp = GardenaSmartSchedules::rulesFingerprint($rules);
-        $previousMaxSlot = -1;
-        foreach ($this->loadDeviceScheduleRules() as $prev) {
-            if (is_array($prev) && isset($prev['slot'])) {
-                $previousMaxSlot = max($previousMaxSlot, (int) $prev['slot']);
-            }
-        }
-        $this->saveDeviceScheduleRules($rules);
-        $result = $this->sendCommandToGateway([
-            'action' => 'writeSchedulesGen2',
-            'deviceId' => $this->ReadPropertyString('DeviceId'),
-            'rules' => $rules,
-            'previousMaxSlot' => $previousMaxSlot,
-        ]);
-        if (empty($result['ok'])) {
-            return 'Fehler: ' . (string) ($result['error'] ?? 'unbekannt');
-        }
-
-        // Gateway has re-discovered and pushed device state — reload local copy
-        $deviceRules = $this->loadDeviceScheduleRules();
-        $deviceFp = GardenaSmartSchedules::rulesFingerprint($deviceRules);
-        $lines = $this->deviceScheduleLines($deviceRules !== [] ? $deviceRules : $rules);
-        $text = $lines === [] ? '(keine)' : implode("\n", $lines);
-        $this->SetValue('DeviceSchedules', $text);
-        $this->WriteAttributeString('DeviceAppSchedules', $text);
-        $this->WriteAttributeString('ScheduleLastSavedBy', 'IPS');
-        $this->WriteAttributeString('ScheduleLastSavedAt', date('c'));
-        $this->notifyGatewaySchedules();
-
-        if ($deviceFp !== '' && $intendedFp !== $deviceFp) {
-            return 'Warnung — geschrieben, aber Gerät meldet andere Werte (Anzeige = Gerätezustand). '
-                . 'App/Cloud kann verzögert nachziehen. Erneut „Jetzt aktualisieren“ am Gateway prüfen. '
-                . '(' . count($deviceRules) . '/' . GardenaSmartSchedules::GEN2_MAX_SLOTS . ' Slots)';
-        }
-
-        return 'OK — Zeitpläne am Gerät gespeichert und verifiziert ('
-            . count($deviceRules !== [] ? $deviceRules : $rules)
-            . '/' . GardenaSmartSchedules::GEN2_MAX_SLOTS . ')';
-    }
-
     public function ResetWaterUsage(): string
     {
         $state = $this->loadUsageState();
@@ -551,12 +383,9 @@ class GardenaSmartValve extends IPSModuleStrict
         if ($generation >= 2) {
             $this->applyGen2Valves($data);
             $rules = GardenaSmartSchedules::parseGen2Rules($data);
-            if ($rules !== []) {
-                $this->saveDeviceScheduleRules($rules);
-                $lines = GardenaSmartSchedules::formatRulesLines($rules);
-            } else {
-                $lines = GardenaSmartDevices::formatDeviceSchedules($data);
-            }
+            $lines = $rules !== []
+                ? GardenaSmartSchedules::formatRulesLines($rules)
+                : GardenaSmartDevices::formatDeviceSchedules($data);
         } else {
             $this->applyGen1Valves($data);
             $lines = GardenaSmartDevices::formatDeviceSchedules($data);
@@ -584,22 +413,24 @@ class GardenaSmartValve extends IPSModuleStrict
                 $this->SetValue($prefix . 'Name', $name);
             }
             $state = GardenaSmartDevices::fieldValue($act['state'] ?? null);
-            $open = is_numeric($state) ? ((int) $state !== 0) : false;
+            $actuatorOpen = is_numeric($state) ? ((int) $state !== 0) : false;
+            $timeslotRunning = false;
             if (isset($data['timeslot']) && is_array($data['timeslot'])) {
-                $running = false;
                 foreach ($data['timeslot'] as $tid => $ts) {
                     if ($tid === '_urn' || !is_array($ts)) {
                         continue;
                     }
                     $st = (int) (GardenaSmartDevices::fieldValue($ts['state'] ?? null) ?? -1);
                     $actId = (int) (GardenaSmartDevices::fieldValue($ts['actuator'] ?? null) ?? -1);
-                    if ($actId === $id && $st === 5) {
-                        $running = true;
+                    // Gardena uses state 5 for active watering; accept any positive running state as fallback
+                    if ($actId === $id && ($st === 5 || $st === 1 || $st === 2)) {
+                        $timeslotRunning = true;
                         break;
                     }
                 }
-                $open = $running;
             }
+            // Prefer union: timeslot-only used to hide actuator-open during schedules
+            $open = $actuatorOpen || $timeslotRunning;
             $this->SetValue($prefix . 'Open', $open);
             $this->trackValveOpenState($id, $open);
         }
@@ -643,6 +474,11 @@ class GardenaSmartValve extends IPSModuleStrict
             (bool) $outlet['enabled'],
             time()
         );
+        if ($open && empty($outlet['enabled'])) {
+            $state['_warn' . $side] = 'Ventil ' . $side . ' offen, aber kein Durchfluss-Preset — Verbrauch wird nicht gezählt';
+        } else {
+            unset($state['_warn' . $side]);
+        }
         $this->saveUsageState($state);
         $this->writeUsageVariables($side, $state[$key]);
         $this->notifyGatewayUsage();
@@ -682,6 +518,8 @@ class GardenaSmartValve extends IPSModuleStrict
                 break;
             }
             $outlet = $this->resolveOutlet($side);
+            $usageState = $this->loadUsageState();
+            $warn = (string) ($usageState['_warn' . $side] ?? '');
             $outlets[] = [
                 'side' => $side,
                 'enabled' => (bool) $outlet['enabled'],
@@ -697,6 +535,7 @@ class GardenaSmartValve extends IPSModuleStrict
                 'year' => (float) $this->GetValue('Usage' . $side . 'Year'),
                 'total' => (float) $this->GetValue('Usage' . $side . 'Total'),
                 'session' => (float) $this->GetValue('Usage' . $side . 'Session'),
+                'warning' => $warn,
             ];
         }
 
@@ -712,24 +551,6 @@ class GardenaSmartValve extends IPSModuleStrict
         }
 
         return max(60, $sec > 0 ? $sec : self::DEFAULT_WATERING_DURATION_SEC);
-    }
-
-    /**
-     * @return array{0: string, 1: string} start, end HH:MM
-     */
-    private function defaultScheduleWindow(): array
-    {
-        $startSec = 6 * 3600; // 06:00
-        $endSec = $startSec + $this->defaultWateringDurationSec();
-        if ($endSec >= 86400) {
-            $endSec = 86400 - 60;
-        }
-        $fmt = static function (int $sec): string {
-            $sec = max(0, $sec % 86400);
-            return sprintf('%02d:%02d', intdiv($sec, 3600), intdiv($sec % 3600, 60));
-        };
-
-        return [$fmt($startSec), $fmt($endSec)];
     }
 
     /**
