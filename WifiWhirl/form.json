@@ -29,7 +29,7 @@
                 {
                     "type": "CheckBox",
                     "name": "AutomationEnabled",
-                    "caption": "Automatisierung aktiv"
+                    "caption": "Automatisierung aktiv (bleibt nach Neustart erhalten; Kachel und dieses Häkchen speichern den Zustand dauerhaft)"
                 },
                 {
                     "type": "CheckBox",
