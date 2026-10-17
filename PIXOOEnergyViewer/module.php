@@ -6,9 +6,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
-    private const MODULE_VERSION = '1.1';
+    private const MODULE_VERSION = '1.2';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 34;
+    private const MODULE_BUILD = 35;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -73,6 +73,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     /** Custom-Seite 1–3 auf dem Pixoo (HTTP-Anzeige) */
     private const PIXOO_CUSTOM_PAGE = 1;
+
+    /**
+     * Hintergrund-GIF spätestens nach dieser Zeit erneut senden.
+     * Texte liegen nur über einem GIF; ohne GIF zeigt das Pixoo das Testbild.
+     */
+    private const PIXOO_GIF_REFRESH_SEC = 60;
 
     /** Nach IPS-Neustart: RegisterMessage fehlt — Update-Timer per Guard nachziehen (ms) */
     private const STARTUP_GUARD_MS = 30000;
@@ -1302,6 +1308,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $wrongDrawChannel = $channel !== null && $channel !== self::PIXOO_CHANNEL_CUSTOM;
 
+        if ($this->GetBuffer('PixooGifReady') !== '1') {
+            return [
+                'needs' => true,
+                'reason' => 'Hintergrund-GIF fehlt — Frame mit Leistungsdaten neu aufbauen',
+            ];
+        }
         if ($wrongDrawChannel) {
             return [
                 'needs' => true,
@@ -1686,8 +1698,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     /**
      * @param array{consumption: float, generation: float, net: float} $values
-     * @param bool $lightSync leichter Pfad (PixooSync): ItemList ohne schweres GIF
-     * @param bool $heavyInit schweres Init mit Hintergrund-GIF (nur manuelles Reinit)
+     * @param bool $lightSync Werte-Zyklus: nur Texte, solange das GIF noch gilt
+     * @param bool $heavyInit Frame erzwingen (GIF + Texte, Kanal erst danach)
      * @param bool $bypassCooldown manuelles/stündliches Reinit und Watchdog ignorieren HTTP-Pause
      */
     private function syncPixooDisplay(
@@ -1700,10 +1712,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if ($pixooIp === '') {
             return;
         }
-        if ($lightSync && !$heavyInit && $this->shouldSkipDuplicatePixooSync($values)) {
+        $needFrame = $heavyInit || $this->pixooFrameNeedsPush($pixooIp);
+        if (!$needFrame && $lightSync && $this->shouldSkipDuplicatePixooSync($values)) {
             return;
         }
-        if (!$bypassCooldown && $this->shouldSkipPixooHttp($lightSync && !$heavyInit)) {
+        if (!$bypassCooldown && $this->shouldSkipPixooHttp(true)) {
             return;
         }
         if (!$this->requireCurlExtension('Pixoo')) {
@@ -1711,22 +1724,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
 
         try {
-            if ($heavyInit) {
-                $this->initPixooDisplayHeavy($pixooIp, $values);
+            if ($needFrame) {
+                $this->pushPixooFrame($pixooIp, $values);
                 $this->recordPixooHttpSuccess(false);
                 $this->markPixooSyncCompleted($values);
+                $this->SendDebug('Pixoo', 'Frame gesendet (GIF + Leistungsdaten), danach Kanal Custom', 0);
                 return;
-            }
-
-            if ($this->GetBuffer('PixooInited') !== '1') {
-                $this->initPixooDisplayLight($pixooIp, $values);
-                $this->recordPixooHttpSuccess($lightSync);
-                $this->markPixooSyncCompleted($values);
-                return;
-            }
-
-            if (!$this->pixooIsOnDrawChannel($pixooIp)) {
-                $this->pixooEnsureDrawChannel($pixooIp);
             }
 
             $eff = $this->getEffectivePixooBrightness();
@@ -1740,7 +1743,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->markPixooSyncCompleted($values);
         } catch (\Throwable $e) {
             $this->SetBuffer('PixooInited', '0');
-            $this->recordPixooHttpFailure($lightSync && !$heavyInit && !$bypassCooldown);
+            $this->SetBuffer('PixooGifReady', '0');
+            $this->SetBuffer('PixooChannelIndex', '');
+            if (!$bypassCooldown) {
+                $this->recordPixooHttpFailure(true);
+            }
             $this->SendDebug('Pixoo', 'syncPixooDisplay: ' . $e->getMessage(), 0);
         }
     }
@@ -2538,49 +2545,69 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return (float) $s;
     }
 
-    /**
-     * @param array{consumption: float, generation: float, net: float} $values
-     */
-    private function initPixooDisplayLight(string $ip, array $values): void
+    /** GIF fehlt, ist abgelaufen oder der sichtbare Kanal ist nicht mehr Custom. */
+    private function pixooFrameNeedsPush(string $ip): bool
     {
-        $this->pixooEnsureDrawChannel($ip);
-        $eff = $this->getEffectivePixooBrightness();
-        $this->pixooPostCommand($ip, [
-            'Command' => 'Channel/SetBrightness',
-            'Brightness' => max(0, min(100, $eff)),
-        ]);
-        $this->SetBuffer('PixooLastBrightness', (string) $eff);
-        $this->PixooSendItemList($ip, $values['consumption'], $values['generation'], $values['net']);
-        $this->SetBuffer('PixooInited', '1');
+        if ($this->GetBuffer('PixooGifReady') !== '1' || $this->GetBuffer('PixooInited') !== '1') {
+            return true;
+        }
+        $lastRaw = $this->GetBuffer('PixooLastHeavyGifAt');
+        $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
+        if ($last <= 0 || (time() - $last) >= self::PIXOO_GIF_REFRESH_SEC) {
+            return true;
+        }
+        $onCustom = $this->pixooDrawChannelState($ip);
+        return $onCustom === false;
     }
 
     /**
+     * Bild und Texte schreiben, erst danach auf Custom schalten.
+     * Vorheriges Umschalten zeigt das eingebaute Testbild, bis ein GIF liegt.
+     *
      * @param array{consumption: float, generation: float, net: float} $values
      */
-    private function initPixooDisplayHeavy(string $ip, array $values): void
+    private function pushPixooFrame(string $ip, array $values): void
     {
-        $this->pixooEnsureDrawChannel($ip);
-        $this->pixooPrepareHeavyDraw($ip);
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Channel/SetCustomPageIndex',
+            'CustomPageIndex' => self::PIXOO_CUSTOM_PAGE,
+        ]);
+        $this->PixooSendBackground($ip);
         $eff = $this->getEffectivePixooBrightness();
         $this->pixooPostCommand($ip, [
             'Command' => 'Channel/SetBrightness',
             'Brightness' => max(0, min(100, $eff)),
         ]);
         $this->SetBuffer('PixooLastBrightness', (string) $eff);
-        $this->PixooSendBackground($ip);
         $this->PixooSendItemList($ip, $values['consumption'], $values['generation'], $values['net']);
+        try {
+            $this->pixooPostCommand($ip, [
+                'Command' => 'Channel/OnOffScreen',
+                'OnOff' => 1,
+            ]);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Pixoo', 'Channel/OnOffScreen: ' . $e->getMessage(), 0);
+        }
+        $this->pixooSelectDrawChannel($ip);
+        $this->SetBuffer('PixooGifReady', '1');
         $this->SetBuffer('PixooInited', '1');
         $this->SetBuffer('PixooLastHeavyGifAt', (string) time());
     }
 
-    /** HTTP-Draw: Custom-Kanal (3) + Custom-Seite — nicht Cloud (1). */
-    private function pixooEnsureDrawChannel(string $ip): void
+    /** @return bool|null true = Custom, false = anderer Kanal, null = Abfrage fehlgeschlagen */
+    private function pixooDrawChannelState(string $ip): ?bool
     {
-        $page = self::PIXOO_CUSTOM_PAGE;
-        $this->pixooPostCommand($ip, [
-            'Command' => 'Channel/SetCustomPageIndex',
-            'CustomPageIndex' => $page,
-        ]);
+        $ch = $this->pixooGetChannelIndex($ip);
+        if ($ch === null) {
+            return null;
+        }
+        $this->SetBuffer('PixooChannelIndex', (string) $ch);
+        return $ch === self::PIXOO_CHANNEL_CUSTOM;
+    }
+
+    /** Sichtbaren Kanal zuletzt auf Custom legen, wenn GIF und Texte schon gesendet sind. */
+    private function pixooSelectDrawChannel(string $ip): void
+    {
         $this->pixooPostCommand($ip, [
             'Command' => 'Channel/SetIndex',
             'SelectIndex' => self::PIXOO_CHANNEL_CUSTOM,
@@ -2593,33 +2620,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             );
         }
         $this->SetBuffer('PixooChannelIndex', (string) self::PIXOO_CHANNEL_CUSTOM);
-    }
-
-    private function pixooIsOnDrawChannel(string $ip): bool
-    {
-        $buf = $this->GetBuffer('PixooChannelIndex');
-        if ($buf === (string) self::PIXOO_CHANNEL_CUSTOM) {
-            return true;
-        }
-        $ch = $this->pixooGetChannelIndex($ip);
-        if ($ch === null) {
-            return false;
-        }
-        $this->SetBuffer('PixooChannelIndex', (string) $ch);
-        return $ch === self::PIXOO_CHANNEL_CUSTOM;
-    }
-
-    private function pixooPrepareHeavyDraw(string $ip): void
-    {
-        $this->pixooPostCommand($ip, [
-            'Command' => 'Channel/OnOffScreen',
-            'OnOff' => 1,
-        ]);
-        try {
-            $this->pixooPostCommand($ip, ['Command' => 'Draw/ResetHttpGifId']);
-        } catch (\Throwable $e) {
-            $this->SendDebug('Pixoo', 'Draw/ResetHttpGifId: ' . $e->getMessage(), 0);
-        }
     }
 
     private function pixooGetChannelIndex(string $ip): ?int
@@ -2686,6 +2686,21 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     private function PixooSendBackground(string $ip): void
+    {
+        try {
+            $this->sendBackgroundGif($ip);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Pixoo', 'SendHttpGif erneut nach ResetHttpGifId: ' . $e->getMessage(), 0);
+            try {
+                $this->pixooPostCommand($ip, ['Command' => 'Draw/ResetHttpGifId']);
+            } catch (\Throwable $resetError) {
+                $this->SendDebug('Pixoo', 'Draw/ResetHttpGifId: ' . $resetError->getMessage(), 0);
+            }
+            $this->sendBackgroundGif($ip);
+        }
+    }
+
+    private function sendBackgroundGif(string $ip): void
     {
         $picId = $this->PixooGetPicId($ip);
         $frameLen = self::PIXEL_SIZE * self::PIXEL_SIZE * 3;
