@@ -53,7 +53,7 @@
         {
             "type": "Button",
             "caption": "Dienst neu einrichten",
-            "onClick": "echo 'Dienst: ' . HDADM_SyncService($id);"
+            "onClick": "IPS_ApplyChanges($id); $urlId = @IPS_GetObjectIDByIdent('ServiceUrl', $id); echo 'Dienst: ' . ($urlId > 0 ? GetValue($urlId) : 'nicht eingerichtet');"
         }
     ],
     "status": [
