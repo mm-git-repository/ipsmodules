@@ -1,0 +1,14 @@
+{
+    "id": "{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}",
+    "name": "HomeDisplay",
+    "type": 3,
+    "vendor": "MM-Modules",
+    "aliases": [
+        "Home Display"
+    ],
+    "url": "https://github.com/mm-git-repository/ipsmodules.git",
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "HDISP"
+}

@@ -1,0 +1,132 @@
+{
+    "elements": [
+        {
+            "type": "Label",
+            "caption": "HomeDisplay ist ein Panel-Gerät. Genau eine Instanz stellt den Adapter für alle Panels bereit."
+        },
+        {
+            "type": "CheckBox",
+            "name": "Active",
+            "caption": "Aktiv"
+        },
+        {
+            "type": "CheckBox",
+            "name": "ServeAdapter",
+            "caption": "Adapter bereitstellen (nur bei einer Instanz aktivieren)"
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "AdapterHost",
+            "caption": "Adapter-Adresse (leer = automatisch, z. B. 192.168.1.10)"
+        },
+        {
+            "type": "Label",
+            "caption": "Kopplung: Den Code vom Panel eintragen und übernehmen. Das Panel übernimmt den Token beim nächsten Abruf."
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "ClaimCode",
+            "caption": "Kopplungscode vom Panel"
+        },
+        {
+            "type": "Select",
+            "name": "LayoutId",
+            "caption": "Layout",
+            "options": []
+        },
+        {
+            "type": "Select",
+            "name": "ConfigId",
+            "caption": "Konfiguration",
+            "options": []
+        },
+        {
+            "type": "Select",
+            "name": "IdleMode",
+            "caption": "Ruheanzeige",
+            "options": [
+                {"caption": "Uhrseite", "value": 0},
+                {"caption": "Letzte Seite", "value": 1},
+                {"caption": "Display aus", "value": 2}
+            ]
+        },
+        {
+            "type": "CheckBox",
+            "name": "NightDim",
+            "caption": "Nachts dimmen"
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "DayBrightness",
+            "caption": "Helligkeit Tag (0–100)",
+            "minimum": 0,
+            "maximum": 100
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "NightBrightness",
+            "caption": "Helligkeit Nacht (0–100)",
+            "minimum": 0,
+            "maximum": 100
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "NightFrom",
+            "caption": "Nacht ab Stunde",
+            "minimum": 0,
+            "maximum": 23
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "NightTo",
+            "caption": "Nacht bis Stunde (exkl.)",
+            "minimum": 0,
+            "maximum": 23
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "StateIntervalSec",
+            "caption": "Wertabruf (Sekunden)",
+            "minimum": 2,
+            "maximum": 60
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "IdleStateIntervalSec",
+            "caption": "Wertabruf auf der Uhrseite (Sekunden)",
+            "minimum": 5,
+            "maximum": 300
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "MaintenanceFrom",
+            "caption": "Firmware-Wartung ab Stunde",
+            "minimum": 0,
+            "maximum": 23
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "MaintenanceTo",
+            "caption": "Firmware-Wartung bis Stunde (exkl.)",
+            "minimum": 0,
+            "maximum": 23
+        }
+    ],
+    "actions": [
+        {
+            "type": "Button",
+            "label": "Kopplungscode übernehmen",
+            "onClick": "HDISP_Pair($_IPS['TARGET']);"
+        },
+        {
+            "type": "Button",
+            "label": "Kopplung lösen",
+            "onClick": "HDISP_Unpair($_IPS['TARGET']);"
+        }
+    ],
+    "status": [
+        {"code": 102, "icon": "active", "caption": "HomeDisplay aktiv"},
+        {"code": 104, "icon": "inactive", "caption": "HomeDisplay inaktiv"},
+        {"code": 201, "icon": "error", "caption": "Adapter konnte nicht gestartet werden"}
+    ]
+}

@@ -1,0 +1,32 @@
+{
+    "translations": {
+        "en": {
+            "HomeDisplay ist ein Panel-Gerät. Genau eine Instanz stellt den Adapter für alle Panels bereit.": "HomeDisplay is one panel device. Exactly one instance serves the adapter for all panels.",
+            "Aktiv": "Active",
+            "Adapter bereitstellen (nur bei einer Instanz aktivieren)": "Serve adapter (enable on one instance only)",
+            "Adapter-Adresse (leer = automatisch, z. B. 192.168.1.10)": "Adapter address (empty = automatic, e.g. 192.168.1.10)",
+            "Kopplung: Den Code vom Panel eintragen und übernehmen. Das Panel übernimmt den Token beim nächsten Abruf.": "Pairing: enter the code shown on the panel and apply. The panel receives the token on its next poll.",
+            "Kopplungscode vom Panel": "Pairing code from the panel",
+            "Layout": "Layout",
+            "Konfiguration": "Configuration",
+            "Ruheanzeige": "Idle screen",
+            "Uhrseite": "Clock page",
+            "Letzte Seite": "Last page",
+            "Display aus": "Display off",
+            "Nachts dimmen": "Dim at night",
+            "Helligkeit Tag (0–100)": "Day brightness (0–100)",
+            "Helligkeit Nacht (0–100)": "Night brightness (0–100)",
+            "Nacht ab Stunde": "Night from hour",
+            "Nacht bis Stunde (exkl.)": "Night until hour (exclusive)",
+            "Wertabruf (Sekunden)": "Value poll (seconds)",
+            "Wertabruf auf der Uhrseite (Sekunden)": "Value poll on the clock page (seconds)",
+            "Firmware-Wartung ab Stunde": "Firmware maintenance from hour",
+            "Firmware-Wartung bis Stunde (exkl.)": "Firmware maintenance until hour (exclusive)",
+            "Kopplungscode übernehmen": "Apply pairing code",
+            "Kopplung lösen": "Unpair",
+            "HomeDisplay aktiv": "HomeDisplay active",
+            "HomeDisplay inaktiv": "HomeDisplay inactive",
+            "Adapter konnte nicht gestartet werden": "Adapter could not be started"
+        }
+    }
+}

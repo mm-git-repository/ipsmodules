@@ -1,0 +1,20 @@
+menu "HomeDisplay"
+    config HOMEDISPLAY_WIFI_SSID
+        string "WLAN-Name"
+        default ""
+    config HOMEDISPLAY_WIFI_PASSWORD
+        string "WLAN-Passwort"
+        default ""
+    config HOMEDISPLAY_ADAPTER_URL
+        string "Adapter-URL, leer sucht per mDNS"
+        default ""
+        help
+            Beispiel: https://192.168.1.10:3777/hook/homedisplay
+            Ohne Eintrag sucht das Panel den Editor-Dienst homedisplay.local.
+    config HOMEDISPLAY_TLS_INSECURE
+        bool "Lokales HTTPS-Zertifikat nicht prüfen"
+        default y
+        help
+            Für das erste Flashen gegen IP-Symcon mit eigenem Zertifikat.
+            Danach das Zertifikat fest hinterlegen und diese Option ausschalten.
+endmenu
