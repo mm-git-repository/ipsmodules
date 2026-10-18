@@ -6,9 +6,10 @@ declare(strict_types=1);
  * Gemeinsamer Katalog für Layouts und Konfigurationen.
  * Liegt außerhalb der Instanzen, damit jede Panel-Instanz daraus wählen kann.
  */
+require_once __DIR__ . '/PanelSchema.php';
+
 final class HomeDisplayCatalogStore
 {
-    private const ICONS = ['energy', 'temperature', 'light', 'shutter', 'pump', 'valve', 'alarm'];
 
     public static function path(): string
     {
@@ -104,92 +105,15 @@ final class HomeDisplayCatalogStore
     }
 
     /** @param array<string, mixed> $layout */
-    public static function validateLayout(array $layout): void
+    public static function validateLayout(array $layout, bool $publish = false): void
     {
-        $name = trim((string) ($layout['name'] ?? ''));
-        if ($name === '') {
-            throw new InvalidArgumentException('Layout ohne Namen.');
-        }
-        $pages = $layout['pages'] ?? null;
-        if (!is_array($pages) || $pages === []) {
-            throw new InvalidArgumentException('Layout ohne Seite.');
-        }
-        foreach ($pages as $page) {
-            if (!is_array($page)) {
-                throw new InvalidArgumentException('Ungültige Seite.');
-            }
-            $tiles = $page['tiles'] ?? [];
-            if (!is_array($tiles)) {
-                throw new InvalidArgumentException('Ungültige Kacheln.');
-            }
-            $seen = [];
-            foreach ($tiles as $tile) {
-                if (!is_array($tile)) {
-                    throw new InvalidArgumentException('Ungültige Kachel.');
-                }
-                $tileId = (string) ($tile['tileId'] ?? '');
-                if ($tileId === '' || isset($seen[$tileId])) {
-                    throw new InvalidArgumentException('Jede Kachel braucht eine eigene tileId.');
-                }
-                $seen[$tileId] = true;
-                $icon = (string) ($tile['icon'] ?? '');
-                if (!in_array($icon, self::ICONS, true)) {
-                    throw new InvalidArgumentException('Unbekanntes Icon: ' . $icon);
-                }
-                foreach (['col', 'row'] as $key) {
-                    if (!isset($tile[$key]) || (int) $tile[$key] < 0) {
-                        throw new InvalidArgumentException('Kachel ohne Rasterzelle.');
-                    }
-                }
-                if (isset($tile['x']) || isset($tile['y'])) {
-                    throw new InvalidArgumentException('Freie Pixelkoordinaten sind nicht erlaubt.');
-                }
-            }
-        }
+        HomeDisplayPanelSchema::validateLayout($layout, $publish);
     }
 
     /** @param array<string, mixed> $layout @return array<string, mixed> */
     public static function publicLayout(array $layout): array
     {
-        $pages = [];
-        foreach ($layout['pages'] as $page) {
-            if (!is_array($page)) {
-                continue;
-            }
-            $tiles = [];
-            foreach ($page['tiles'] ?? [] as $tile) {
-                if (!is_array($tile)) {
-                    continue;
-                }
-                $public = [
-                    'tileId' => (string) $tile['tileId'],
-                    'icon' => (string) $tile['icon'],
-                    'title' => (string) ($tile['title'] ?? ''),
-                    'col' => (int) $tile['col'],
-                    'row' => (int) $tile['row'],
-                    'colSpan' => max(1, (int) ($tile['colSpan'] ?? 1)),
-                    'rowSpan' => max(1, (int) ($tile['rowSpan'] ?? 1)),
-                ];
-                $actionId = trim((string) ($tile['actionId'] ?? ''));
-                if ($actionId !== '') {
-                    $public['actionId'] = $actionId;
-                    $public['confirm'] = (bool) ($tile['confirm'] ?? false);
-                }
-                $tiles[] = $public;
-            }
-            $pages[] = [
-                'id' => (string) ($page['id'] ?? 'page'),
-                'title' => (string) ($page['title'] ?? ''),
-                'tiles' => $tiles,
-            ];
-        }
-        return [
-            'id' => (string) $layout['id'],
-            'name' => (string) $layout['name'],
-            'version' => (int) $layout['version'],
-            'columns' => max(1, (int) ($layout['columns'] ?? 2)),
-            'pages' => $pages,
-        ];
+        return HomeDisplayPanelSchema::publicLayout($layout);
     }
 
     /** @param array<string, mixed> $catalog @return array<string, mixed>|null */

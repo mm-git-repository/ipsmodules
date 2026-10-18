@@ -1,5 +1,14 @@
-const MODULE_ID = "{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}";
-const state = { instanceId: 0, catalog: null, variables: [], layout: null, selected: null };
+const PAGES = [
+  ["start", "Start"],
+  ["energie", "Energie"],
+  ["klima", "Klima"],
+  ["licht", "Licht und Rollladen"],
+  ["pool", "Pool und Whirlpool"],
+  ["garten", "Garten"],
+  ["system", "System"]
+];
+const ICONS = ["energy", "temperature", "light", "shutter", "pump", "valve", "alarm"];
+const state = { instanceId: 0, catalog: null, variables: [], layout: null, config: null, page: "start", selected: null };
 
 const $ = (id) => document.getElementById(id);
 
@@ -22,13 +31,22 @@ function setStatus(text) {
   $("status").textContent = text;
 }
 
-function currentPage() {
-  return state.layout.pages[0];
+function pageById(id) {
+  let page = state.layout.pages.find((item) => item.id === id);
+  if (!page) {
+    page = { id, title: PAGES.find((item) => item[0] === id)[1], tiles: [] };
+    state.layout.pages.push(page);
+  }
+  return page;
 }
 
-function renderLayouts() {
-  const list = $("layouts");
-  list.innerHTML = "";
+function currentPage() {
+  return pageById(state.page);
+}
+
+function renderLists() {
+  const layouts = $("layouts");
+  layouts.innerHTML = "";
   for (const layout of state.catalog.layouts) {
     const item = document.createElement("li");
     const button = document.createElement("button");
@@ -36,37 +54,101 @@ function renderLayouts() {
     button.textContent = `${layout.name} v${layout.version || 0}${layout.published ? "" : " Entwurf"}`;
     button.addEventListener("click", () => selectLayout(layout));
     item.appendChild(button);
-    list.appendChild(item);
+    layouts.appendChild(item);
+  }
+  const configs = $("configs");
+  configs.innerHTML = "";
+  for (const config of state.catalog.configs || []) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${config.name} v${config.version || 0}${config.published ? "" : " Entwurf"}`;
+    button.addEventListener("click", () => selectConfig(config));
+    item.appendChild(button);
+    configs.appendChild(item);
+  }
+}
+
+function renderPageButtons() {
+  const bar = $("pages");
+  bar.innerHTML = "";
+  for (const [id, title] of PAGES) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = title;
+    if (id === state.page) button.className = "selected";
+    button.addEventListener("click", () => {
+      state.page = id;
+      state.selected = null;
+      renderPageButtons();
+      renderGrid();
+    });
+    bar.appendChild(button);
   }
 }
 
 function selectLayout(layout) {
   state.layout = JSON.parse(JSON.stringify(layout));
   state.layout.baseVersion = layout.version || 0;
-  if (!state.layout.pages || !state.layout.pages.length) {
-    state.layout.pages = [{ id: "start", title: "Start", tiles: [] }];
-  }
+  state.layout.pages = state.layout.pages || [];
   $("layout-name").value = state.layout.name || "";
   $("columns").value = state.layout.columns || 2;
+  state.page = "start";
+  renderPageButtons();
   renderGrid();
 }
 
+function selectConfig(config) {
+  state.config = JSON.parse(JSON.stringify(config));
+  state.config.baseVersion = config.version || 0;
+  $("config-name").value = config.name || "";
+  $("idle-mode").value = String(config.idleMode ?? 0);
+  $("day-brightness").value = config.dayBrightness ?? 70;
+  $("night-brightness").value = config.nightBrightness ?? 15;
+  $("night-from").value = config.nightFrom ?? 22;
+  $("night-to").value = config.nightTo ?? 6;
+  $("state-interval").value = config.stateIntervalSec ?? 3;
+  $("idle-interval").value = config.idleStateIntervalSec ?? 15;
+  $("maintenance-from").value = config.maintenanceFrom ?? 3;
+  $("maintenance-to").value = config.maintenanceTo ?? 5;
+}
+
+function columns() {
+  return Math.max(1, Math.min(4, Number($("columns").value) || 2));
+}
+
 function renderGrid() {
+  if (!state.layout) return;
   const grid = $("grid");
-  const columns = Math.max(1, Number($("columns").value) || 2);
-  grid.style.gridTemplateColumns = `repeat(${columns}, 1fr)`;
+  const count = columns();
+  grid.style.gridTemplateColumns = `repeat(${count}, 1fr)`;
   grid.innerHTML = "";
-  for (const tile of currentPage().tiles) {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "tile" + (state.selected === tile.tileId ? " selected" : "");
-    card.textContent = `${tile.title || tile.icon}\n${tile.col + 1}/${tile.row + 1}`;
-    card.addEventListener("click", () => {
-      state.selected = tile.tileId;
-      fillTile(tile);
-      renderGrid();
-    });
-    grid.appendChild(card);
+  const tiles = currentPage().tiles;
+  for (let row = 0; row < 4; row += 1) {
+    for (let col = 0; col < count; col += 1) {
+      const tile = tiles.find((item) => item.col === col && item.row === row);
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "tile" + (tile && state.selected === tile.tileId ? " selected" : "");
+      cell.textContent = tile ? `${tile.title || tile.icon}\n${col + 1}/${row + 1}` : `${col + 1}/${row + 1}`;
+      cell.addEventListener("click", () => onCell(col, row, tile));
+      grid.appendChild(cell);
+    }
+  }
+}
+
+function onCell(col, row, tile) {
+  if (tile) {
+    state.selected = tile.tileId;
+    fillTile(tile);
+    renderGrid();
+    return;
+  }
+  const selected = selectedTile();
+  if (selected) {
+    selected.col = col;
+    selected.row = row;
+    renderGrid();
   }
 }
 
@@ -78,96 +160,205 @@ function fillTile(tile) {
   $("tile-decimals").value = tile.decimals || 0;
   $("tile-action").checked = Boolean(tile.actionId);
   $("tile-confirm").checked = Boolean(tile.confirm);
+  syncAction();
 }
 
 function selectedTile() {
   return currentPage().tiles.find((tile) => tile.tileId === state.selected);
 }
 
+function selectedVariable() {
+  return state.variables.find((variable) => String(variable.id) === $("tile-variable").value);
+}
+
+function syncAction() {
+  const variable = selectedVariable();
+  $("tile-action").disabled = !(variable && variable.action);
+  if (!variable || !variable.action) $("tile-action").checked = false;
+}
+
 function applyTileForm() {
   const tile = selectedTile();
   if (!tile) return;
+  const variable = selectedVariable();
   tile.title = $("tile-title").value;
   tile.icon = $("tile-icon").value;
-  tile.variableId = Number($("tile-variable").value) || 0;
+  tile.variableId = variable ? variable.id : 0;
   tile.unit = $("tile-unit").value;
   tile.decimals = Number($("tile-decimals").value) || 0;
-  tile.actionId = $("tile-action").checked ? (tile.actionId || `a-${tile.tileId}`) : "";
-  tile.confirm = $("tile-confirm").checked;
+  if ($("tile-action").checked && variable && variable.action) {
+    tile.actionId = tile.actionId || `a-${tile.tileId}`;
+    tile.actionKind = variable.actionKind || "switch";
+    tile.confirm = $("tile-confirm").checked;
+  } else {
+    delete tile.actionId;
+    delete tile.actionKind;
+    tile.confirm = false;
+  }
 }
 
-function payload() {
+function validateLayout(layout) {
+  if (!layout.name) throw new Error("Ansicht ohne Namen.");
+  if (layout.columns < 1 || layout.columns > 4) throw new Error("Eine bis vier Spalten.");
+  const seen = new Set();
+  for (const page of layout.pages) {
+    if (!PAGES.some((item) => item[0] === page.id)) throw new Error("Unbekannte Seite.");
+    const occupied = new Set();
+    for (const tile of page.tiles) {
+      if (!tile.tileId || seen.has(tile.tileId)) throw new Error("Jede Kachel braucht eine eigene Kennung.");
+      seen.add(tile.tileId);
+      if (!ICONS.includes(tile.icon)) throw new Error("Unbekanntes Symbol.");
+      if (tile.x !== undefined || tile.y !== undefined || tile.scriptId) throw new Error("Pixel und Skripte sind nicht erlaubt.");
+      if (tile.col < 0 || tile.row < 0 || tile.col >= layout.columns) throw new Error("Kachel außerhalb des Rasters.");
+      const key = `${tile.col}:${tile.row}`;
+      if (occupied.has(key)) throw new Error("Kacheln überlappen sich.");
+      occupied.add(key);
+      if (tile.actionId && !variableAllowsAction(tile.variableId)) throw new Error("Schaltbare Kachel ohne freigegebene Variable.");
+    }
+  }
+}
+
+function variableAllowsAction(id) {
+  const variable = state.variables.find((item) => item.id === id);
+  return Boolean(variable && variable.action && variable.actionKind);
+}
+
+function layoutPayload() {
   applyTileForm();
   state.layout.name = $("layout-name").value.trim();
-  state.layout.columns = Math.max(1, Number($("columns").value) || 2);
+  state.layout.columns = columns();
+  state.layout.pages = state.layout.pages.filter((page) => page.tiles.length);
+  if (!state.layout.pages.length) {
+    state.layout.pages = [{ id: "start", title: "Start", tiles: [] }];
+  }
+  validateLayout(state.layout);
   return state.layout;
 }
 
-async function store(publish) {
+function configPayload() {
+  if (!state.config) throw new Error("Keine Konfiguration gewählt.");
+  state.config.name = $("config-name").value.trim();
+  if (!state.config.name) throw new Error("Konfiguration ohne Namen.");
+  state.config.idleMode = Number($("idle-mode").value);
+  state.config.dayBrightness = Number($("day-brightness").value);
+  state.config.nightBrightness = Number($("night-brightness").value);
+  state.config.nightFrom = Number($("night-from").value);
+  state.config.nightTo = Number($("night-to").value);
+  state.config.stateIntervalSec = Number($("state-interval").value);
+  state.config.idleStateIntervalSec = Number($("idle-interval").value);
+  state.config.maintenanceFrom = Number($("maintenance-from").value);
+  state.config.maintenanceTo = Number($("maintenance-to").value);
+  state.config.nightDim = true;
+  return state.config;
+}
+
+async function storeLayout(publish) {
   const method = publish ? "HDISP_PublishLayout" : "HDISP_SaveLayout";
-  const result = await call(method, [state.instanceId, JSON.stringify(payload())]);
+  const result = await call(method, [state.instanceId, JSON.stringify(layoutPayload())]);
   if (!result.ok) throw new Error(result.error || "Speichern fehlgeschlagen");
   state.catalog = await call("HDISP_ListCatalog", [state.instanceId]);
-  renderLayouts();
-  setStatus(publish ? "Veröffentlicht" : "Entwurf gespeichert");
+  renderLists();
+  setStatus(publish ? "Ansicht veröffentlicht" : "Ansichtsentwurf gespeichert");
+}
+
+async function storeConfig(publish) {
+  const method = publish ? "HDISP_PublishConfig" : "HDISP_SaveConfig";
+  const result = await call(method, [state.instanceId, JSON.stringify(configPayload())]);
+  if (!result.ok) throw new Error(result.error || "Speichern fehlgeschlagen");
+  state.catalog = await call("HDISP_ListCatalog", [state.instanceId]);
+  renderLists();
+  setStatus(publish ? "Konfiguration veröffentlicht" : "Konfigurationsentwurf gespeichert");
 }
 
 $("connect").addEventListener("click", async () => {
-  localStorage.setItem("homedisplay", JSON.stringify(connection()));
+  localStorage.setItem("homedisplay", JSON.stringify({ base: connection().base, user: connection().user }));
   setStatus("Verbinde …");
-  const ids = await call("IPS_GetInstanceListByModuleID", [MODULE_ID]);
-  if (!ids.length) throw new Error("Keine HomeDisplay-Instanz gefunden");
-  state.instanceId = ids[0];
-  await call("HDISP_GetService", [state.instanceId]);
-  state.catalog = await call("HDISP_ListCatalog", [state.instanceId]);
-  const variables = await call("HDISP_ListVariables", [state.instanceId]);
-  state.variables = variables.variables || [];
-  const select = $("tile-variable");
-  select.innerHTML = '<option value="">Keine</option>';
-  for (const variable of state.variables) {
-    const option = document.createElement("option");
-    option.value = String(variable.id);
-    option.textContent = `${variable.name} (${variable.id})`;
-    select.appendChild(option);
+  try {
+    const ids = await call("IPS_GetInstanceListByModuleID", ["{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}"]);
+    if (!ids.length) throw new Error("Keine HomeDisplay-Instanz gefunden");
+    state.instanceId = ids[0];
+    await call("HDISP_GetService", [state.instanceId]);
+    state.catalog = await call("HDISP_ListCatalog", [state.instanceId]);
+    const variables = await call("HDISP_ListVariables", [state.instanceId]);
+    state.variables = (variables.variables || []).filter((variable) => variable.type >= 0 && variable.type <= 3);
+    const select = $("tile-variable");
+    select.innerHTML = '<option value="">Keine</option>';
+    for (const variable of state.variables) {
+      const option = document.createElement("option");
+      option.value = String(variable.id);
+      const place = variable.category ? `${variable.category} / ` : "";
+      option.textContent = `${place}${variable.name}`;
+      select.appendChild(option);
+    }
+    renderLists();
+    if (state.catalog.layouts[0]) selectLayout(state.catalog.layouts[0]);
+    if (state.catalog.configs && state.catalog.configs[0]) selectConfig(state.catalog.configs[0]);
+    setStatus("Verbunden");
+  } catch (error) {
+    setStatus(error.message);
   }
-  renderLayouts();
-  if (state.catalog.layouts[0]) selectLayout(state.catalog.layouts[0]);
-  setStatus("Verbunden");
 });
 
 $("new-layout").addEventListener("click", () => {
-  selectLayout({ id: "", name: "Neues Layout", version: 0, published: false, columns: 2, pages: [{ id: "start", title: "Start", tiles: [] }] });
+  selectLayout({ id: "", name: "Neue Ansicht", version: 0, published: false, columns: 2, pages: [] });
+});
+
+$("new-config").addEventListener("click", () => {
+  selectConfig({ id: "", name: "Neue Konfiguration", version: 0, published: false, idleMode: 0, nightDim: true, dayBrightness: 70, nightBrightness: 15, nightFrom: 22, nightTo: 6, stateIntervalSec: 3, idleStateIntervalSec: 15, maintenanceFrom: 3, maintenanceTo: 5 });
 });
 
 $("add-tile").addEventListener("click", () => {
+  if (!state.layout) return;
+  const count = columns();
   const tiles = currentPage().tiles;
+  let placed = null;
+  for (let row = 0; row < 4 && !placed; row += 1) {
+    for (let col = 0; col < count; col += 1) {
+      if (!tiles.some((tile) => tile.col === col && tile.row === row)) {
+        placed = { col, row };
+        break;
+      }
+    }
+  }
+  if (!placed) {
+    setStatus("Auf dieser Seite ist keine Zelle frei.");
+    return;
+  }
+  const variable = selectedVariable();
   const tile = {
     tileId: `t${Date.now()}`,
     icon: $("tile-icon").value,
     title: $("tile-title").value || "Kachel",
-    col: tiles.length % (Number($("columns").value) || 2),
-    row: Math.floor(tiles.length / (Number($("columns").value) || 2)),
+    col: placed.col,
+    row: placed.row,
     colSpan: 1,
     rowSpan: 1,
-    variableId: Number($("tile-variable").value) || 0,
+    variableId: variable ? variable.id : 0,
     unit: $("tile-unit").value,
     decimals: Number($("tile-decimals").value) || 0,
-    actionId: $("tile-action").checked ? `a${Date.now()}` : "",
     confirm: $("tile-confirm").checked
   };
+  if ($("tile-action").checked && variable && variable.action) {
+    tile.actionId = `a${Date.now()}`;
+    tile.actionKind = variable.actionKind || "switch";
+  }
   tiles.push(tile);
   state.selected = tile.tileId;
   renderGrid();
 });
 
 $("delete-tile").addEventListener("click", () => {
+  if (!state.layout) return;
   currentPage().tiles = currentPage().tiles.filter((tile) => tile.tileId !== state.selected);
   state.selected = null;
   renderGrid();
 });
 
-$("save").addEventListener("click", () => store(false).catch((error) => setStatus(error.message)));
-$("publish").addEventListener("click", () => store(true).catch((error) => setStatus(error.message)));
+$("tile-variable").addEventListener("change", syncAction);
+$("save").addEventListener("click", () => storeLayout(false).catch((error) => setStatus(error.message)));
+$("publish").addEventListener("click", () => storeLayout(true).catch((error) => setStatus(error.message)));
+$("save-config").addEventListener("click", () => storeConfig(false).catch((error) => setStatus(error.message)));
+$("publish-config").addEventListener("click", () => storeConfig(true).catch((error) => setStatus(error.message)));
 $("columns").addEventListener("change", renderGrid);
 
 const saved = JSON.parse(localStorage.getItem("homedisplay") || "{}");

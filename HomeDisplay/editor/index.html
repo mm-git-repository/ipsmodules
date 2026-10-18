@@ -18,13 +18,33 @@
     <section>
       <h2>Ansichten</h2>
       <ul id="layouts"></ul>
-      <button id="new-layout" type="button">Neues Layout</button>
+      <button id="new-layout" type="button">Neue Ansicht</button>
       <label>Name <input id="layout-name"></label>
       <label>Spalten <input id="columns" type="number" min="1" max="4" value="2"></label>
       <div id="pages"></div>
       <div class="row">
         <button id="save" type="button">Entwurf speichern</button>
         <button id="publish" type="button">Veröffentlichen</button>
+      </div>
+      <h2>Konfigurationen</h2>
+      <ul id="configs"></ul>
+      <button id="new-config" type="button">Neue Konfiguration</button>
+      <label>Name <input id="config-name"></label>
+      <label>Ruheanzeige
+        <select id="idle-mode">
+          <option value="0">Uhrseite</option>
+          <option value="1">Letzte Seite</option>
+          <option value="2">Display aus</option>
+        </select>
+      </label>
+      <label>Helligkeit Tag <input id="day-brightness" type="number" min="0" max="100" value="70"></label>
+      <label>Helligkeit Nacht <input id="night-brightness" type="number" min="0" max="100" value="15"></label>
+      <label>Nacht von <input id="night-from" type="number" min="0" max="23" value="22"> bis <input id="night-to" type="number" min="0" max="23" value="6"></label>
+      <label>Wertabruf <input id="state-interval" type="number" min="2" max="60" value="3"> s, Uhrseite <input id="idle-interval" type="number" min="5" max="300" value="15"> s</label>
+      <label>Wartung von <input id="maintenance-from" type="number" min="0" max="23" value="3"> bis <input id="maintenance-to" type="number" min="0" max="23" value="5"></label>
+      <div class="row">
+        <button id="save-config" type="button">Entwurf speichern</button>
+        <button id="publish-config" type="button">Veröffentlichen</button>
       </div>
     </section>
     <section>
@@ -50,7 +70,7 @@
       <label>Nachkommastellen <input id="tile-decimals" type="number" min="0" max="3" value="0"></label>
       <label><input id="tile-action" type="checkbox"> Schaltbar</label>
       <label><input id="tile-confirm" type="checkbox"> Bestätigung am Panel</label>
-      <button id="add-tile" type="button">Kachel hinzufügen</button>
+      <button id="add-tile" type="button">Kachel in freie Zelle</button>
       <button id="delete-tile" type="button">Kachel entfernen</button>
     </section>
   </main>

@@ -9,6 +9,15 @@
 #include "esp_log.h"
 
 static const char *TAG = "board";
+static esp_io_expander_handle_t expander_handle;
+
+void homedisplay_board_backlight(bool on)
+{
+    if (!expander_handle) {
+        return;
+    }
+    esp_io_expander_set_level(expander_handle, IO_EXPANDER_PIN_NUM_2, on ? 1 : 0);
+}
 
 static const int DATA_GPIOS[16] = {
     14, 38, 18, 17, 10, 39, 0, 45, 48, 47, 21, 1, 2, 42, 41, 40,
@@ -29,6 +38,7 @@ esp_err_t homedisplay_board_init(esp_lcd_panel_handle_t *panel, esp_lcd_touch_ha
 
     esp_io_expander_handle_t expander = NULL;
     ESP_RETURN_ON_ERROR(esp_io_expander_new_i2c_ch422g(bus, ESP_IO_EXPANDER_I2C_CH422G_ADDRESS, &expander), TAG, "CH422G");
+    expander_handle = expander;
     ESP_RETURN_ON_ERROR(esp_io_expander_set_dir(expander, IO_EXPANDER_PIN_NUM_1 | IO_EXPANDER_PIN_NUM_2 | IO_EXPANDER_PIN_NUM_3, IO_EXPANDER_OUTPUT), TAG, "CH422G Richtung");
     ESP_RETURN_ON_ERROR(esp_io_expander_set_level(expander, IO_EXPANDER_PIN_NUM_1 | IO_EXPANDER_PIN_NUM_3, 1), TAG, "Reset lösen");
     ESP_RETURN_ON_ERROR(esp_io_expander_set_level(expander, IO_EXPANDER_PIN_NUM_2, 0), TAG, "Backlight aus");

@@ -9,7 +9,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 2;
+    private const MODULE_BUILD = 3;
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
     private const FIRMWARE_VERSION = '0.1.0';
@@ -34,6 +34,8 @@ class HomeDisplay extends IPSModuleStrict
         $this->RegisterPropertyInteger('IdleStateIntervalSec', 15);
         $this->RegisterPropertyInteger('MaintenanceFrom', 3);
         $this->RegisterPropertyInteger('MaintenanceTo', 5);
+        $this->RegisterPropertyString('DeviceId', '');
+        $this->RegisterPropertyString('FallbackTiles', '[]');
 
         $this->RegisterVariableString('PairingState', 'Kopplung', '', 1);
         $this->RegisterVariableString('AdapterUrl', 'Adapter-URL', '', 2);
@@ -44,6 +46,16 @@ class HomeDisplay extends IPSModuleStrict
     public function ApplyChanges(): void
     {
         parent::ApplyChanges();
+        if ($this->ReadPropertyString('DeviceId') === '') {
+            static $assigning = false;
+            if (!$assigning) {
+                $assigning = true;
+                IPS_SetProperty($this->InstanceID, 'DeviceId', bin2hex(random_bytes(8)));
+                IPS_ApplyChanges($this->InstanceID);
+                $assigning = false;
+                return;
+            }
+        }
         $this->SetValue('ModuleVersion', $this->versionLabel());
         $catalog = HomeDisplayCatalogStore::load();
         $this->updateFormOptions($catalog);
@@ -152,8 +164,11 @@ class HomeDisplay extends IPSModuleStrict
             $rows[] = [
                 'id' => (int) $id,
                 'name' => (string) ($object['ObjectName'] ?? ''),
+                'category' => $this->categoryName((int) ($object['ParentID'] ?? 0)),
+                'profile' => (string) ($variable['VariableProfile'] ?? $variable['VariableCustomProfile'] ?? ''),
                 'type' => (int) ($variable['VariableType'] ?? -1),
                 'action' => (int) ($variable['VariableAction'] ?? 0) > 0 || (int) ($variable['VariableCustomAction'] ?? 0) > 0,
+                'actionKind' => $this->actionKind($variable),
             ];
             if (count($rows) >= 2000) {
                 break;
@@ -203,6 +218,12 @@ class HomeDisplay extends IPSModuleStrict
                 return;
             case 'PublishConfig':
                 $this->PublishConfig($json);
+                return;
+            case 'ApplyPreset':
+                $this->ApplyPreset(is_string($Value) ? $Value : '');
+                return;
+            case 'PublishFallback':
+                $this->PublishFallback();
                 return;
             default:
                 $this->SendDebug('Editor', 'Unbekannte Aktion ' . $Ident, 0);
@@ -317,7 +338,9 @@ class HomeDisplay extends IPSModuleStrict
     private function storeCatalogItem(string $bucket, array $item, bool $publish): void
     {
         if ($bucket === 'layouts') {
-            HomeDisplayCatalogStore::validateLayout($item);
+            HomeDisplayCatalogStore::validateLayout($item, $publish);
+        } elseif ($bucket === 'configs') {
+            HomeDisplayPanelSchema::validateConfig($item);
         } elseif (trim((string) ($item['name'] ?? '')) === '') {
             throw new InvalidArgumentException('Konfiguration ohne Namen.');
         }
@@ -503,10 +526,11 @@ class HomeDisplay extends IPSModuleStrict
             $claim = strtoupper(trim((string) IPS_GetProperty($id, 'ClaimCode')));
             $token = (string) IPS_GetProperty($id, 'DeviceToken');
             if ($claim === $code && $token !== '') {
+                $this->rememberDeviceReport($id, $body);
                 return [
                     'status' => 'paired',
                     'token' => $token,
-                    'deviceId' => (string) $id,
+                    'deviceId' => (string) IPS_GetProperty($id, 'DeviceId'),
                     'baseUrl' => $this->adapterBaseUrl(),
                 ];
             }
@@ -535,6 +559,7 @@ class HomeDisplay extends IPSModuleStrict
     {
         $config = $this->assigned($device['id'], 'configs', 'ConfigId');
         $layout = $this->assigned($device['id'], 'layouts', 'LayoutId');
+        $layoutDocument = $this->deviceLayout($device);
         $firmware = $this->firmwareDescriptor();
         return [
             'contract' => self::CONTRACT,
@@ -542,17 +567,19 @@ class HomeDisplay extends IPSModuleStrict
             'firmware' => [
                 'version' => $firmware['version'],
                 'sha256' => $firmware['sha256'],
+                'signature' => $firmware['signature'],
                 'url' => '/v1/firmware',
                 'available' => $firmware['available'],
             ],
             'config' => [
-                'version' => (int) ($config['version'] ?? 0),
+                'version' => is_array($config) ? (int) ($config['version'] ?? 0) : 0,
                 'sha256' => $this->hash($this->configDocument($device['id'], $config)),
             ],
             'layout' => [
-                'version' => (int) ($layout['version'] ?? 0),
-                'sha256' => $layout === null ? '' : $this->hash(HomeDisplayCatalogStore::publicLayout($layout)),
-                'minFirmware' => (string) ($layout['minFirmware'] ?? '0.1.0'),
+                'version' => (int) ($layoutDocument['version'] ?? 0),
+                'sha256' => $this->hash($layoutDocument),
+                'minFirmware' => is_array($layout) ? (string) ($layout['minFirmware'] ?? '0.1.0') : '0.1.0',
+                'held' => $this->layoutHeld($device['id'], $layout),
             ],
         ];
     }
@@ -597,6 +624,14 @@ class HomeDisplay extends IPSModuleStrict
     private function deviceLayout(array $device): array
     {
         $layout = $this->assigned($device['id'], 'layouts', 'LayoutId');
+        if ($layout === null || empty($layout['published']) || $this->layoutTileCount($layout) === 0) {
+            $fallback = $this->fallbackLayout($device['id']);
+            if ($fallback !== null) {
+                $public = HomeDisplayCatalogStore::publicLayout($fallback);
+                $public['contract'] = self::CONTRACT;
+                return $public;
+            }
+        }
         if ($layout === null || empty($layout['published'])) {
             return ['contract' => self::CONTRACT, 'id' => '', 'version' => 0, 'columns' => 2, 'pages' => []];
         }
@@ -609,7 +644,22 @@ class HomeDisplay extends IPSModuleStrict
     private function deviceState(array $device): array
     {
         $layout = $this->assigned($device['id'], 'layouts', 'LayoutId');
+        if (!is_array($layout) || $this->layoutTileCount($layout) === 0) {
+            $fallback = $this->fallbackLayout($device['id']);
+            $layout = is_array($fallback) ? $fallback : $layout;
+        }
         $runtime = $this->runtime();
+        $seq = (int) ($runtime[(string) $device['id']]['seq'] ?? 0);
+        $since = isset($_GET['since']) ? (int) $_GET['since'] : -1;
+        if ($since >= 0 && $since >= $seq) {
+            return [
+                'contract' => self::CONTRACT,
+                'seq' => $seq,
+                'now' => time(),
+                'unchanged' => true,
+                'tiles' => [],
+            ];
+        }
         $pending = $runtime[(string) $device['id']]['pending'] ?? [];
         $pending = is_array($pending) ? $pending : [];
         $tiles = [];
@@ -629,6 +679,10 @@ class HomeDisplay extends IPSModuleStrict
                 if ($variableId > 0 && IPS_VariableExists($variableId)) {
                     $text = $this->formatVariable($variableId, $tile);
                     $quality = 'ok';
+                }
+                if (isset($pending[$tileId])) {
+                    $text = 'wird ausgeführt';
+                    $quality = 'pending';
                 }
                 $tiles[] = [
                     'tileId' => $tileId,
@@ -690,10 +744,7 @@ class HomeDisplay extends IPSModuleStrict
         if ((int) ($variable['VariableAction'] ?? 0) <= 0 && (int) ($variable['VariableCustomAction'] ?? 0) <= 0) {
             throw new InvalidArgumentException('Variable ist nicht schaltbar.');
         }
-        $value = $body['value'] ?? null;
-        if (is_bool(GetValue($variableId)) && !is_bool($value)) {
-            $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
-        }
+        $value = $this->actionValue($tile, $variableId, $body['value'] ?? null);
         RequestAction($variableId, $value);
         $seen[] = $requestId;
         $runtime[$key]['requests'] = array_slice($seen, -50);
@@ -709,6 +760,9 @@ class HomeDisplay extends IPSModuleStrict
     private function findTile(int $instanceId, string $tileId): ?array
     {
         $layout = $this->assigned($instanceId, 'layouts', 'LayoutId');
+        if (!is_array($layout) || $this->layoutTileCount($layout) === 0) {
+            $layout = $this->fallbackLayout($instanceId);
+        }
         if (!is_array($layout)) {
             return null;
         }
@@ -726,16 +780,27 @@ class HomeDisplay extends IPSModuleStrict
     private function rememberHealth(array $device, array $body): void
     {
         $version = (string) ($body['firmware'] ?? '');
-        $text = 'Firmware ' . $version;
+        $this->rememberDeviceReport($device['id'], $body);
+        $parts = ['Firmware ' . $version];
+        if (!empty($body['available'])) {
+            $parts[] = 'verfügbar ' . (string) $body['available'];
+        }
+        if (isset($body['progress'])) {
+            $parts[] = 'Fortschritt ' . (int) $body['progress'] . '%';
+        }
         if (!empty($body['updateError'])) {
-            $text .= ', Update: ' . (string) $body['updateError'];
+            $parts[] = 'Update: ' . (string) $body['updateError'];
+        }
+        if (!empty($body['rollback'])) {
+            $parts[] = 'Rollback: ' . (string) $body['rollback'];
         }
         $runtime = $this->runtime();
         $runtime[(string) $device['id']]['pending'] = [];
+        $runtime[(string) $device['id']]['lastCheck'] = time();
         $this->saveRuntime($runtime);
         $statusId = @IPS_GetObjectIDByIdent('PanelStatus', $device['id']);
         if (is_int($statusId) && $statusId > 0) {
-            SetValue($statusId, $text);
+            SetValue($statusId, implode(', ', $parts));
         }
     }
 
@@ -779,7 +844,7 @@ class HomeDisplay extends IPSModuleStrict
         return hash('sha256', $json === false ? '' : $json);
     }
 
-    /** @return array{version: string, sha256: string, available: bool, path: string} */
+    /** @return array{version: string, sha256: string, signature: string, available: bool, path: string} */
     private function firmwareDescriptor(): array
     {
         $versionFile = __DIR__ . '/firmware/VERSION';
@@ -789,6 +854,7 @@ class HomeDisplay extends IPSModuleStrict
         return [
             'version' => $version !== '' ? $version : self::FIRMWARE_VERSION,
             'sha256' => $available ? hash_file('sha256', $path) : '',
+            'signature' => $available ? $this->firmwareSignature($path) : '',
             'available' => $available,
             'path' => $path,
         ];
@@ -818,9 +884,44 @@ class HomeDisplay extends IPSModuleStrict
         $this->SetValue('PairingState', 'Code vom Panel eintragen');
     }
 
+    public function ApplyPreset(string $Name): string
+    {
+        $rows = HomeDisplayPanelSchema::presetRows($Name);
+        $json = json_encode($rows, JSON_UNESCAPED_UNICODE);
+        if ($json === false) {
+            return 'Preset konnte nicht erzeugt werden.';
+        }
+        IPS_SetProperty($this->InstanceID, 'FallbackTiles', $json);
+        IPS_ApplyChanges($this->InstanceID);
+        return 'Preset eingetragen. Variablen in der Liste zuordnen und danach veröffentlichen.';
+    }
+
+    public function PublishFallback(): string
+    {
+        $rows = json_decode($this->ReadPropertyString('FallbackTiles'), true);
+        if (!is_array($rows) || $rows === []) {
+            return 'Die Kachelliste ist leer.';
+        }
+        $layout = HomeDisplayPanelSchema::layoutFromRows($rows, IPS_GetName($this->InstanceID));
+        $layout['id'] = 'layout-device-' . $this->ReadPropertyString('DeviceId');
+        $existing = HomeDisplayCatalogStore::find(HomeDisplayCatalogStore::load(), 'layouts', $layout['id']);
+        $layout['baseVersion'] = (int) ($existing['version'] ?? 0);
+        try {
+            $this->storeCatalogItem('layouts', $layout, true);
+        } catch (Throwable $e) {
+            return $e->getMessage();
+        }
+        IPS_SetProperty($this->InstanceID, 'LayoutId', $layout['id']);
+        IPS_ApplyChanges($this->InstanceID);
+        return 'Kachelliste veröffentlicht.';
+    }
+
     private function subscribeLayoutVariables(): void
     {
         $layout = $this->assigned($this->InstanceID, 'layouts', 'LayoutId');
+        if (!is_array($layout) || $this->layoutTileCount($layout) === 0) {
+            $layout = $this->fallbackLayout($this->InstanceID) ?? [];
+        }
         foreach ($layout['pages'] ?? [] as $page) {
             foreach ($page['tiles'] ?? [] as $tile) {
                 $variableId = (int) ($tile['variableId'] ?? 0);
@@ -829,6 +930,135 @@ class HomeDisplay extends IPSModuleStrict
                 }
             }
         }
+    }
+
+    /** @param array<string, mixed> $variable */
+    private function actionKind(array $variable): string
+    {
+        $hasAction = (int) ($variable['VariableAction'] ?? 0) > 0 || (int) ($variable['VariableCustomAction'] ?? 0) > 0;
+        if (!$hasAction) {
+            return '';
+        }
+        $type = (int) ($variable['VariableType'] ?? -1);
+        if ($type === 0) {
+            return 'switch';
+        }
+        $profile = strtolower((string) ($variable['VariableProfile'] ?? $variable['VariableCustomProfile'] ?? ''));
+        if (str_contains($profile, 'shutter') || str_contains($profile, 'rollo') || str_contains($profile, 'position')) {
+            return 'position';
+        }
+        return $type === 1 || $type === 2 ? 'dim' : '';
+    }
+
+    private function categoryName(int $parentId): string
+    {
+        if ($parentId <= 0 || !IPS_ObjectExists($parentId)) {
+            return '';
+        }
+        return IPS_GetName($parentId);
+    }
+
+    /** @param array<string, mixed>|null $layout */
+    private function layoutTileCount(?array $layout): int
+    {
+        $count = 0;
+        foreach ($layout['pages'] ?? [] as $page) {
+            if (is_array($page)) {
+                $count += count($page['tiles'] ?? []);
+            }
+        }
+        return $count;
+    }
+
+    /** @param array<string, mixed>|null $layout */
+    private function layoutHeld(int $instanceId, ?array $layout): bool
+    {
+        if (!is_array($layout)) {
+            return false;
+        }
+        $runtime = $this->runtime();
+        $installed = (string) ($runtime[(string) $instanceId]['firmware'] ?? '0.0.0');
+        return version_compare($installed, (string) ($layout['minFirmware'] ?? '0.1.0'), '<');
+    }
+
+    /** @return array<string, mixed>|null */
+    private function fallbackLayout(int $instanceId): ?array
+    {
+        $rows = json_decode((string) IPS_GetProperty($instanceId, 'FallbackTiles'), true);
+        if (!is_array($rows) || $rows === []) {
+            return null;
+        }
+        try {
+            $layout = HomeDisplayPanelSchema::layoutFromRows($rows, 'Liste');
+            HomeDisplayPanelSchema::validateLayout($layout, false);
+            $layout['id'] = 'fallback';
+            $layout['version'] = 1;
+            $layout['published'] = true;
+            return $layout;
+        } catch (Throwable $e) {
+            $this->SendDebug('Liste', $e->getMessage(), 0);
+            return null;
+        }
+    }
+
+    /** @param array<string, mixed> $body */
+    private function rememberDeviceReport(int $instanceId, array $body): void
+    {
+        if (!isset($body['firmware']) && !isset($body['code'])) {
+            return;
+        }
+        $runtime = $this->runtime();
+        $key = (string) $instanceId;
+        if (isset($body['firmware'])) {
+            $runtime[$key]['firmware'] = (string) $body['firmware'];
+        }
+        foreach (['available', 'updateError', 'rollback', 'progress'] as $field) {
+            if (array_key_exists($field, $body)) {
+                $runtime[$key][$field] = $body[$field];
+            }
+        }
+        $this->saveRuntime($runtime);
+    }
+
+    /** @param array<string, mixed> $tile */
+    private function actionValue(array $tile, int $variableId, mixed $value): mixed
+    {
+        $current = GetValue($variableId);
+        $kind = (string) ($tile['actionKind'] ?? 'switch');
+        if ($kind === 'switch' || is_bool($current)) {
+            if (is_bool($value)) {
+                return $value;
+            }
+            return !((bool) $current);
+        }
+        if (!is_numeric($value)) {
+            throw new InvalidArgumentException('Wert fehlt.');
+        }
+        $number = (float) $value;
+        $min = array_key_exists('valueMin', $tile) ? (float) $tile['valueMin'] : 0.0;
+        $max = array_key_exists('valueMax', $tile) ? (float) $tile['valueMax'] : 100.0;
+        if ($number < $min || $number > $max) {
+            throw new InvalidArgumentException('Wert außerhalb des zulässigen Bereichs.');
+        }
+        return is_int($current) ? (int) round($number) : $number;
+    }
+
+    private function firmwareSignature(string $path): string
+    {
+        $keyPath = __DIR__ . '/firmware/keys/ota-private.pem';
+        if (!is_file($keyPath) || !function_exists('openssl_sign')) {
+            return '';
+        }
+        $key = openssl_pkey_get_private((string) file_get_contents($keyPath));
+        $data = file_get_contents($path);
+        if ($key === false || !is_string($data)) {
+            return '';
+        }
+        $signature = '';
+        if (!openssl_sign($data, $signature, $key, OPENSSL_ALGO_SHA256)) {
+            return '';
+        }
+        return base64_encode($signature);
     }
 
     private function versionLabel(): string

@@ -11,4 +11,5 @@ button { cursor: pointer; }
 #grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; min-height: 240px; }
 .tile { border: 1px solid #c5d0dc; border-radius: 8px; padding: 12px; min-height: 72px; }
 .tile.selected { border-color: #1769aa; background: #f3f8fc; }
-#status { margin-left: auto; }
+#pages { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+#pages button.selected { background: #17324d; color: white; }

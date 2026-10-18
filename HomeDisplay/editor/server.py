@@ -17,6 +17,18 @@ MDNS_GROUP = "224.0.0.251"
 MDNS_PORT = 5353
 
 
+ALLOWED = {
+    "IPS_GetInstanceListByModuleID",
+    "HDISP_GetService",
+    "HDISP_ListCatalog",
+    "HDISP_ListVariables",
+    "HDISP_SaveLayout",
+    "HDISP_PublishLayout",
+    "HDISP_SaveConfig",
+    "HDISP_PublishConfig",
+}
+
+
 def ips_call(base, user, password, method, params):
     payload = json.dumps({"jsonrpc": "2.0", "method": method, "params": params, "id": 1}).encode("utf-8")
     request = urllib.request.Request(base.rstrip("/") + "/api/", data=payload, method="POST")
@@ -159,6 +171,8 @@ class Handler(BaseHTTPRequestHandler):
         incoming = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
         try:
             if self.path == "/api/call":
+                if incoming.get("method") not in ALLOWED:
+                    raise RuntimeError("Dieser Aufruf ist im Editor nicht zugelassen.")
                 result = ips_call(incoming["base"], incoming["user"], incoming["password"], incoming["method"], incoming.get("params", []))
                 if incoming["method"] == "HDISP_GetService" and isinstance(result, str):
                     info = json.loads(result)

@@ -41,6 +41,53 @@
             "options": []
         },
         {
+            "type": "Label",
+            "caption": "Die Liste ist die Rückfallebene, wenn kein veröffentlichtes Layout mit Kacheln gewählt ist. Position sortiert die Zeilen. Freie Pixel gibt es nicht."
+        },
+        {
+            "type": "List",
+            "name": "FallbackTiles",
+            "caption": "Kacheln",
+            "rowCount": 8,
+            "add": true,
+            "delete": true,
+            "sort": {"column": "Position", "direction": "ascending"},
+            "columns": [
+                {"name": "Position", "caption": "Position", "width": "80px", "add": 1, "edit": {"type": "NumberSpinner", "minimum": 1, "maximum": 99}},
+                {"name": "Page", "caption": "Seite", "width": "160px", "add": "start", "edit": {"type": "Select", "options": [
+                    {"caption": "Start", "value": "start"},
+                    {"caption": "Energie", "value": "energie"},
+                    {"caption": "Klima", "value": "klima"},
+                    {"caption": "Licht und Rollladen", "value": "licht"},
+                    {"caption": "Pool und Whirlpool", "value": "pool"},
+                    {"caption": "Garten", "value": "garten"},
+                    {"caption": "System", "value": "system"}
+                ]}},
+                {"name": "Col", "caption": "Spalte", "width": "70px", "add": 0, "edit": {"type": "NumberSpinner", "minimum": 0, "maximum": 3}},
+                {"name": "Row", "caption": "Zeile", "width": "70px", "add": 0, "edit": {"type": "NumberSpinner", "minimum": 0, "maximum": 11}},
+                {"name": "Icon", "caption": "Symbol", "width": "120px", "add": "energy", "edit": {"type": "Select", "options": [
+                    {"caption": "Energie", "value": "energy"},
+                    {"caption": "Temperatur", "value": "temperature"},
+                    {"caption": "Licht", "value": "light"},
+                    {"caption": "Rollladen", "value": "shutter"},
+                    {"caption": "Pumpe", "value": "pump"},
+                    {"caption": "Ventil", "value": "valve"},
+                    {"caption": "Alarm", "value": "alarm"}
+                ]}},
+                {"name": "Title", "caption": "Titel", "width": "160px", "add": "Kachel", "edit": {"type": "ValidationTextBox"}},
+                {"name": "VariableID", "caption": "Variable", "width": "220px", "add": 0, "edit": {"type": "SelectVariable"}},
+                {"name": "Unit", "caption": "Einheit", "width": "70px", "add": "", "edit": {"type": "ValidationTextBox"}},
+                {"name": "Decimals", "caption": "Nachkommastellen", "width": "110px", "add": 0, "edit": {"type": "NumberSpinner", "minimum": 0, "maximum": 3}},
+                {"name": "Action", "caption": "Schaltbar", "width": "80px", "add": false, "edit": {"type": "CheckBox"}},
+                {"name": "Confirm", "caption": "Bestätigung", "width": "100px", "add": false, "edit": {"type": "CheckBox"}},
+                {"name": "ActionKind", "caption": "Aktionsart", "width": "110px", "add": "switch", "edit": {"type": "Select", "options": [
+                    {"caption": "Schalten", "value": "switch"},
+                    {"caption": "Dimmen", "value": "dim"},
+                    {"caption": "Position", "value": "position"}
+                ]}}
+            ]
+        },
+        {
             "type": "Select",
             "name": "IdleMode",
             "caption": "Ruheanzeige",
@@ -122,6 +169,36 @@
             "type": "Button",
             "label": "Kopplung lösen",
             "onClick": "HDISP_Unpair($_IPS['TARGET']);"
+        },
+        {
+            "type": "Button",
+            "label": "Preset Energie",
+            "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'energy');"
+        },
+        {
+            "type": "Button",
+            "label": "Preset Whirlpool",
+            "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'whirl');"
+        },
+        {
+            "type": "Button",
+            "label": "Preset Pool",
+            "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'pool');"
+        },
+        {
+            "type": "Button",
+            "label": "Preset Wasserwerte",
+            "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'tuya');"
+        },
+        {
+            "type": "Button",
+            "label": "Preset Garten",
+            "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'gardena');"
+        },
+        {
+            "type": "Button",
+            "label": "Kachelliste veröffentlichen",
+            "onClick": "HDISP_PublishFallback($_IPS['TARGET']);"
         }
     ],
     "status": [
