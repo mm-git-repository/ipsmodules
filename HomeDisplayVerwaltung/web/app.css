@@ -48,10 +48,10 @@ label.small { font-size: 12px; color: var(--muted); }
 #toolbar .sep { width: 1px; height: 22px; background: var(--line); }
 #toolbar button { padding: 5px 12px; border: 1px solid var(--line); background: white; border-radius: 4px; }
 
-#workspace { display: grid; grid-template-columns: 300px 1fr 320px; min-height: 0; }
+#workspace { display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
 #palette, #properties { background: var(--panel); padding: 8px 12px 12px; overflow: auto; }
 #palette { border-right: 1px solid var(--line); }
-#properties { border-left: 1px solid var(--line); }
+#properties { display: none; }
 .palette-items { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .palette-item { padding: 10px; border: 1px dashed var(--accent); border-radius: 6px; text-align: center; background: var(--accent-soft); cursor: grab; user-select: none; }
 #variable-search { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; }

@@ -26,7 +26,7 @@ Aktionen von der Anzeige prüft `libs/PanelActionGuard.php`: nur Wertkacheln mit
 
 Instanz `Hausanzeige Verwaltung` anlegen, ein Passwort setzen und übernehmen. Die Adresse steht in der Instanz, zum Beispiel `http://192.168.1.10:3777/hook/homedisplay-admin/`. Der Browser fragt nach Benutzer und Passwort; der Benutzername ist beliebig.
 
-Die Oberfläche ist ein Designer mit Menüleiste, Palette, Raster und Eigenschaften:
+Die Oberfläche ist ein Designer mit Menüleiste, Palette und Raster. Eigenschaften einer Kachel öffnet der Doppelklick:
 
 - Palette links: Wert, Seitenwechsler, Text, Bild, Trennlinie und Anzeigestatus per Drag-and-drop ins Raster ziehen. Doppelklick legt das Element in die nächste freie Zelle.
 - „Datei → Neu aus Vorlage Übersicht“ erzeugt eine komplette 1024×600-Ansicht mit Startseite, Energie, Klima, Licht, Rollladen, Pool, Garten und Systemseite. Danach Variablen zuordnen.
