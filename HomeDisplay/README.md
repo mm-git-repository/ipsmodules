@@ -10,13 +10,26 @@ Panel-Modul für IP-Symcon. Jede Instanz ist ein Gerät. Genau eine Instanz stel
 4. Adapter-Adresse auf die erreichbare IP des Servers setzen, wenn die automatische Erkennung nicht passt.
 5. In IP-Symcon SSL einschalten, damit die Panel-Adresse mit `https` beginnt.
 
+Schaltflächen in der Instanz:
+
+- **Verbindung testen** zeigt letzte Meldung, Firmware, WLAN-Stärke, Speicher, Laufzeit, Reset-Grund und Datenalter des Panels.
+- **Vorschau senden** zeigt dem Panel 30 Minuten lang den aktuellen Entwurf der gewählten Ansicht, auch unveröffentlicht.
+- **Vollständig synchronisieren** lässt das Panel Ansicht, Konfiguration und alle Werte neu laden.
+- **Testbild an/aus** blendet Farbbalken, Raster und Touch-Koordinaten für die Hardwareprüfung ein.
+- **Panel neu starten** startet das Panel beim nächsten Manifest-Abruf neu.
+
+Befehle gelangen mit dem nächsten Manifest-Abruf zum Panel (spätestens nach 16 Minuten) und werden genau einmal ausgeführt.
+
+Aktionen vom Panel prüft `libs/PanelActionGuard.php`: nur Wertkacheln mit passender `actionId`, nur Variablen mit Aktion, Werte nur im freigegebenen Bereich, höchstens 30 Aktionen pro Minute und Gerät, doppelte `requestId` werden verworfen. Objekt- oder Skript-IDs vom Panel werden abgelehnt.
+
 ## Verwaltung
 
 Instanz `HomeDisplay Verwaltung` anlegen, ein Passwort setzen und übernehmen. Die Adresse steht in der Instanz, zum Beispiel `http://192.168.1.10:3777/hook/homedisplay-admin/`. Der Browser fragt nach Benutzer und Passwort; der Benutzername ist beliebig.
 
 Die Oberfläche ist ein Designer mit Menüleiste, Palette, Raster und Eigenschaften:
 
-- Palette links: Wert, Tab-Wechsler, Text, Bild und Trennlinie per Drag-and-drop ins Raster ziehen. Doppelklick legt das Element in die nächste freie Zelle.
+- Palette links: Wert, Tab-Wechsler, Text, Bild, Trennlinie und Panel-Status per Drag-and-drop ins Raster ziehen. Doppelklick legt das Element in die nächste freie Zelle.
+- „Datei → Neu aus Vorlage Dashboard“ erzeugt eine komplette 1024×600-Ansicht mit Startseite, Energie, Klima, Licht, Rollladen, Pool, Garten und Systemseite. Danach Variablen zuordnen.
 - Variablenbaum: nach Kategoriepfad gruppiert, sortiert, mit Suche nach Name, Pfad oder ID und Filter „Nur schaltbare“. Variable auf eine Zelle ziehen oder auf eine Wertkachel fallen lassen.
 - Raster: Seitenreiter oben, Kacheln verschieben oder tauschen, Doppelklick öffnet die Details. Entf entfernt, Strg+S speichert den Entwurf.
 - Bilder: Menü „Bilder …“ lädt PNG oder JPEG hoch. IP-Symcon verkleinert auf höchstens 960 × 480 Pixel; das Panel holt die Datei einmal in den Flash.

@@ -12,6 +12,7 @@
       <button type="button" data-menu="file">Datei</button>
       <div class="dropdown" id="menu-file">
         <button type="button" id="new-layout">Neue Ansicht</button>
+        <button type="button" id="template-layout">Neu aus Vorlage „Dashboard“</button>
         <button type="button" id="duplicate-layout">Ansicht duplizieren</button>
         <hr>
         <button type="button" id="save">Entwurf speichern</button>
@@ -66,6 +67,7 @@
         <div class="palette-item" draggable="true" data-kind="label">Text</div>
         <div class="palette-item" draggable="true" data-kind="image">Bild</div>
         <div class="palette-item" draggable="true" data-kind="separator">Trennlinie</div>
+        <div class="palette-item" draggable="true" data-kind="system">Panel-Status</div>
       </div>
       <h2>Variablen</h2>
       <input id="variable-search" type="search" placeholder="Suchen nach Name, Pfad oder ID">
@@ -130,6 +132,9 @@
         <div data-for="image">
           <label>Bild <select id="p-image"></select></label>
           <img id="p-image-preview" alt="">
+        </div>
+        <div data-for="system">
+          <p class="hint">Das Panel füllt diese Kachel selbst: Firmware, WLAN-Stärke, IP-Adresse, Laufzeit, freier Speicher und Alter der Werte. Mindestens 2 × 2 Zellen empfohlen.</p>
         </div>
         <div class="row">
           <button type="button" id="p-details">Details …</button>

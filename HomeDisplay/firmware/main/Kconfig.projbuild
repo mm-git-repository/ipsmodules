@@ -1,7 +1,10 @@
 menu "HomeDisplay"
     config HOMEDISPLAY_WIFI_SSID
-        string "WLAN-Name"
+        string "WLAN-Name (leer = Einrichtung über eigenes WLAN)"
         default ""
+        help
+            Ohne Eintrag und ohne gespeicherte Zugangsdaten öffnet das Panel beim Start
+            zehn Minuten lang das WLAN „HomeDisplay-Setup“. Dort werden WLAN und Adapter eingetragen.
     config HOMEDISPLAY_WIFI_PASSWORD
         string "WLAN-Passwort"
         default ""
@@ -10,11 +13,22 @@ menu "HomeDisplay"
         default ""
         help
             Beispiel: https://192.168.1.10:3777/hook/homedisplay
-            Ohne Eintrag sucht das Panel den Editor-Dienst homedisplay.local.
+            Ohne Eintrag sucht das Panel den Dienst homedisplay.local.
     config HOMEDISPLAY_TLS_INSECURE
         bool "Lokales HTTPS-Zertifikat nicht prüfen"
         default y
         help
             Für das erste Flashen gegen IP-Symcon mit eigenem Zertifikat.
             Danach das Zertifikat fest hinterlegen und diese Option ausschalten.
+    config HOMEDISPLAY_BOOT_TEST_SECONDS
+        int "Testbild nach dem Start (Sekunden, 0 = aus)"
+        default 0
+        range 0 86400
+        help
+            Zeigt Farbbalken, Rasterlinien, Touch-Koordinaten und Bildzähler.
+            Für den 24-Stunden-Dauertest 86400 eintragen.
+    config HOMEDISPLAY_STALE_SECONDS
+        int "Werte gelten als veraltet nach (Sekunden)"
+        default 30
+        range 10 600
 endmenu

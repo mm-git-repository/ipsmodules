@@ -2,30 +2,16 @@
 
 #include <string.h>
 
-#include "esp_event.h"
 #include "esp_log.h"
-#include "esp_netif.h"
 #include "esp_spiffs.h"
-#include "esp_wifi.h"
+#include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "nvs_flash.h"
 
-static const char *TAG = "main";
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
-static void wifi_start(void)
-{
-    esp_netif_init();
-    esp_event_loop_create_default();
-    esp_netif_create_default_wifi_sta();
-    wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_init(&config);
-    wifi_config_t wifi = {0};
-    strncpy((char *) wifi.sta.ssid, CONFIG_HOMEDISPLAY_WIFI_SSID, sizeof(wifi.sta.ssid) - 1);
-    strncpy((char *) wifi.sta.password, CONFIG_HOMEDISPLAY_WIFI_PASSWORD, sizeof(wifi.sta.password) - 1);
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    esp_wifi_set_config(WIFI_IF_STA, &wifi);
-    esp_wifi_start();
-    esp_wifi_connect();
-}
+static const char *TAG = "main";
 
 void app_main(void)
 {
@@ -43,15 +29,40 @@ void app_main(void)
     if (esp_vfs_spiffs_register(&storage) != ESP_OK) {
         ESP_LOGW(TAG, "Bildspeicher konnte nicht eingebunden werden");
     }
+
+    /* Task-Watchdog: 30 s; Client- und LVGL-Task melden sich regelmäßig. */
+    esp_task_wdt_config_t watchdog = {.timeout_ms = 30000, .idle_core_mask = 0, .trigger_panic = true};
+    if (esp_task_wdt_init(&watchdog) == ESP_ERR_INVALID_STATE) {
+        esp_task_wdt_reconfigure(&watchdog);
+    }
+
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_touch_handle_t touch = NULL;
     ESP_ERROR_CHECK(homedisplay_board_init(&panel, &touch));
     homedisplay_ui_init(panel, touch);
-    if (strlen(CONFIG_HOMEDISPLAY_WIFI_SSID) == 0) {
-        homedisplay_ui_status("WLAN in menuconfig eintragen");
+    ESP_LOGI(TAG, "Firmware %s, Reset-Grund %d", HOMEDISPLAY_FIRMWARE_VERSION, (int) esp_reset_reason());
+
+    int64_t rtc_time = 0;
+    if (homedisplay_rtc_read(&rtc_time) == ESP_OK) {
+        homedisplay_ui_set_time(rtc_time);
+    }
+
+    if (CONFIG_HOMEDISPLAY_BOOT_TEST_SECONDS > 0) {
+        homedisplay_ui_test_pattern(true);
+    }
+
+    char ssid[33];
+    char password[65];
+    homedisplay_nvs_get("ssid", ssid, sizeof(ssid));
+    homedisplay_nvs_get("pass", password, sizeof(password));
+    if (ssid[0] == '\0' && strlen(CONFIG_HOMEDISPLAY_WIFI_SSID) > 0) {
+        snprintf(ssid, sizeof(ssid), "%s", CONFIG_HOMEDISPLAY_WIFI_SSID);
+        snprintf(password, sizeof(password), "%s", CONFIG_HOMEDISPLAY_WIFI_PASSWORD);
+    }
+    if (ssid[0] == '\0') {
+        homedisplay_provision_start();
         return;
     }
-    wifi_start();
-    ESP_LOGI(TAG, "Firmware %s", HOMEDISPLAY_FIRMWARE_VERSION);
+    homedisplay_wifi_start(ssid, password);
     homedisplay_client_start();
 }

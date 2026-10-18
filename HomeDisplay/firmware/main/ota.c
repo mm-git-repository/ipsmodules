@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "mbedtls/base64.h"
 #include "mbedtls/pk.h"
 #include "mbedtls/sha256.h"
@@ -71,6 +72,7 @@ esp_err_t homedisplay_ota_run(const char *url, const char *token, const char *sh
     char buffer[1024];
     int received = 0;
     while (true) {
+        esp_task_wdt_reset();
         int read = esp_http_client_read(client, buffer, sizeof(buffer));
         if (read < 0) {
             error = ESP_FAIL;

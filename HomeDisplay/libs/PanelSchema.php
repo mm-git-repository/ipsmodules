@@ -12,7 +12,8 @@ final class HomeDisplayPanelSchema
         'start' => 'Start',
         'energie' => 'Energie',
         'klima' => 'Klima',
-        'licht' => 'Licht und Rollladen',
+        'licht' => 'Licht',
+        'rollladen' => 'Rollladen',
         'pool' => 'Pool und Whirlpool',
         'garten' => 'Garten',
         'system' => 'System',
@@ -20,7 +21,8 @@ final class HomeDisplayPanelSchema
 
     public const ICONS = ['energy', 'temperature', 'light', 'shutter', 'pump', 'valve', 'alarm', 'home', 'clock', 'info'];
 
-    public const KINDS = ['value', 'nav', 'label', 'image', 'separator'];
+    /** system: Diagnosekachel, die das Panel selbst mit Firmware, WLAN, Laufzeit und Datenalter füllt. */
+    public const KINDS = ['value', 'nav', 'label', 'image', 'separator', 'system'];
 
     public const ACTIONS = ['switch', 'dim', 'position'];
 
@@ -270,6 +272,88 @@ final class HomeDisplayPanelSchema
         ];
     }
 
+    /**
+     * Vollständige Dashboard-Vorlage für 1024×600: Startseite mit Tab-Wechslern,
+     * je eine Seite für Energie, Klima, Licht, Rollladen, Pool und Garten sowie eine Systemseite.
+     * Variablen werden anschließend im Designer zugeordnet.
+     *
+     * @return array<string, mixed>
+     */
+    public static function dashboardLayout(string $name = 'Dashboard'): array
+    {
+        $pages = [];
+        $pages[] = ['id' => 'start', 'title' => 'Start', 'tiles' => [
+            ['tileId' => 'start-title', 'kind' => 'label', 'text' => 'Zuhause', 'size' => 'large', 'col' => 0, 'row' => 0, 'colSpan' => 3, 'rowSpan' => 1],
+            ['tileId' => 'nav-energie', 'kind' => 'nav', 'icon' => 'energy', 'title' => 'Energie', 'targetPage' => 'energie', 'col' => 0, 'row' => 1, 'colSpan' => 1, 'rowSpan' => 1],
+            ['tileId' => 'nav-klima', 'kind' => 'nav', 'icon' => 'temperature', 'title' => 'Klima', 'targetPage' => 'klima', 'col' => 1, 'row' => 1, 'colSpan' => 1, 'rowSpan' => 1],
+            ['tileId' => 'nav-licht', 'kind' => 'nav', 'icon' => 'light', 'title' => 'Licht', 'targetPage' => 'licht', 'col' => 2, 'row' => 1, 'colSpan' => 1, 'rowSpan' => 1],
+            ['tileId' => 'nav-rollladen', 'kind' => 'nav', 'icon' => 'shutter', 'title' => 'Rollladen', 'targetPage' => 'rollladen', 'col' => 0, 'row' => 2, 'colSpan' => 1, 'rowSpan' => 1],
+            ['tileId' => 'nav-pool', 'kind' => 'nav', 'icon' => 'pump', 'title' => 'Pool', 'targetPage' => 'pool', 'col' => 1, 'row' => 2, 'colSpan' => 1, 'rowSpan' => 1],
+            ['tileId' => 'nav-garten', 'kind' => 'nav', 'icon' => 'valve', 'title' => 'Garten', 'targetPage' => 'garten', 'col' => 2, 'row' => 2, 'colSpan' => 1, 'rowSpan' => 1],
+            ['tileId' => 'start-netz', 'kind' => 'value', 'icon' => 'energy', 'title' => 'Netzbezug', 'col' => 0, 'row' => 3, 'colSpan' => 1, 'rowSpan' => 1, 'variableId' => 0, 'unit' => 'W', 'decimals' => 0],
+            ['tileId' => 'start-aussen', 'kind' => 'value', 'icon' => 'temperature', 'title' => 'Außen', 'col' => 1, 'row' => 3, 'colSpan' => 1, 'rowSpan' => 1, 'variableId' => 0, 'unit' => '°C', 'decimals' => 1],
+            ['tileId' => 'nav-system', 'kind' => 'nav', 'icon' => 'info', 'title' => 'System', 'targetPage' => 'system', 'col' => 2, 'row' => 3, 'colSpan' => 1, 'rowSpan' => 1],
+        ]];
+        $valuePages = [
+            'energie' => ['energy', 'W', 0, ['Netzbezug', 'Einspeisung', 'Erzeugung', 'Hausverbrauch', 'Batterie', 'Wallbox']],
+            'klima' => ['temperature', '°C', 1, ['Wohnzimmer', 'Schlafzimmer', 'Küche', 'Bad', 'Außen', 'Luftfeuchte']],
+            'licht' => ['light', '', 0, ['Wohnzimmer', 'Esszimmer', 'Küche', 'Flur', 'Terrasse', 'Garten']],
+            'rollladen' => ['shutter', '%', 0, ['Wohnzimmer', 'Esszimmer', 'Küche', 'Schlafzimmer', 'Kinderzimmer', 'Bad']],
+            'pool' => ['pump', '', 1, ['Wassertemperatur', 'pH', 'ORP', 'Pumpe', 'Heizung', 'Whirlpool']],
+            'garten' => ['valve', '', 0, ['Ventil 1', 'Ventil 2', 'Ventil 3', 'Bodenfeuchte', 'Regen', 'Mähroboter']],
+        ];
+        $actionPages = ['licht' => 'switch', 'rollladen' => 'position', 'pool' => 'switch', 'garten' => 'switch'];
+        foreach ($valuePages as $pageId => [$icon, $unit, $decimals, $titles]) {
+            $tiles = [[
+                'tileId' => $pageId . '-title', 'kind' => 'label', 'text' => self::PAGES[$pageId], 'size' => 'large',
+                'col' => 0, 'row' => 0, 'colSpan' => 2, 'rowSpan' => 1,
+            ], [
+                'tileId' => $pageId . '-home', 'kind' => 'nav', 'icon' => 'home', 'title' => 'Start', 'targetPage' => 'start',
+                'col' => 2, 'row' => 0, 'colSpan' => 1, 'rowSpan' => 1,
+            ]];
+            foreach ($titles as $index => $title) {
+                $tile = [
+                    'tileId' => $pageId . '-' . ($index + 1),
+                    'kind' => 'value',
+                    'icon' => $icon,
+                    'title' => $title,
+                    'col' => $index % 3,
+                    'row' => 1 + intdiv($index, 3),
+                    'colSpan' => 1,
+                    'rowSpan' => 1,
+                    'variableId' => 0,
+                    'unit' => $unit,
+                    'decimals' => $decimals,
+                ];
+                $pages_action = $actionPages[$pageId] ?? '';
+                $isSensor = in_array($title, ['Bodenfeuchte', 'Regen', 'Wassertemperatur', 'pH', 'ORP'], true);
+                if ($pages_action !== '' && !$isSensor) {
+                    $tile['actionId'] = $pageId . '-a' . ($index + 1);
+                    $tile['actionKind'] = $pages_action;
+                    $tile['confirm'] = $pageId === 'garten';
+                    if ($pages_action === 'position') {
+                        $tile['valueMin'] = 0;
+                        $tile['valueMax'] = 100;
+                    }
+                }
+                $tiles[] = $tile;
+            }
+            $pages[] = ['id' => $pageId, 'title' => self::PAGES[$pageId], 'tiles' => $tiles];
+        }
+        $pages[] = ['id' => 'system', 'title' => 'System', 'tiles' => [
+            ['tileId' => 'system-title', 'kind' => 'label', 'text' => 'System', 'size' => 'large', 'col' => 0, 'row' => 0, 'colSpan' => 2, 'rowSpan' => 1],
+            ['tileId' => 'system-home', 'kind' => 'nav', 'icon' => 'home', 'title' => 'Start', 'targetPage' => 'start', 'col' => 2, 'row' => 0, 'colSpan' => 1, 'rowSpan' => 1],
+            ['tileId' => 'system-info', 'kind' => 'system', 'title' => 'Panel', 'col' => 0, 'row' => 1, 'colSpan' => 3, 'rowSpan' => 3],
+        ]];
+        return [
+            'name' => $name,
+            'columns' => 3,
+            'rows' => 4,
+            'showTabs' => false,
+            'pages' => $pages,
+        ];
+    }
+
     /** @return list<array<string, mixed>> */
     public static function presetRows(string $name): array
     {
@@ -378,6 +462,9 @@ final class HomeDisplayPanelSchema
             if (isset($tile['size']) && !in_array((string) $tile['size'], self::SIZES, true)) {
                 throw new InvalidArgumentException('Unbekannte Textgröße.');
             }
+            return;
+        }
+        if ($kind === 'system') {
             return;
         }
         if ($kind === 'image') {

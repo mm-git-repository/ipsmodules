@@ -7,20 +7,25 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_random.h"
+#include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "mdns.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/task.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
 static const char *TAG = "client";
+
+#define LAYOUT_CACHE "/storage/layout.json"
+#define CONFIG_CACHE "/storage/config.json"
+#define STATE_CACHE "/storage/state.json"
 
 typedef struct {
     char tile[40];
@@ -37,39 +42,80 @@ static char firmware_signature[700];
 static char firmware_version[24];
 static char update_error[80];
 static char rollback_reason[80];
+static char last_command[24];
 static int progress;
 static int state_interval = 3;
 static int idle_interval = 15;
 static int maintenance_from = 3;
 static int maintenance_to = 5;
 static int last_seq = -1;
+static int failures;
 static int64_t adapter_now;
 static int64_t adapter_now_at;
+static int64_t last_success_at;
+static int64_t started_at;
 static bool layout_held;
 static bool pending_verify;
+static bool online;
 static QueueHandle_t actions;
 
 static void remember(const char *key, const char *value)
 {
-    nvs_handle_t handle;
-    if (nvs_open("homedisplay", NVS_READWRITE, &handle) != ESP_OK) return;
-    nvs_set_str(handle, key, value);
-    nvs_commit(handle);
-    nvs_close(handle);
+    homedisplay_nvs_set(key, value);
 }
 
 static void recall(const char *key, char *value, size_t length)
 {
-    nvs_handle_t handle;
-    value[0] = '\0';
-    if (nvs_open("homedisplay", NVS_READONLY, &handle) != ESP_OK) return;
-    size_t size = length;
-    nvs_get_str(handle, key, value, &size);
-    nvs_close(handle);
+    homedisplay_nvs_get(key, value, length);
+}
+
+static bool write_cache(const char *path, const char *content)
+{
+    char temp[64];
+    snprintf(temp, sizeof(temp), "%s.part", path);
+    FILE *file = fopen(temp, "w");
+    if (!file) return false;
+    size_t length = strlen(content);
+    bool ok = fwrite(content, 1, length, file) == length;
+    fclose(file);
+    if (!ok) {
+        remove(temp);
+        return false;
+    }
+    remove(path);
+    return rename(temp, path) == 0;
+}
+
+static bool read_cache(const char *path, char *buffer, size_t length)
+{
+    FILE *file = fopen(path, "r");
+    if (!file) return false;
+    size_t read = fread(buffer, 1, length - 1, file);
+    fclose(file);
+    buffer[read] = '\0';
+    return read > 0;
+}
+
+static int rssi_now(void)
+{
+    wifi_ap_record_t info;
+    if (esp_wifi_sta_get_ap_info(&info) != ESP_OK) return 0;
+    return info.rssi;
+}
+
+static void set_online(bool value)
+{
+    if (value) last_success_at = esp_timer_get_time();
+    if (value != online) {
+        ESP_LOGI(TAG, value ? "Adapter erreichbar" : "Adapter nicht erreichbar");
+    }
+    online = value;
+    homedisplay_ui_set_online(value, rssi_now());
 }
 
 static esp_err_t request(const char *path, const char *method, const char *body, char *response, size_t response_length)
 {
+    if (!homedisplay_wifi_connected()) return ESP_ERR_WIFI_NOT_CONNECT;
     char url[240];
     snprintf(url, sizeof(url), "%s%s", base_url, path);
     esp_http_client_config_t config = {
@@ -82,6 +128,7 @@ static esp_err_t request(const char *path, const char *method, const char *body,
     config.crt_bundle_attach = NULL;
 #endif
     esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) return ESP_ERR_NO_MEM;
     esp_http_client_set_method(client, strcmp(method, "POST") == 0 ? HTTP_METHOD_POST : HTTP_METHOD_GET);
     if (token[0] != '\0') {
         char header[64];
@@ -90,13 +137,12 @@ static esp_err_t request(const char *path, const char *method, const char *body,
     }
     if (body) {
         esp_http_client_set_header(client, "Content-Type", "application/json");
-        esp_http_client_set_post_field(client, body, strlen(body));
     }
     esp_err_t error = esp_http_client_open(client, body ? strlen(body) : 0);
     if (error == ESP_OK && body) esp_http_client_write(client, body, strlen(body));
     if (error == ESP_OK) {
         esp_http_client_fetch_headers(client);
-        int read = 0;
+        int status = esp_http_client_get_status_code(client);
         int total = 0;
         while (total < (int) response_length - 1) {
             int chunk = esp_http_client_read(client, response + total, response_length - 1 - total);
@@ -106,9 +152,16 @@ static esp_err_t request(const char *path, const char *method, const char *body,
             }
             if (chunk == 0) break;
             total += chunk;
-            read = total;
         }
-        if (error == ESP_OK) response[read] = '\0';
+        response[total < 0 ? 0 : total] = '\0';
+        if (error == ESP_OK && status == 401) {
+            ESP_LOGW(TAG, "Token abgelehnt, Kopplung erforderlich");
+            token[0] = '\0';
+            remember("token", "");
+            error = ESP_ERR_INVALID_STATE;
+        } else if (error == ESP_OK && status >= 400) {
+            error = ESP_FAIL;
+        }
     }
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -151,16 +204,22 @@ static void pair_until_token(void)
     char response[512];
     snprintf(body, sizeof(body), "{\"code\":\"%s\",\"firmware\":\"" HOMEDISPLAY_FIRMWARE_VERSION "\"}", pairing_code);
     while (token[0] == '\0') {
-        if (base_url[0] == '\0') discover();
-        if (base_url[0] != '\0' && request("/v1/hello", "POST", body, response, sizeof(response)) == ESP_OK) {
-            cJSON *root = cJSON_Parse(response);
-            const char *status = cJSON_GetStringValue(cJSON_GetObjectItem(root, "status"));
-            const char *received = cJSON_GetStringValue(cJSON_GetObjectItem(root, "token"));
-            if (status && strcmp(status, "paired") == 0 && received) {
-                snprintf(token, sizeof(token), "%s", received);
-                remember("token", token);
+        esp_task_wdt_reset();
+        if (!homedisplay_wifi_connected()) {
+            homedisplay_ui_status("Warte auf WLAN");
+        } else {
+            homedisplay_ui_status(line);
+            if (base_url[0] == '\0') discover();
+            if (base_url[0] != '\0' && request("/v1/hello", "POST", body, response, sizeof(response)) == ESP_OK) {
+                cJSON *root = cJSON_Parse(response);
+                const char *status = cJSON_GetStringValue(cJSON_GetObjectItem(root, "status"));
+                const char *received = cJSON_GetStringValue(cJSON_GetObjectItem(root, "token"));
+                if (status && strcmp(status, "paired") == 0 && received) {
+                    snprintf(token, sizeof(token), "%s", received);
+                    remember("token", token);
+                }
+                cJSON_Delete(root);
             }
-            cJSON_Delete(root);
         }
         vTaskDelay(pdMS_TO_TICKS(3000));
     }
@@ -192,18 +251,23 @@ static bool maintenance_open(void)
 
 static bool link_ok(void)
 {
-    wifi_ap_record_t info;
-    if (esp_wifi_sta_get_ap_info(&info) != ESP_OK) return false;
-    return info.rssi >= -80 && esp_get_free_heap_size() > 80000;
+    return rssi_now() >= -80 && esp_get_free_heap_size() > 80000;
 }
 
 static void remember_time(cJSON *root)
 {
     cJSON *now = cJSON_GetObjectItem(root, "now");
     if (!now) return;
-    adapter_now = (int64_t) now->valuedouble;
+    int64_t value = (int64_t) now->valuedouble;
+    if (value <= 0) return;
+    /* Die RTC wird höchstens einmal pro Stunde nachgestellt. */
+    static int64_t rtc_written_at;
+    adapter_now = value;
     adapter_now_at = esp_timer_get_time();
     homedisplay_ui_set_time(adapter_now);
+    if (rtc_written_at == 0 || adapter_now_at - rtc_written_at > 3600000000LL) {
+        if (homedisplay_rtc_write(adapter_now) == ESP_OK) rtc_written_at = adapter_now_at;
+    }
 }
 
 static void copy_string(cJSON *item, char *target, size_t length)
@@ -226,6 +290,7 @@ static esp_err_t download_to_file(const char *path, const char *target)
     config.crt_bundle_attach = NULL;
 #endif
     esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) return ESP_ERR_NO_MEM;
     char header[64];
     snprintf(header, sizeof(header), "Bearer %s", token);
     esp_http_client_set_header(client, "Authorization", header);
@@ -250,6 +315,7 @@ static esp_err_t download_to_file(const char *path, const char *target)
     }
     char buffer[1024];
     while (true) {
+        esp_task_wdt_reset();
         int read = esp_http_client_read(client, buffer, sizeof(buffer));
         if (read < 0) {
             error = ESP_FAIL;
@@ -301,12 +367,71 @@ static void fetch_images(const char *layout_json)
     cJSON_Delete(root);
 }
 
+static void apply_config_document(const char *json)
+{
+    homedisplay_ui_apply_config(json);
+    cJSON *document = cJSON_Parse(json);
+    if (!document) return;
+    cJSON *item = cJSON_GetObjectItem(document, "stateIntervalSec");
+    if (item) state_interval = item->valueint;
+    item = cJSON_GetObjectItem(document, "idleStateIntervalSec");
+    if (item) idle_interval = item->valueint;
+    item = cJSON_GetObjectItem(document, "maintenanceFrom");
+    if (item) maintenance_from = item->valueint;
+    item = cJSON_GetObjectItem(document, "maintenanceTo");
+    if (item) maintenance_to = item->valueint;
+    cJSON_Delete(document);
+}
+
+/* Zuletzt bekannte Ansicht, Einstellungen und Werte aus dem Flash, damit das Panel ohne Adapter nicht leer bleibt. */
+static void restore_cache(char *buffer, size_t length)
+{
+    if (read_cache(CONFIG_CACHE, buffer, length)) {
+        apply_config_document(buffer);
+        recall("config_sha", config_sha, sizeof(config_sha));
+    }
+    if (read_cache(LAYOUT_CACHE, buffer, length)) {
+        homedisplay_ui_apply_layout(buffer);
+        recall("layout_sha", layout_sha, sizeof(layout_sha));
+        if (read_cache(STATE_CACHE, buffer, length)) {
+            homedisplay_ui_apply_state(buffer);
+        }
+        homedisplay_ui_status("Zwischengespeicherte Ansicht");
+    }
+}
+
+/* Befehle aus dem Manifest: restart, testPattern, resync. Jeder Befehl wird nur einmal ausgeführt. */
+static void run_command(cJSON *root)
+{
+    cJSON *command = cJSON_GetObjectItem(root, "command");
+    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(command, "name"));
+    const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(command, "id"));
+    if (!name || !id || strcmp(id, last_command) == 0) return;
+    snprintf(last_command, sizeof(last_command), "%s", id);
+    remember("command", last_command);
+    ESP_LOGI(TAG, "Befehl %s", name);
+    if (strcmp(name, "restart") == 0) {
+        homedisplay_ui_status("Neustart");
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
+    } else if (strcmp(name, "testPattern") == 0) {
+        homedisplay_ui_test_pattern(true);
+    } else if (strcmp(name, "testPatternOff") == 0) {
+        homedisplay_ui_test_pattern(false);
+    } else if (strcmp(name, "resync") == 0) {
+        layout_sha[0] = '\0';
+        config_sha[0] = '\0';
+        last_seq = -1;
+    }
+}
+
 static void pull_manifest(char *response, size_t length)
 {
     if (request("/v1/manifest", "GET", NULL, response, length) != ESP_OK) return;
     cJSON *root = cJSON_Parse(response);
     if (!root) return;
     remember_time(root);
+    run_command(root);
     cJSON *firmware = cJSON_GetObjectItem(root, "firmware");
     cJSON *config = cJSON_GetObjectItem(root, "config");
     cJSON *layout = cJSON_GetObjectItem(root, "layout");
@@ -319,28 +444,21 @@ static void pull_manifest(char *response, size_t length)
     copy_string(cJSON_GetObjectItem(layout, "sha256"), next_layout, sizeof(next_layout));
     const char *min_firmware = cJSON_GetStringValue(cJSON_GetObjectItem(layout, "minFirmware"));
     layout_held = min_firmware && version_of(HOMEDISPLAY_FIRMWARE_VERSION) < version_of(min_firmware);
+    cJSON_Delete(root);
     if (next_config[0] && strcmp(next_config, config_sha) != 0 && request("/v1/config", "GET", NULL, response, length) == ESP_OK) {
         snprintf(config_sha, sizeof(config_sha), "%s", next_config);
-        homedisplay_ui_apply_config(response);
-        cJSON *document = cJSON_Parse(response);
-        if (document) {
-            cJSON *item = cJSON_GetObjectItem(document, "stateIntervalSec");
-            if (item) state_interval = item->valueint;
-            item = cJSON_GetObjectItem(document, "idleStateIntervalSec");
-            if (item) idle_interval = item->valueint;
-            item = cJSON_GetObjectItem(document, "maintenanceFrom");
-            if (item) maintenance_from = item->valueint;
-            item = cJSON_GetObjectItem(document, "maintenanceTo");
-            if (item) maintenance_to = item->valueint;
-            cJSON_Delete(document);
-        }
+        apply_config_document(response);
+        write_cache(CONFIG_CACHE, response);
+        remember("config_sha", config_sha);
     }
     if (!layout_held && next_layout[0] && strcmp(next_layout, layout_sha) != 0 && request("/v1/layout", "GET", NULL, response, length) == ESP_OK) {
         fetch_images(response);
         snprintf(layout_sha, sizeof(layout_sha), "%s", next_layout);
         homedisplay_ui_apply_layout(response);
+        write_cache(LAYOUT_CACHE, response);
+        remember("layout_sha", layout_sha);
+        last_seq = -1;
     }
-    cJSON_Delete(root);
 }
 
 static void post_action(const char *tile_id, const char *action_id, int value)
@@ -362,15 +480,24 @@ static void send_queued_action(void)
     char body[220];
     snprintf(body, sizeof(body), "{\"tileId\":\"%s\",\"actionId\":\"%s\",\"value\":%d,\"requestId\":\"%s\"}", message.tile, message.action, message.value, request_id);
     char response[256];
-    request("/v1/actions", "POST", body, response, sizeof(response));
+    /* Ein Wiederholungsversuch mit derselben requestId; der Adapter entdoppelt. */
+    if (request("/v1/actions", "POST", body, response, sizeof(response)) != ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        request("/v1/actions", "POST", body, response, sizeof(response));
+    }
 }
 
 static void send_health(char *response, size_t length)
 {
-    char body[320];
+    char body[480];
+    int64_t uptime = (esp_timer_get_time() - started_at) / 1000000;
+    int64_t data_age = last_success_at ? (esp_timer_get_time() - last_success_at) / 1000000 : -1;
     snprintf(body, sizeof(body),
-             "{\"firmware\":\"" HOMEDISPLAY_FIRMWARE_VERSION "\",\"available\":\"%s\",\"progress\":%d,\"updateError\":\"%s\",\"rollback\":\"%s\"}",
-             firmware_version, progress, update_error, rollback_reason);
+             "{\"firmware\":\"" HOMEDISPLAY_FIRMWARE_VERSION "\",\"available\":\"%s\",\"progress\":%d,\"updateError\":\"%s\",\"rollback\":\"%s\","
+             "\"rssi\":%d,\"heap\":%lu,\"minHeap\":%lu,\"uptime\":%lld,\"resetReason\":%d,\"dataAge\":%lld,\"frames\":%lu,\"failures\":%d}",
+             firmware_version, progress, update_error, rollback_reason,
+             rssi_now(), (unsigned long) esp_get_free_heap_size(), (unsigned long) esp_get_minimum_free_heap_size(),
+             (long long) uptime, (int) esp_reset_reason(), (long long) data_age, (unsigned long) homedisplay_ui_frames(), failures);
     request("/v1/health", "POST", body, response, length);
 }
 
@@ -408,6 +535,8 @@ static void confirm_boot(void)
 static void client_task(void *argument)
 {
     (void) argument;
+    started_at = esp_timer_get_time();
+    esp_task_wdt_add(NULL);
     const esp_partition_t *running = esp_ota_get_running_partition();
     esp_ota_img_states_t image_state;
     if (running && esp_ota_get_state_partition(running, &image_state) == ESP_OK && image_state == ESP_OTA_IMG_PENDING_VERIFY) {
@@ -416,10 +545,10 @@ static void client_task(void *argument)
     recall("rollback", rollback_reason, sizeof(rollback_reason));
     recall("base", base_url, sizeof(base_url));
     recall("token", token, sizeof(token));
-    if (strlen(CONFIG_HOMEDISPLAY_ADAPTER_URL) > 0) snprintf(base_url, sizeof(base_url), "%s", CONFIG_HOMEDISPLAY_ADAPTER_URL);
+    recall("command", last_command, sizeof(last_command));
+    if (strlen(CONFIG_HOMEDISPLAY_ADAPTER_URL) > 0 && base_url[0] == '\0') snprintf(base_url, sizeof(base_url), "%s", CONFIG_HOMEDISPLAY_ADAPTER_URL);
     mdns_init();
     homedisplay_ui_set_action(post_action);
-    if (token[0] == '\0') pair_until_token();
     char *response = heap_caps_malloc(16384, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     size_t response_length = 16384;
     if (!response) {
@@ -428,13 +557,29 @@ static void client_task(void *argument)
     }
     if (!response) {
         homedisplay_ui_status("Zu wenig Speicher");
+        esp_task_wdt_delete(NULL);
         vTaskDelete(NULL);
         return;
     }
+    restore_cache(response, response_length);
+    if (token[0] == '\0') pair_until_token();
     int64_t next_manifest = 0;
     int64_t verify_deadline = esp_timer_get_time() + 180000000;
+    int64_t test_pattern_until = CONFIG_HOMEDISPLAY_BOOT_TEST_SECONDS > 0 ? esp_timer_get_time() + (int64_t) CONFIG_HOMEDISPLAY_BOOT_TEST_SECONDS * 1000000 : 0;
     while (true) {
+        esp_task_wdt_reset();
+        if (test_pattern_until && esp_timer_get_time() > test_pattern_until) {
+            homedisplay_ui_test_pattern(false);
+            test_pattern_until = 0;
+        }
+        if (token[0] == '\0') pair_until_token();
         int64_t now = esp_timer_get_time();
+        if (!homedisplay_wifi_connected()) {
+            set_online(false);
+            homedisplay_ui_status("WLAN getrennt");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            continue;
+        }
         if (now >= next_manifest) {
             pull_manifest(response, response_length);
             int jitter = esp_random() % 60;
@@ -444,24 +589,39 @@ static void client_task(void *argument)
         send_queued_action();
         char path[40];
         snprintf(path, sizeof(path), "/v1/state?since=%d", last_seq);
-        if (request(path, "GET", NULL, response, response_length) == ESP_OK) {
+        esp_err_t error = request(path, "GET", NULL, response, response_length);
+        if (error == ESP_OK) {
+            failures = 0;
             cJSON *root = cJSON_Parse(response);
             cJSON *seq = root ? cJSON_GetObjectItem(root, "seq") : NULL;
+            bool unchanged = root && cJSON_IsTrue(cJSON_GetObjectItem(root, "unchanged"));
             if (seq) last_seq = seq->valueint;
+            if (root) remember_time(root);
             if (root) cJSON_Delete(root);
             homedisplay_ui_apply_state(response);
+            if (!unchanged) write_cache(STATE_CACHE, response);
+            set_online(true);
             confirm_boot();
             homedisplay_ui_status(layout_held ? "Layout wartet auf neuere Firmware" : "HomeDisplay verbunden");
-        } else {
-            homedisplay_ui_status("Adapter nicht erreichbar");
+        } else if (error != ESP_ERR_WIFI_NOT_CONNECT) {
+            failures++;
+            if (failures >= 3) {
+                set_online(false);
+                homedisplay_ui_status("Adapter nicht erreichbar");
+            }
+            if (failures == 20 && strlen(CONFIG_HOMEDISPLAY_ADAPTER_URL) == 0) {
+                /* Adapter eventuell umgezogen: erneut per mDNS suchen. */
+                discover();
+            }
         }
-        send_health(response, response_length);
+        if (online) send_health(response, response_length);
         if (pending_verify && esp_timer_get_time() > verify_deadline) {
             snprintf(rollback_reason, sizeof(rollback_reason), "Keine Bestätigung");
             remember("rollback", rollback_reason);
             esp_ota_mark_app_invalid_rollback_and_reboot();
         }
         int wait = homedisplay_ui_busy() ? state_interval : idle_interval;
+        if (!online) wait = failures > 10 ? 30 : 5;
         if (wait < 2) wait = 2;
         vTaskDelay(pdMS_TO_TICKS(wait * 1000));
     }

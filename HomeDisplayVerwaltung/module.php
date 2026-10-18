@@ -118,6 +118,9 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
         if ($method === 'variables') {
             return ['ok' => true, 'result' => $this->decodeCall(HDISP_ListVariables($panel))];
         }
+        if ($method === 'template') {
+            return ['ok' => true, 'result' => $this->decodeCall(HDISP_LayoutTemplate($panel, (string) ($body['name'] ?? 'Dashboard')))];
+        }
         if ($method === 'images') {
             return ['ok' => true, 'result' => $this->decodeCall(HDISP_ListImages($panel))];
         }

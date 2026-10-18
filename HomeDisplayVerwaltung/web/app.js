@@ -2,7 +2,8 @@ const PAGES = [
   ["start", "Start"],
   ["energie", "Energie"],
   ["klima", "Klima"],
-  ["licht", "Licht und Rollladen"],
+  ["licht", "Licht"],
+  ["rollladen", "Rollladen"],
   ["pool", "Pool und Whirlpool"],
   ["garten", "Garten"],
   ["system", "System"]
@@ -11,7 +12,7 @@ const ICONS = [
   ["energy", "Energie"], ["temperature", "Temperatur"], ["light", "Licht"], ["shutter", "Rollladen"],
   ["pump", "Pumpe"], ["valve", "Ventil"], ["alarm", "Alarm"], ["home", "Haus"], ["clock", "Uhr"], ["info", "Info"]
 ];
-const KIND_NAMES = { value: "Wert", nav: "Tab-Wechsler", label: "Text", image: "Bild", separator: "Trennlinie" };
+const KIND_NAMES = { value: "Wert", nav: "Tab-Wechsler", label: "Text", image: "Bild", separator: "Trennlinie", system: "Panel-Status" };
 const TYPE_NAMES = ["Bool", "Integer", "Float", "String"];
 
 const state = {
@@ -277,6 +278,9 @@ function renderTile(tile) {
     element.querySelector(".text").textContent = tile.text || "Text";
   } else if (tile.kind === "separator") {
     element.innerHTML = `<div class="line"></div>`;
+  } else if (tile.kind === "system") {
+    element.innerHTML = `<div class="kicker">Panel-Status</div><div class="name"></div><div class="text">Firmware · WLAN · Laufzeit · Datenalter</div>`;
+    element.querySelector(".name").textContent = tile.title || "Panel";
   } else if (tile.kind === "image") {
     const image = state.images.find((item) => item.id === tile.imageId);
     element.innerHTML = image ? `<img src="images/${image.id}.${image.ext}" alt="">` : `<div class="missing">Bild wählen</div>`;
@@ -381,6 +385,14 @@ function addTile(kind, col, row, variable) {
   } else if (kind === "separator") {
     tile.colSpan = Math.max(1, state.layout.columns);
     if (!fits(null, col, row, tile.colSpan, 1, null)) tile.colSpan = 1;
+  } else if (kind === "system") {
+    tile.title = "Panel";
+    tile.colSpan = Math.min(2, state.layout.columns);
+    tile.rowSpan = Math.min(2, state.layout.rows);
+    if (!fits(null, col, row, tile.colSpan, tile.rowSpan, null)) {
+      tile.colSpan = 1;
+      tile.rowSpan = 1;
+    }
   } else if (kind === "image") {
     tile.imageId = state.images[0] ? state.images[0].id : "";
   }
@@ -904,6 +916,19 @@ $("publish").addEventListener("click", () => store(true));
 $("tb-save").addEventListener("click", () => store(false));
 $("tb-publish").addEventListener("click", () => store(true));
 $("new-layout").addEventListener("click", () => newLayout(prompt("Name der neuen Ansicht", "Neue Ansicht") || "Neue Ansicht"));
+$("template-layout").addEventListener("click", async () => {
+  try {
+    const layout = await call("template", { name: prompt("Name der neuen Ansicht", "Dashboard") || "Dashboard" });
+    layout.id = "";
+    layout.version = 0;
+    layout.published = false;
+    selectLayout(layout);
+    markDirty();
+    setStatus("Dashboard-Vorlage geladen. Variablen zuordnen, dann speichern.");
+  } catch (error) {
+    setStatus(error.message);
+  }
+});
 $("duplicate-layout").addEventListener("click", () => {
   if (!state.layout) return;
   const copy = JSON.parse(JSON.stringify(state.layout));

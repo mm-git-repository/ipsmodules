@@ -58,7 +58,8 @@
                     {"caption": "Start", "value": "start"},
                     {"caption": "Energie", "value": "energie"},
                     {"caption": "Klima", "value": "klima"},
-                    {"caption": "Licht und Rollladen", "value": "licht"},
+                    {"caption": "Licht", "value": "licht"},
+                    {"caption": "Rollladen", "value": "rollladen"},
                     {"caption": "Pool und Whirlpool", "value": "pool"},
                     {"caption": "Garten", "value": "garten"},
                     {"caption": "System", "value": "system"}
@@ -169,6 +170,42 @@
             "type": "Button",
             "label": "Kopplung lösen",
             "onClick": "HDISP_Unpair($_IPS['TARGET']);"
+        },
+        {
+            "type": "RowLayout",
+            "items": [
+                {
+                    "type": "Button",
+                    "label": "Verbindung testen",
+                    "onClick": "echo HDISP_TestConnection($_IPS['TARGET']);"
+                },
+                {
+                    "type": "Button",
+                    "label": "Vorschau senden",
+                    "onClick": "echo HDISP_SendPreview($_IPS['TARGET']);"
+                },
+                {
+                    "type": "Button",
+                    "label": "Vollständig synchronisieren",
+                    "onClick": "echo HDISP_Resynchronize($_IPS['TARGET']);"
+                },
+                {
+                    "type": "Button",
+                    "label": "Testbild an",
+                    "onClick": "echo HDISP_ShowTestPattern($_IPS['TARGET'], true);"
+                },
+                {
+                    "type": "Button",
+                    "label": "Testbild aus",
+                    "onClick": "echo HDISP_ShowTestPattern($_IPS['TARGET'], false);"
+                },
+                {
+                    "type": "Button",
+                    "label": "Panel neu starten",
+                    "confirm": "Das Panel startet beim nächsten Manifest-Abruf neu. Fortfahren?",
+                    "onClick": "echo HDISP_RestartPanel($_IPS['TARGET']);"
+                }
+            ]
         },
         {
             "type": "Button",
