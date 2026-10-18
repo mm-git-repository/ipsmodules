@@ -9,7 +9,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 1;
+    private const MODULE_BUILD = 2;
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
     private const FIRMWARE_VERSION = '0.1.0';
@@ -54,7 +54,7 @@ class HomeDisplay extends IPSModuleStrict
         }
         if ($this->ReadPropertyBoolean('ServeAdapter')) {
             try {
-                $this->RegisterHook(self::HOOK);
+                $this->registerAdapterHook();
                 $this->SetValue('AdapterUrl', $this->adapterBaseUrl());
             } catch (Throwable $e) {
                 $this->SetStatus(201);
@@ -72,9 +72,10 @@ class HomeDisplay extends IPSModuleStrict
 
     public function GetConfigurationForm(): string
     {
-        $form = json_decode(parent::GetConfigurationForm(), true);
-        if (!is_array($form)) {
-            return parent::GetConfigurationForm();
+        $raw = (string) @file_get_contents(__DIR__ . '/form.json');
+        $form = json_decode($raw, true);
+        if (!is_array($form) || !is_array($form['elements'] ?? null)) {
+            return $raw !== '' ? $raw : '{"elements":[]}';
         }
         $catalog = HomeDisplayCatalogStore::load();
         foreach ($form['elements'] as &$element) {
@@ -90,7 +91,7 @@ class HomeDisplay extends IPSModuleStrict
         }
         unset($element);
         $encoded = json_encode($form, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        return $encoded === false ? parent::GetConfigurationForm() : $encoded;
+        return $encoded === false ? $raw : $encoded;
     }
 
     public function Pair(): string
@@ -407,11 +408,58 @@ class HomeDisplay extends IPSModuleStrict
         return ($https ? 'https://' : 'http://') . $host . ':3777' . self::HOOK;
     }
 
+    private function registerAdapterHook(): void
+    {
+        if (method_exists($this, 'RegisterHook')) {
+            $this->RegisterHook(self::HOOK);
+            return;
+        }
+        $this->updateWebHookControl(true);
+    }
+
     private function unregisterAdapterHook(): void
     {
         if (method_exists($this, 'UnregisterHook')) {
             @$this->UnregisterHook(self::HOOK);
+            return;
         }
+        $this->updateWebHookControl(false);
+    }
+
+    private function updateWebHookControl(bool $register): void
+    {
+        $ids = @IPS_GetInstanceListByModuleID('{015A6EB8-D6E5-4B93-B496-0D3F77AE9FE1}');
+        if (!is_array($ids) || $ids === []) {
+            if ($register) {
+                throw new RuntimeException('WebHook Control nicht gefunden.');
+            }
+            return;
+        }
+        $controlId = (int) $ids[0];
+        $hooks = json_decode((string) IPS_GetProperty($controlId, 'Hooks'), true);
+        $hooks = is_array($hooks) ? $hooks : [];
+        $kept = [];
+        $present = false;
+        foreach ($hooks as $hook) {
+            if (!is_array($hook) || ($hook['Hook'] ?? '') !== self::HOOK) {
+                $kept[] = $hook;
+                continue;
+            }
+            if ($register && (int) ($hook['TargetID'] ?? 0) === $this->InstanceID) {
+                $present = true;
+                $kept[] = $hook;
+            } elseif ((int) ($hook['TargetID'] ?? 0) !== $this->InstanceID) {
+                $kept[] = $hook;
+            }
+        }
+        if ($register && !$present) {
+            $kept[] = ['Hook' => self::HOOK, 'TargetID' => $this->InstanceID];
+        }
+        if ($kept === $hooks) {
+            return;
+        }
+        IPS_SetProperty($controlId, 'Hooks', json_encode($kept));
+        IPS_ApplyChanges($controlId);
     }
 
     private function hookRoute(): string
