@@ -31,7 +31,7 @@
         {
             "type": "Select",
             "name": "LayoutId",
-            "caption": "Layout",
+            "caption": "Seitenlayout",
             "options": []
         },
         {

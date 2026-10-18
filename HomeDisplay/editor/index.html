@@ -16,7 +16,7 @@
   </header>
   <main>
     <section>
-      <h2>Layouts</h2>
+      <h2>Ansichten</h2>
       <ul id="layouts"></ul>
       <button id="new-layout" type="button">Neues Layout</button>
       <label>Name <input id="layout-name"></label>
@@ -32,10 +32,15 @@
       <div id="grid"></div>
       <h2>Kachel</h2>
       <label>Titel <input id="tile-title"></label>
-      <label>Icon
+      <label>Symbol
         <select id="tile-icon">
-          <option>energy</option><option>temperature</option><option>light</option>
-          <option>shutter</option><option>pump</option><option>valve</option><option>alarm</option>
+          <option value="energy">Energie</option>
+          <option value="temperature">Temperatur</option>
+          <option value="light">Licht</option>
+          <option value="shutter">Rollladen</option>
+          <option value="pump">Pumpe</option>
+          <option value="valve">Ventil</option>
+          <option value="alarm">Alarm</option>
         </select>
       </label>
       <label>Variable

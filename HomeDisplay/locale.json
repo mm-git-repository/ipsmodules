@@ -7,7 +7,7 @@
             "Adapter-Adresse (leer = automatisch, z. B. 192.168.1.10)": "Adapter address (empty = automatic, e.g. 192.168.1.10)",
             "Kopplung: Den Code vom Panel eintragen und übernehmen. Das Panel übernimmt den Token beim nächsten Abruf.": "Pairing: enter the code shown on the panel and apply. The panel receives the token on its next poll.",
             "Kopplungscode vom Panel": "Pairing code from the panel",
-            "Layout": "Layout",
+            "Seitenlayout": "Page layout",
             "Konfiguration": "Configuration",
             "Ruheanzeige": "Idle screen",
             "Uhrseite": "Clock page",

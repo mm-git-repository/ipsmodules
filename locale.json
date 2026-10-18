@@ -1,0 +1,56 @@
+{
+    "translations": {
+        "en": {
+            "MM-Modules": "MM-Modules",
+            "ipsmodule": "ipsmodule",
+            "WifiWhirl Whirlpool": "WifiWhirl Whirlpool",
+            "WifiWhirl": "WifiWhirl Whirlpool",
+            "PIXOOEnergyViewer": "Pixoo Energy Viewer",
+            "Pixoo Energy Viewer": "Pixoo Energy Viewer"
+        },
+        "en_GB": {
+            "MM-Modules": "MM-Modules",
+            "ipsmodule": "ipsmodule",
+            "WifiWhirl Whirlpool": "WifiWhirl Whirlpool",
+            "WifiWhirl": "WifiWhirl Whirlpool",
+            "PIXOOEnergyViewer": "Pixoo Energy Viewer",
+            "Pixoo Energy Viewer": "Pixoo Energy Viewer"
+        },
+        "de": {
+            "MM-Modules": "MM-Module",
+            "ipsmodule": "ipsmodule",
+            "WifiWhirl Whirlpool": "WifiWhirl Whirlpool",
+            "WifiWhirl": "WifiWhirl",
+            "PIXOOEnergyViewer": "Pixoo Energieanzeige",
+            "Pixoo Energy Viewer": "Pixoo Energieanzeige",
+            "HomeDisplay": "Hausanzeige",
+            "Home Display": "Hausanzeige",
+            "PoolControl": "Poolsteuerung",
+            "TuyaWaterQuality": "Tuya Wasserqualität",
+            "GardenaSmartGateway": "Gardena Gateway",
+            "GardenaSmartValve": "Gardena Ventil",
+            "GardenaSmartValveSchedule": "Gardena Zeitpläne",
+            "GardenaSmartSensor": "Gardena Sensor",
+            "GardenaSmartPower": "Gardena Steckdose",
+            "GardenaSmartShared": "Gardena Gemeinsam"
+        },
+        "de_DE": {
+            "MM-Modules": "MM-Module",
+            "ipsmodule": "ipsmodule",
+            "WifiWhirl Whirlpool": "WifiWhirl Whirlpool",
+            "WifiWhirl": "WifiWhirl",
+            "PIXOOEnergyViewer": "Pixoo Energieanzeige",
+            "Pixoo Energy Viewer": "Pixoo Energieanzeige",
+            "HomeDisplay": "Hausanzeige",
+            "Home Display": "Hausanzeige",
+            "PoolControl": "Poolsteuerung",
+            "TuyaWaterQuality": "Tuya Wasserqualität",
+            "GardenaSmartGateway": "Gardena Gateway",
+            "GardenaSmartValve": "Gardena Ventil",
+            "GardenaSmartValveSchedule": "Gardena Zeitpläne",
+            "GardenaSmartSensor": "Gardena Sensor",
+            "GardenaSmartPower": "Gardena Steckdose",
+            "GardenaSmartShared": "Gardena Gemeinsam"
+        }
+    }
+}
