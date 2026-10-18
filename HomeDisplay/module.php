@@ -10,7 +10,8 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 5;
+    private const MODULE_BUILD = 8;
+    private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
     private const FIRMWARE_VERSION = '0.1.0';
@@ -19,8 +20,6 @@ class HomeDisplay extends IPSModuleStrict
     {
         parent::Create();
         $this->RegisterPropertyBoolean('Active', true);
-        $this->RegisterPropertyBoolean('ServeAdapter', false);
-        $this->RegisterPropertyString('AdapterHost', '');
         $this->RegisterPropertyString('ClaimCode', '');
         $this->RegisterPropertyString('DeviceToken', '');
         $this->RegisterPropertyString('LayoutId', 'layout-start');
@@ -39,8 +38,8 @@ class HomeDisplay extends IPSModuleStrict
         $this->RegisterPropertyString('FallbackTiles', '[]');
 
         $this->RegisterVariableString('PairingState', 'Kopplung', '', 1);
-        $this->RegisterVariableString('AdapterUrl', 'Adapter-URL', '', 2);
-        $this->RegisterVariableString('PanelStatus', 'Panelstatus', '', 3);
+        $this->RegisterVariableString('AdapterUrl', 'Dienstadresse', '', 2);
+        $this->RegisterVariableString('PanelStatus', 'Anzeigestatus', '', 3);
         $this->RegisterVariableString('ModuleVersion', 'Modulversion', '', 4);
     }
 
@@ -62,24 +61,14 @@ class HomeDisplay extends IPSModuleStrict
         $this->updateFormOptions($catalog);
         if (!$this->ReadPropertyBoolean('Active')) {
             $this->SetStatus(104);
-            $this->unregisterAdapterHook();
+            $this->SetValue('AdapterUrl', '');
+            $this->syncService();
             return;
         }
-        if ($this->ReadPropertyBoolean('ServeAdapter')) {
-            try {
-                $this->registerAdapterHook();
-                $this->SetValue('AdapterUrl', $this->adapterBaseUrl());
-            } catch (Throwable $e) {
-                $this->SetStatus(201);
-                $this->SendDebug('Adapter', $e->getMessage(), 0);
-                return;
-            }
-        } else {
-            $this->unregisterAdapterHook();
-            $this->SetValue('AdapterUrl', '');
-        }
+        $url = $this->syncService();
+        $this->SetValue('AdapterUrl', $url);
         $this->refreshPairingLabel();
-        $this->SetStatus(102);
+        $this->SetStatus($url === '' ? 203 : 102);
         $this->subscribeLayoutVariables();
     }
 
@@ -120,7 +109,7 @@ class HomeDisplay extends IPSModuleStrict
             $other = strtoupper(trim((string) IPS_GetProperty($id, 'ClaimCode')));
             $token = (string) IPS_GetProperty($id, 'DeviceToken');
             if ($other === $code && $token !== '') {
-                return 'Dieser Code ist bereits einem anderen Panel zugeordnet.';
+                return 'Dieser Code ist bereits einer anderen Anzeige zugeordnet.';
             }
         }
         if ($this->ReadPropertyString('DeviceToken') === '') {
@@ -128,7 +117,7 @@ class HomeDisplay extends IPSModuleStrict
         }
         IPS_ApplyChanges($this->InstanceID);
         $this->refreshPairingLabel();
-        return 'Code übernommen. Das Panel erhält den Token beim nächsten Abruf.';
+        return 'Code übernommen. Die Anzeige erhält den Schlüssel beim nächsten Abruf.';
     }
 
     public function Unpair(): string
@@ -317,6 +306,19 @@ class HomeDisplay extends IPSModuleStrict
         return $json === false ? '{"ok":false}' : $json;
     }
 
+    public function Destroy(): void
+    {
+        $admin = $this->adminInstanceId();
+        if ($admin > 0 && function_exists('HDADM_MoveService')) {
+            try {
+                HDADM_MoveService($admin, $this->InstanceID);
+            } catch (Throwable $e) {
+                $this->SendDebug('Dienst', $e->getMessage(), 0);
+            }
+        }
+        parent::Destroy();
+    }
+
     public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
     {
         unset($TimeStamp, $SenderID, $Message, $Data);
@@ -472,14 +474,46 @@ class HomeDisplay extends IPSModuleStrict
         ];
     }
 
-    private function adapterInstanceId(): int
+    /** Die Verwaltungsinstanz hält die globalen Einstellungen und richtet den Dienst ein. */
+    private function adminInstanceId(): int
     {
-        foreach ($this->siblingIds() as $id) {
-            if (IPS_GetProperty($id, 'ServeAdapter')) {
-                return $id;
+        $ids = @IPS_GetInstanceListByModuleID(self::ADMIN_MODULE);
+        if (!is_array($ids)) {
+            return 0;
+        }
+        foreach ($ids as $id) {
+            if (IPS_GetProperty((int) $id, 'Active')) {
+                return (int) $id;
             }
         }
         return 0;
+    }
+
+    /** Lässt die Verwaltung den Dienst einrichten und liefert dessen Adresse, leer ohne Verwaltung. */
+    private function syncService(): string
+    {
+        $admin = $this->adminInstanceId();
+        if ($admin === 0 || !function_exists('HDADM_SyncService')) {
+            return '';
+        }
+        try {
+            if (!$this->ReadPropertyBoolean('Active')) {
+                return (string) HDADM_MoveService($admin, $this->InstanceID);
+            }
+            return (string) HDADM_SyncService($admin);
+        } catch (Throwable $e) {
+            $this->SendDebug('Dienst', $e->getMessage(), 0);
+            return '';
+        }
+    }
+
+    private function adapterInstanceId(): int
+    {
+        $admin = $this->adminInstanceId();
+        if ($admin === 0 || !function_exists('HDADM_GetServiceInstance')) {
+            return 0;
+        }
+        return (int) HDADM_GetServiceInstance($admin);
     }
 
     /** @return list<int> */
@@ -491,70 +525,11 @@ class HomeDisplay extends IPSModuleStrict
 
     private function adapterBaseUrl(): string
     {
-        $host = trim($this->ReadPropertyString('AdapterHost'));
-        if ($host === '') {
-            $host = gethostbyname(gethostname());
+        $admin = $this->adminInstanceId();
+        if ($admin === 0 || !function_exists('HDADM_GetServiceUrl')) {
+            return '';
         }
-        $https = false;
-        if (function_exists('IPS_GetOption')) {
-            $ssl = @IPS_GetOption('WebServer::SSL');
-            $https = $ssl === true || $ssl === 1 || $ssl === '1';
-        }
-        return ($https ? 'https://' : 'http://') . $host . ':3777' . self::HOOK;
-    }
-
-    private function registerAdapterHook(): void
-    {
-        if (method_exists($this, 'RegisterHook')) {
-            $this->RegisterHook(self::HOOK);
-            return;
-        }
-        $this->updateWebHookControl(true);
-    }
-
-    private function unregisterAdapterHook(): void
-    {
-        if (method_exists($this, 'UnregisterHook')) {
-            @$this->UnregisterHook(self::HOOK);
-            return;
-        }
-        $this->updateWebHookControl(false);
-    }
-
-    private function updateWebHookControl(bool $register): void
-    {
-        $ids = @IPS_GetInstanceListByModuleID('{015A6EB8-D6E5-4B93-B496-0D3F77AE9FE1}');
-        if (!is_array($ids) || $ids === []) {
-            if ($register) {
-                throw new RuntimeException('WebHook Control nicht gefunden.');
-            }
-            return;
-        }
-        $controlId = (int) $ids[0];
-        $hooks = json_decode((string) IPS_GetProperty($controlId, 'Hooks'), true);
-        $hooks = is_array($hooks) ? $hooks : [];
-        $kept = [];
-        $present = false;
-        foreach ($hooks as $hook) {
-            if (!is_array($hook) || ($hook['Hook'] ?? '') !== self::HOOK) {
-                $kept[] = $hook;
-                continue;
-            }
-            if ($register && (int) ($hook['TargetID'] ?? 0) === $this->InstanceID) {
-                $present = true;
-                $kept[] = $hook;
-            } elseif ((int) ($hook['TargetID'] ?? 0) !== $this->InstanceID) {
-                $kept[] = $hook;
-            }
-        }
-        if ($register && !$present) {
-            $kept[] = ['Hook' => self::HOOK, 'TargetID' => $this->InstanceID];
-        }
-        if ($kept === $hooks) {
-            return;
-        }
-        IPS_SetProperty($controlId, 'Hooks', json_encode($kept));
-        IPS_ApplyChanges($controlId);
+        return (string) HDADM_GetServiceUrl($admin);
     }
 
     private function hookRoute(): string
@@ -861,7 +836,7 @@ class HomeDisplay extends IPSModuleStrict
     {
         $version = (string) ($body['firmware'] ?? '');
         $this->rememberDeviceReport($device['id'], $body);
-        $parts = ['Firmware ' . $version];
+        $parts = ['Programm ' . $version];
         if (isset($body['rssi']) && (int) $body['rssi'] !== 0) {
             $parts[] = 'WLAN ' . (int) $body['rssi'] . ' dBm';
         }
@@ -875,7 +850,7 @@ class HomeDisplay extends IPSModuleStrict
             $parts[] = 'Fortschritt ' . (int) $body['progress'] . '%';
         }
         if (!empty($body['updateError'])) {
-            $parts[] = 'Update: ' . (string) $body['updateError'];
+            $parts[] = 'Aktualisierung: ' . (string) $body['updateError'];
         }
         if (!empty($body['rollback'])) {
             $parts[] = 'Rollback: ' . (string) $body['rollback'];
@@ -915,9 +890,9 @@ class HomeDisplay extends IPSModuleStrict
         $this->saveRuntime($runtime);
         $lastCheck = (int) ($runtime[$key]['lastCheck'] ?? 0);
         if ($lastCheck === 0 || $lastCheck < time() - 1800) {
-            return 'Befehl hinterlegt. Das Panel hat sich zuletzt ' . ($lastCheck === 0 ? 'noch nie' : 'vor ' . $this->durationLabel(time() - $lastCheck)) . ' gemeldet.';
+            return 'Befehl hinterlegt. Die Anzeige hat sich zuletzt ' . ($lastCheck === 0 ? 'noch nie' : 'vor ' . $this->durationLabel(time() - $lastCheck)) . ' gemeldet.';
         }
-        return 'Befehl hinterlegt. Das Panel übernimmt ihn mit dem nächsten Manifest-Abruf (spätestens in 16 Minuten).';
+        return 'Befehl hinterlegt. Die Anzeige übernimmt ihn beim nächsten Abruf (spätestens in 16 Minuten).';
     }
 
     public function RestartPanel(): string
@@ -962,15 +937,19 @@ class HomeDisplay extends IPSModuleStrict
         $entry = $runtime[(string) $this->InstanceID] ?? [];
         $entry = is_array($entry) ? $entry : [];
         if ($this->ReadPropertyString('DeviceToken') === '') {
-            return 'Das Panel ist nicht gekoppelt. Kopplungscode vom Panel eintragen.';
+            return 'Die Anzeige ist nicht gekoppelt. Kopplungscode von der Anzeige eintragen.';
         }
         $lastCheck = (int) ($entry['lastCheck'] ?? 0);
         if ($lastCheck === 0) {
-            return 'Das Panel hat sich noch nicht gemeldet. Adapter-URL ' . $this->GetValue('AdapterUrl') . ' am Panel prüfen.';
+            $url = (string) $this->GetValue('AdapterUrl');
+            if ($url === '') {
+                return 'Die Anzeige hat sich noch nicht gemeldet. Es gibt keinen Dienst: Instanz „Hausanzeige Verwaltung“ anlegen und aktivieren.';
+            }
+            return 'Die Anzeige hat sich noch nicht gemeldet. Dienstadresse ' . $url . ' an der Anzeige prüfen.';
         }
         $lines = [
             'Letzte Meldung vor ' . $this->durationLabel(time() - $lastCheck) . ($lastCheck > time() - 120 ? ' (verbunden)' : ' (keine aktuelle Verbindung)'),
-            'Firmware ' . (string) ($entry['firmware'] ?? '?'),
+            'Programm ' . (string) ($entry['firmware'] ?? '?'),
         ];
         if (isset($entry['rssi'])) {
             $lines[] = 'WLAN ' . (int) $entry['rssi'] . ' dBm';
@@ -982,10 +961,10 @@ class HomeDisplay extends IPSModuleStrict
             $lines[] = 'Laufzeit ' . $this->durationLabel((int) $entry['uptime']) . ', Reset-Grund ' . $this->resetReasonLabel((int) ($entry['resetReason'] ?? 0));
         }
         if (isset($entry['dataAge'])) {
-            $lines[] = 'Datenalter am Panel ' . (int) $entry['dataAge'] . ' s, Fehlversuche ' . (int) ($entry['failures'] ?? 0);
+            $lines[] = 'Datenalter an der Anzeige ' . (int) $entry['dataAge'] . ' s, Fehlversuche ' . (int) ($entry['failures'] ?? 0);
         }
         if (!empty($entry['updateError'])) {
-            $lines[] = 'Update: ' . (string) $entry['updateError'];
+            $lines[] = 'Aktualisierung: ' . (string) $entry['updateError'];
         }
         if (!empty($entry['rollback'])) {
             $lines[] = 'Rollback: ' . (string) $entry['rollback'];
@@ -1001,7 +980,7 @@ class HomeDisplay extends IPSModuleStrict
 
     public function LayoutTemplate(string $Name): string
     {
-        return $this->encode(HomeDisplayPanelSchema::dashboardLayout($Name !== '' ? $Name : 'Dashboard'));
+        return $this->encode(HomeDisplayPanelSchema::dashboardLayout($Name !== '' ? $Name : 'Übersicht'));
     }
 
     /** @return array<string, mixed> */
@@ -1079,7 +1058,7 @@ class HomeDisplay extends IPSModuleStrict
         $firmware = $this->firmwareDescriptor();
         if (!$firmware['available']) {
             http_response_code(404);
-            $this->json(['error' => 'Firmwareabbild fehlt. Zuerst lokal bauen.']);
+            $this->json(['error' => 'Programmdatei fehlt. Zuerst lokal bauen.']);
             return;
         }
         header('Content-Type: application/octet-stream');
@@ -1092,10 +1071,10 @@ class HomeDisplay extends IPSModuleStrict
         $token = $this->ReadPropertyString('DeviceToken');
         $code = strtoupper(trim($this->ReadPropertyString('ClaimCode')));
         if ($token !== '' && $code !== '') {
-            $this->SetValue('PairingState', 'Wartet auf Panel ' . $code);
+            $this->SetValue('PairingState', 'Wartet auf Anzeige ' . $code);
             return;
         }
-        $this->SetValue('PairingState', 'Code vom Panel eintragen');
+        $this->SetValue('PairingState', 'Code von der Anzeige eintragen');
     }
 
     public function ApplyPreset(string $Name): string
@@ -1103,11 +1082,11 @@ class HomeDisplay extends IPSModuleStrict
         $rows = HomeDisplayPanelSchema::presetRows($Name);
         $json = json_encode($rows, JSON_UNESCAPED_UNICODE);
         if ($json === false) {
-            return 'Preset konnte nicht erzeugt werden.';
+            return 'Vorlage konnte nicht erzeugt werden.';
         }
         IPS_SetProperty($this->InstanceID, 'FallbackTiles', $json);
         IPS_ApplyChanges($this->InstanceID);
-        return 'Preset eingetragen. Variablen in der Liste zuordnen und danach veröffentlichen.';
+        return 'Vorlage eingetragen. Variablen in der Liste zuordnen und danach veröffentlichen.';
     }
 
     public function PublishFallback(): string

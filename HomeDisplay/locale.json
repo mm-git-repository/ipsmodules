@@ -1,18 +1,17 @@
 {
     "translations": {
         "en": {
-            "HomeDisplay ist ein Panel-Gerät. Genau eine Instanz stellt den Adapter für alle Panels bereit.": "HomeDisplay is one panel device. Exactly one instance serves the adapter for all panels.",
+            "Diese Instanz ist eine Anzeige. Dienst und Dienstadresse werden zentral in der Instanz „Hausanzeige Verwaltung“ eingestellt.": "This instance is one display. Service and service address are configured centrally in the “Home Display Administration” instance.",
             "Aktiv": "Active",
-            "Adapter bereitstellen (nur bei einer Instanz aktivieren)": "Serve adapter (enable on one instance only)",
-            "Adapter-Adresse (leer = automatisch, z. B. 192.168.1.10)": "Adapter address (empty = automatic, e.g. 192.168.1.10)",
-            "Kopplung: Den Code vom Panel eintragen und übernehmen. Das Panel übernimmt den Token beim nächsten Abruf.": "Pairing: enter the code shown on the panel and apply. The panel receives the token on its next poll.",
-            "Kopplungscode vom Panel": "Pairing code from the panel",
+            "Kopplung: Den Code von der Anzeige eintragen und übernehmen. Die Anzeige erhält den Schlüssel beim nächsten Abruf.": "Pairing: enter the code shown on the display and apply. The display receives the key on its next poll.",
+            "Kopplungscode von der Anzeige": "Pairing code from the display",
             "Seitenlayout": "Page layout",
             "Konfiguration": "Configuration",
+            "Die Liste gilt, wenn keine veröffentlichte Ansicht mit Kacheln gewählt ist. Die Position sortiert die Zeilen. Eine freie Platzierung gibt es nicht.": "The list is used when no published view with tiles is selected. Position sorts the rows. Free placement is not available.",
             "Ruheanzeige": "Idle screen",
             "Uhrseite": "Clock page",
             "Letzte Seite": "Last page",
-            "Display aus": "Display off",
+            "Bildschirm aus": "Screen off",
             "Nachts dimmen": "Dim at night",
             "Helligkeit Tag (0–100)": "Day brightness (0–100)",
             "Helligkeit Nacht (0–100)": "Night brightness (0–100)",
@@ -20,13 +19,20 @@
             "Nacht bis Stunde (exkl.)": "Night until hour (exclusive)",
             "Wertabruf (Sekunden)": "Value poll (seconds)",
             "Wertabruf auf der Uhrseite (Sekunden)": "Value poll on the clock page (seconds)",
-            "Firmware-Wartung ab Stunde": "Firmware maintenance from hour",
-            "Firmware-Wartung bis Stunde (exkl.)": "Firmware maintenance until hour (exclusive)",
+            "Programmaktualisierung ab Stunde": "Program update from hour",
+            "Programmaktualisierung bis Stunde (exkl.)": "Program update until hour (exclusive)",
             "Kopplungscode übernehmen": "Apply pairing code",
             "Kopplung lösen": "Unpair",
-            "HomeDisplay aktiv": "HomeDisplay active",
-            "HomeDisplay inaktiv": "HomeDisplay inactive",
-            "Adapter konnte nicht gestartet werden": "Adapter could not be started"
+            "Anzeige neu starten": "Restart display",
+            "Vorlage Energie": "Energy template",
+            "Vorlage Whirlpool": "Whirlpool template",
+            "Vorlage Pool": "Pool template",
+            "Vorlage Wasserwerte": "Water values template",
+            "Vorlage Garten": "Garden template",
+            "Kachelliste veröffentlichen": "Publish tile list",
+            "Hausanzeige aktiv": "Home display active",
+            "Hausanzeige inaktiv": "Home display inactive",
+            "Kein Dienst: Instanz „Hausanzeige Verwaltung“ anlegen": "No service: create a “Home Display Administration” instance"
         }
     }
 }

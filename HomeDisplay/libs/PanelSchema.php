@@ -26,6 +26,9 @@ final class HomeDisplayPanelSchema
 
     public const ACTIONS = ['switch', 'dim', 'position'];
 
+    /** switch: Tippen. dimSwitch: Ein/Aus eines Dimmwerts. slider: nur Ziehen. combo: Schalter und Balken. */
+    public const CONTROLS = ['switch', 'dimSwitch', 'slider', 'combo'];
+
     public const COLORS = ['neutral', 'ok', 'warn', 'alarm'];
 
     public const SIZES = ['small', 'large'];
@@ -60,6 +63,16 @@ final class HomeDisplayPanelSchema
                 throw new InvalidArgumentException('Unbekannte oder doppelte Seite: ' . $pageId);
             }
             $pageIds[$pageId] = true;
+            $background = (string) ($page['backgroundId'] ?? '');
+            if ($background === '') {
+                continue;
+            }
+            if (!preg_match('/^[a-f0-9]{16}$/', $background)) {
+                throw new InvalidArgumentException('Ungültiges Hintergrundbild.');
+            }
+            if ($publish && !HomeDisplayCatalogStore::imageExists($background)) {
+                throw new InvalidArgumentException('Das Hintergrundbild einer Seite wurde gelöscht.');
+            }
         }
         $seen = [];
         foreach ($pages as $page) {
@@ -164,15 +177,20 @@ final class HomeDisplayPanelSchema
                 }
                 if ($kind === 'value') {
                     $actionId = trim((string) ($tile['actionId'] ?? ''));
+                    $control = (string) ($tile['control'] ?? 'switch');
+                    if (!in_array($control, self::CONTROLS, true)) {
+                        $control = 'switch';
+                    }
+                    $public['control'] = $control;
                     if ($actionId !== '') {
                         $public['actionId'] = $actionId;
                         $public['actionKind'] = (string) ($tile['actionKind'] ?? 'switch');
                         $public['confirm'] = (bool) ($tile['confirm'] ?? false);
-                        if (isset($tile['valueMin'])) {
-                            $public['valueMin'] = (float) $tile['valueMin'];
+                        if (isset($tile['valueMin']) || in_array($control, ['dimSwitch', 'slider', 'combo'], true)) {
+                            $public['valueMin'] = (float) ($tile['valueMin'] ?? 0);
                         }
-                        if (isset($tile['valueMax'])) {
-                            $public['valueMax'] = (float) $tile['valueMax'];
+                        if (isset($tile['valueMax']) || in_array($control, ['dimSwitch', 'slider', 'combo'], true)) {
+                            $public['valueMax'] = (float) ($tile['valueMax'] ?? 100);
                         }
                     }
                     if (isset($tile['threshold'], $tile['color'])) {
@@ -182,11 +200,17 @@ final class HomeDisplayPanelSchema
                 }
                 $tiles[] = $public;
             }
-            $pages[] = [
+            $publicPage = [
                 'id' => (string) ($page['id'] ?? ''),
                 'title' => (string) ($page['title'] ?? self::PAGES[$page['id']] ?? ''),
                 'tiles' => $tiles,
             ];
+            $background = (string) ($page['backgroundId'] ?? '');
+            if ($background !== '') {
+                $publicPage['backgroundId'] = $background;
+                $publicPage['backgroundFile'] = HomeDisplayCatalogStore::imageFileName($background);
+            }
+            $pages[] = $publicPage;
         }
         return [
             'id' => (string) ($layout['id'] ?? ''),
@@ -204,6 +228,13 @@ final class HomeDisplayPanelSchema
     {
         $ids = [];
         foreach ($layout['pages'] ?? [] as $page) {
+            if (!is_array($page)) {
+                continue;
+            }
+            $background = (string) ($page['backgroundId'] ?? '');
+            if ($background !== '') {
+                $ids[$background] = true;
+            }
             foreach ($page['tiles'] ?? [] as $tile) {
                 if (is_array($tile) && ($tile['kind'] ?? '') === 'image' && (string) ($tile['imageId'] ?? '') !== '') {
                     $ids[(string) $tile['imageId']] = true;
@@ -250,10 +281,20 @@ final class HomeDisplayPanelSchema
                 'unit' => (string) ($row['Unit'] ?? ''),
                 'decimals' => (int) ($row['Decimals'] ?? 0),
             ];
-            if ($action) {
+            $control = (string) ($row['Control'] ?? 'switch');
+            if (in_array($control, self::CONTROLS, true) && $control !== 'switch') {
+                $tile['control'] = $control;
+            }
+            if ($action || in_array($control, ['dimSwitch', 'slider', 'combo'], true)) {
                 $tile['actionId'] = 'a' . $index;
-                $tile['actionKind'] = (string) ($row['ActionKind'] ?? 'switch');
+                $tile['actionKind'] = in_array($control, ['dimSwitch', 'slider', 'combo'], true)
+                    ? 'dim'
+                    : (string) ($row['ActionKind'] ?? 'switch');
                 $tile['confirm'] = !empty($row['Confirm']);
+                if ($tile['actionKind'] === 'dim') {
+                    $tile['valueMin'] = 0;
+                    $tile['valueMax'] = 100;
+                }
             }
             $pages[$pageId]['tiles'][] = $tile;
         }
@@ -279,7 +320,7 @@ final class HomeDisplayPanelSchema
      *
      * @return array<string, mixed>
      */
-    public static function dashboardLayout(string $name = 'Dashboard'): array
+    public static function dashboardLayout(string $name = 'Übersicht'): array
     {
         $pages = [];
         $pages[] = ['id' => 'start', 'title' => 'Start', 'tiles' => [
@@ -386,7 +427,7 @@ final class HomeDisplayPanelSchema
             ],
         ];
         if (!isset($presets[$name])) {
-            throw new InvalidArgumentException('Unbekanntes Preset.');
+            throw new InvalidArgumentException('Unbekannte Vorlage.');
         }
         $rows = [];
         foreach ($presets[$name] as $index => $tile) {
@@ -441,13 +482,25 @@ final class HomeDisplayPanelSchema
             if (isset($tile['color']) && !in_array((string) $tile['color'], self::COLORS, true)) {
                 throw new InvalidArgumentException('Unbekannte Farbe.');
             }
+            $control = (string) ($tile['control'] ?? 'switch');
+            if (!in_array($control, self::CONTROLS, true)) {
+                throw new InvalidArgumentException('Unbekannte Bedienung: ' . $control);
+            }
+            if (in_array($control, ['dimSwitch', 'slider', 'combo'], true)) {
+                if ((string) ($tile['actionKind'] ?? 'dim') !== 'dim') {
+                    throw new InvalidArgumentException('Dimmschalter, Dimmbalken und Kombischalter brauchen die Aktionsart Dimmen.');
+                }
+                if ($publish && trim((string) ($tile['actionId'] ?? '')) === '') {
+                    throw new InvalidArgumentException('Dimmbedienung ohne freigegebene Aktion.');
+                }
+            }
             self::validateAction($tile, $publish);
             return;
         }
         if ($kind === 'nav') {
             $target = (string) ($tile['targetPage'] ?? '');
             if (!isset($pageIds[$target])) {
-                throw new InvalidArgumentException('Der Tab-Wechsler zeigt auf eine Seite, die es in dieser Ansicht nicht gibt.');
+                throw new InvalidArgumentException('Der Seitenwechsler zeigt auf eine Seite, die es in dieser Ansicht nicht gibt.');
             }
             $icon = (string) ($tile['icon'] ?? '');
             if ($icon !== '' && !in_array($icon, self::ICONS, true)) {

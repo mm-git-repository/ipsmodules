@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """HomeDisplay-Editor für den PC.
 
-Zeigt dieselbe Verwaltungsoberfläche wie die Instanz „HomeDisplay Verwaltung“ und spricht
-ausschließlich die JSON-API von IP-Symcon. Zusätzlich meldet er den Adapter per mDNS.
+Zeigt dieselbe Verwaltungsoberfläche wie die Instanz „Hausanzeige Verwaltung“ und spricht
+ausschließlich die JSON-API von IP-Symcon. Zusätzlich meldet er den Dienst per mDNS.
 
 Aufruf:  python server.py http://192.168.1.10:3777 benutzer passwort
 """
 
 import base64
 import json
+import re
 import socket
 import struct
 import sys
@@ -24,6 +25,7 @@ PORT = 8765
 MDNS_GROUP = "224.0.0.251"
 MDNS_PORT = 5353
 MODULE_ID = "{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}"
+ADMIN_MODULE_ID = "{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}"
 CONNECTION = {"base": "", "user": "", "password": ""}
 
 
@@ -53,8 +55,63 @@ def panel_id():
     return ids[0]
 
 
+def admin_id():
+    ids = ips_call("IPS_GetInstanceListByModuleID", [ADMIN_MODULE_ID])
+    for candidate in ids or []:
+        if ips_call("IPS_GetProperty", [candidate, "Active"]):
+            return candidate
+    return 0
+
+
+def variable_text(instance, ident):
+    try:
+        variable = ips_call("IPS_GetObjectIDByIdent", [ident, instance])
+        return str(ips_call("GetValue", [variable]))
+    except Exception:
+        return ""
+
+
+def settings():
+    admin = admin_id()
+    service_instance = ips_call("HDADM_GetServiceInstance", [admin]) if admin else 0
+    panels = []
+    for instance in sorted(ips_call("IPS_GetInstanceListByModuleID", [MODULE_ID]) or []):
+        panels.append({
+            "id": instance,
+            "name": ips_call("IPS_GetName", [instance]),
+            "active": bool(ips_call("IPS_GetProperty", [instance, "Active"])),
+            "paired": str(ips_call("IPS_GetProperty", [instance, "DeviceToken"])) != "",
+            "layoutId": str(ips_call("IPS_GetProperty", [instance, "LayoutId"])),
+            "configId": str(ips_call("IPS_GetProperty", [instance, "ConfigId"])),
+            "pairing": variable_text(instance, "PairingState"),
+            "status": variable_text(instance, "PanelStatus"),
+            "serves": instance == service_instance,
+        })
+    return {
+        "ok": True,
+        "serviceHost": str(ips_call("IPS_GetProperty", [admin, "ServiceHost"])) if admin else "",
+        "serviceUrl": ips_call("HDADM_GetServiceUrl", [admin]) if admin else "",
+        "serviceInstance": service_instance,
+        "serviceInstanceName": ips_call("IPS_GetName", [service_instance]) if service_instance else "",
+        "adminUrl": variable_text(admin, "AdminUrl") if admin else "",
+        "panels": panels,
+    }
+
+
 def api(incoming):
     method = incoming.get("method")
+    if method == "settings":
+        return settings()
+    if method == "saveSettings":
+        admin = admin_id()
+        if not admin:
+            raise RuntimeError("Keine aktive Instanz „Hausanzeige Verwaltung“ gefunden.")
+        host = str(incoming.get("serviceHost", "")).strip()
+        if host and not re.match(r"^[A-Za-z0-9.\-]+$", host):
+            raise RuntimeError("Die Dienstadresse darf nur Hostname oder IP enthalten, ohne http:// und ohne Port.")
+        ips_call("IPS_SetProperty", [admin, "ServiceHost", host])
+        ips_call("IPS_ApplyChanges", [admin])
+        return settings()
     panel = panel_id()
     if method == "catalog":
         result = ips_call("HDISP_ListCatalog", [panel])
@@ -65,7 +122,7 @@ def api(incoming):
     if method == "variables":
         return ips_call("HDISP_ListVariables", [panel])
     if method == "template":
-        return ips_call("HDISP_LayoutTemplate", [panel, str(incoming.get("name", "Dashboard"))])
+        return ips_call("HDISP_LayoutTemplate", [panel, str(incoming.get("name", "Übersicht"))])
     if method == "images":
         return ips_call("HDISP_ListImages", [panel])
     if method == "uploadImage":

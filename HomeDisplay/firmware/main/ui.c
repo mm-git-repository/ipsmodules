@@ -19,11 +19,20 @@ typedef struct {
     char action_id[40];
     char target_page[24];
     char title[48];
+    char control[16];
     int value;
+    int value_min;
+    int value_max;
+    int level;
     bool has_action;
     bool confirm;
+    bool applying;
     lv_obj_t *card;
     lv_obj_t *label;
+    lv_obj_t *track;
+    lv_obj_t *fill;
+    lv_obj_t *knob;
+    lv_obj_t *power;
 } tile_view_t;
 
 static lv_obj_t *status_label;
@@ -31,6 +40,7 @@ static lv_obj_t *info_label;
 static lv_obj_t *home_button;
 static lv_obj_t *page_bar;
 static lv_obj_t *grid;
+static lv_obj_t *page_background;
 static lv_obj_t *clock_layer;
 static lv_obj_t *clock_label;
 static lv_obj_t *test_layer;
@@ -160,6 +170,149 @@ static int json_int(cJSON *object, const char *key, int fallback)
     return cJSON_IsNumber(item) ? item->valueint : fallback;
 }
 
+static void place_level(tile_view_t *tile, int value)
+{
+    if (!tile->track || !tile->knob) return;
+    int min = tile->value_min;
+    int max = tile->value_max > min ? tile->value_max : min + 1;
+    if (value < min) value = min;
+    if (value > max) value = max;
+    lv_coord_t travel = lv_obj_get_width(tile->track) - 34;
+    if (travel < 1) travel = 1;
+    int x = (value - min) * travel / (max - min);
+    lv_obj_set_pos(tile->knob, lv_obj_get_x(tile->track) + x, lv_obj_get_y(tile->track) + (lv_obj_get_height(tile->track) - 34) / 2);
+    if (tile->fill) lv_obj_set_width(tile->fill, x + 17);
+    tile->value = value;
+    if (value > min) tile->level = value;
+}
+
+static void send_level(tile_view_t *tile, int value)
+{
+    if (!tile || tile->applying || !tile->has_action || !action_callback) return;
+    if (!online) {
+        if (tile->label) lv_label_set_text(tile->label, "Keine Verbindung");
+        return;
+    }
+    tile->value = value;
+    if (value > tile->value_min) tile->level = value;
+    if (tile->label) lv_label_set_text(tile->label, "wird ausgeführt");
+    action_callback(tile->tile_id, tile->action_id, value);
+}
+
+/* Nur der Griff zählt. Tippen auf die Leiste ändert nichts. */
+static void knob_event(lv_event_t *event)
+{
+    note_touch();
+    if (locked) return;
+    tile_view_t *tile = lv_event_get_user_data(event);
+    if (!tile || !tile->track) return;
+    if (lv_event_get_code(event) == LV_EVENT_PRESSING) {
+        lv_point_t point;
+        lv_indev_get_point(lv_indev_get_act(), &point);
+        lv_area_t area;
+        lv_obj_get_coords(tile->track, &area);
+        int travel = lv_area_get_width(&area) - 34;
+        if (travel < 1) travel = 1;
+        int x = point.x - area.x1 - 17;
+        if (x < 0) x = 0;
+        if (x > travel) x = travel;
+        int max = tile->value_max > tile->value_min ? tile->value_max : tile->value_min + 1;
+        int value = tile->value_min + x * (max - tile->value_min) / travel;
+        tile->applying = true;
+        place_level(tile, value);
+        if (tile->power) {
+            if (value > tile->value_min) lv_obj_add_state(tile->power, LV_STATE_CHECKED);
+            else lv_obj_clear_state(tile->power, LV_STATE_CHECKED);
+        }
+        if (tile->label) {
+            char line[16];
+            snprintf(line, sizeof(line), "%d", value);
+            lv_label_set_text(tile->label, line);
+        }
+        tile->applying = false;
+        return;
+    }
+    if (lv_event_get_code(event) == LV_EVENT_RELEASED) send_level(tile, tile->value);
+}
+
+static void power_event(lv_event_t *event)
+{
+    note_touch();
+    if (locked) return;
+    tile_view_t *tile = lv_event_get_user_data(event);
+    if (!tile || tile->applying || !tile->power) return;
+    bool on = lv_obj_has_state(tile->power, LV_STATE_CHECKED);
+    int value = on ? (tile->level > tile->value_min ? tile->level : tile->value_max) : tile->value_min;
+    tile->applying = true;
+    place_level(tile, value);
+    tile->applying = false;
+    send_level(tile, value);
+}
+
+static void build_track(tile_view_t *view, int width)
+{
+    view->track = lv_obj_create(view->card);
+    lv_obj_set_size(view->track, width, 18);
+    lv_obj_set_style_bg_color(view->track, lv_color_hex(0x0B1626), 0);
+    lv_obj_set_style_radius(view->track, 9, 0);
+    lv_obj_set_style_border_width(view->track, 0, 0);
+    lv_obj_set_style_pad_all(view->track, 0, 0);
+    lv_obj_clear_flag(view->track, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(view->track, LV_OBJ_FLAG_CLICKABLE);
+    view->fill = lv_obj_create(view->track);
+    lv_obj_set_size(view->fill, 14, 18);
+    lv_obj_set_style_bg_color(view->fill, lv_color_hex(0xFFB547), 0);
+    lv_obj_set_style_radius(view->fill, 9, 0);
+    lv_obj_set_style_border_width(view->fill, 0, 0);
+    lv_obj_clear_flag(view->fill, LV_OBJ_FLAG_CLICKABLE);
+    view->knob = lv_obj_create(view->card);
+    lv_obj_set_size(view->knob, 34, 34);
+    lv_obj_set_style_bg_color(view->knob, lv_color_hex(0xF4F7FB), 0);
+    lv_obj_set_style_radius(view->knob, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(view->knob, 0, 0);
+    lv_obj_clear_flag(view->knob, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(view->knob, knob_event, LV_EVENT_PRESSING, view);
+    lv_obj_add_event_cb(view->knob, knob_event, LV_EVENT_RELEASED, view);
+}
+
+static void build_power(tile_view_t *view)
+{
+    view->power = lv_switch_create(view->card);
+    lv_obj_clear_flag(view->power, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(view->power, power_event, LV_EVENT_VALUE_CHANGED, view);
+}
+
+static void show_background(cJSON *page)
+{
+    if (!page_background) return;
+    const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(page, "backgroundFile"));
+    if (!file || !file[0]) {
+        lv_obj_add_flag(page_background, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    char path[96];
+    snprintf(path, sizeof(path), "S:/%s", file);
+    lv_img_set_src(page_background, path);
+    lv_img_set_pivot(page_background, 0, 0);
+    lv_img_set_zoom(page_background, 256);
+    lv_img_header_t header;
+    if (lv_img_decoder_get_info(path, &header) == LV_RES_OK && header.w > 0 && header.h > 0) {
+        uint32_t zoom_x = (uint32_t) HOMEDISPLAY_LCD_H_RES * 256 / header.w;
+        uint32_t zoom_y = (uint32_t) HOMEDISPLAY_LCD_V_RES * 256 / header.h;
+        uint32_t zoom = zoom_x > zoom_y ? zoom_x : zoom_y;
+        if (zoom < 64) zoom = 64;
+        if (zoom > 1024) zoom = 1024;
+        lv_img_set_zoom(page_background, (uint16_t) zoom);
+        int width = (int) header.w * (int) zoom / 256;
+        int height = (int) header.h * (int) zoom / 256;
+        lv_obj_set_pos(page_background, (HOMEDISPLAY_LCD_H_RES - width) / 2, (HOMEDISPLAY_LCD_V_RES - height) / 2);
+    } else {
+        lv_obj_align(page_background, LV_ALIGN_CENTER, 0, 0);
+    }
+    lv_obj_clear_flag(page_background, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_background(page_background);
+}
+
 static void show_page(int index)
 {
     cJSON *pages = layout_root ? cJSON_GetObjectItem(layout_root, "pages") : NULL;
@@ -168,6 +321,7 @@ static void show_page(int index)
     if (index < 0 || index >= count) index = 0;
     page_index = index;
     cJSON *page = cJSON_GetArrayItem(pages, index);
+    show_background(page);
     bool show_tabs = !cJSON_IsFalse(cJSON_GetObjectItem(layout_root, "showTabs"));
     lv_obj_clean(page_bar);
     lv_obj_clean(grid);
@@ -261,7 +415,7 @@ static void show_page(int index)
         if (strcmp(kind, "system") == 0) {
             lv_obj_set_style_bg_color(view->card, lv_color_hex(0x16293F), 0);
             lv_obj_t *name = lv_label_create(view->card);
-            lv_label_set_text(name, view->title[0] ? view->title : "Panel");
+            lv_label_set_text(name, view->title[0] ? view->title : "Anzeige");
             lv_obj_align(name, LV_ALIGN_TOP_LEFT, 8, 8);
             system_label = lv_label_create(view->card);
             lv_label_set_long_mode(system_label, LV_LABEL_LONG_WRAP);
@@ -283,17 +437,41 @@ static void show_page(int index)
         }
         view->has_action = action_id && action_id[0];
         if (view->has_action) snprintf(view->action_id, sizeof(view->action_id), "%s", action_id);
+        const char *control = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "control"));
+        snprintf(view->control, sizeof(view->control), "%s", control ? control : "switch");
+        view->value_min = json_int(tile, "valueMin", 0);
+        view->value_max = json_int(tile, "valueMax", 100);
+        if (view->value_max <= view->value_min) view->value_max = view->value_min + 100;
+        view->level = view->value_max;
+        bool dim_switch = strcmp(view->control, "dimSwitch") == 0;
+        bool slider = strcmp(view->control, "slider") == 0;
+        bool combo = strcmp(view->control, "combo") == 0;
         lv_obj_t *symbol = lv_label_create(view->card);
         lv_label_set_text(symbol, icon_symbol(icon));
-        lv_obj_align(symbol, LV_ALIGN_LEFT_MID, 8, 0);
+        lv_obj_align(symbol, LV_ALIGN_TOP_LEFT, 8, 8);
         lv_obj_t *name = lv_label_create(view->card);
         lv_label_set_text(name, view->title);
         lv_obj_align(name, LV_ALIGN_TOP_LEFT, 36, 8);
         view->label = lv_label_create(view->card);
         lv_label_set_text(view->label, "—");
         lv_obj_set_style_text_font(view->label, &lv_font_montserrat_28, 0);
-        lv_obj_align(view->label, LV_ALIGN_BOTTOM_LEFT, 36, -8);
-        if (view->has_action) lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
+        lv_obj_align(view->label, (slider || combo) ? LV_ALIGN_TOP_RIGHT : LV_ALIGN_LEFT_MID, (slider || combo) ? -8 : 36, (slider || combo) ? 8 : 8);
+        if (dim_switch) {
+            build_power(view);
+            lv_obj_align(view->power, LV_ALIGN_BOTTOM_LEFT, 12, -12);
+        } else if (slider || combo) {
+            int bar = cell_w * col_span - (combo ? 120 : 40);
+            if (bar < 70) bar = 70;
+            if (combo) {
+                build_power(view);
+                lv_obj_align(view->power, LV_ALIGN_BOTTOM_LEFT, 8, -12);
+            }
+            build_track(view, bar);
+            lv_obj_align(view->track, LV_ALIGN_BOTTOM_LEFT, combo ? 72 : 12, -16);
+            place_level(view, view->value_min);
+        } else if (view->has_action) {
+            lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
+        }
     }
     lv_obj_add_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
 }
@@ -337,7 +515,7 @@ static void clock_tick(lv_timer_t *timer)
         int64_t uptime = esp_timer_get_time() / 1000000;
         int64_t age = online ? 0 : (esp_timer_get_time() - offline_since) / 1000000;
         snprintf(report, sizeof(report),
-                 "Firmware %s\nWLAN %d dBm   IP " IPSTR "\nLaufzeit %lld h %lld min\nFreier Speicher %lu KB (min. %lu KB)\nAdapter %s   Datenalter %lld s\nBilder %lu   Berührungen %lu",
+                 "Programm %s\nWLAN %d dBm   IP " IPSTR "\nLaufzeit %lld h %lld min\nFreier Speicher %lu KB (min. %lu KB)\nDienst %s   Datenalter %lld s\nBilder %lu   Berührungen %lu",
                  HOMEDISPLAY_FIRMWARE_VERSION, wifi_rssi, IP2STR(&ip.ip),
                  (long long) (uptime / 3600), (long long) ((uptime % 3600) / 60),
                  (unsigned long) (esp_get_free_heap_size() / 1024), (unsigned long) (esp_get_minimum_free_heap_size() / 1024),
@@ -350,7 +528,7 @@ static void clock_tick(lv_timer_t *timer)
         lv_indev_t *indev = lv_indev_get_next(NULL);
         lv_point_t point = {0, 0};
         if (indev) lv_indev_get_point(indev, &point);
-        snprintf(line, sizeof(line), "HomeDisplay Testbild  1024x600\nBilder %lu  Berührungen %lu\nTouch x=%d y=%d  Laufzeit %lld s",
+        snprintf(line, sizeof(line), "Testbild  1024x600\nBilder %lu  Berührungen %lu\nBerührung x=%d y=%d  Laufzeit %lld s",
                  (unsigned long) frame_counter, (unsigned long) touch_counter, (int) point.x, (int) point.y, (long long) (esp_timer_get_time() / 1000000));
         lv_label_set_text(test_label, line);
         return;
@@ -407,7 +585,7 @@ static void build_test_layer(lv_obj_t *screen)
     test_label = lv_label_create(test_layer);
     lv_obj_set_style_text_color(test_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(test_label, &lv_font_montserrat_20, 0);
-    lv_label_set_text(test_label, "HomeDisplay Testbild");
+    lv_label_set_text(test_label, "Testbild");
     lv_obj_align(test_label, LV_ALIGN_BOTTOM_LEFT, 16, -16);
     lv_obj_add_event_cb(test_layer, (lv_event_cb_t) note_touch, LV_EVENT_PRESSED, NULL);
     lv_obj_add_flag(test_layer, LV_OBJ_FLAG_HIDDEN);
@@ -434,10 +612,14 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_t *screen = lv_scr_act();
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x102033), 0);
     lv_obj_add_event_cb(screen, gesture_event, LV_EVENT_GESTURE, NULL);
+    page_background = lv_img_create(screen);
+    lv_obj_clear_flag(page_background, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(page_background, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_background(page_background);
     status_label = lv_label_create(screen);
     lv_obj_set_style_text_color(status_label, lv_color_hex(0xF4F7FB), 0);
     lv_obj_set_style_text_font(status_label, &lv_font_montserrat_20, 0);
-    lv_label_set_text(status_label, "HomeDisplay sucht den Adapter");
+    lv_label_set_text(status_label, "Hausanzeige sucht den Dienst");
     lv_obj_align(status_label, LV_ALIGN_TOP_LEFT, 56, 6);
     info_label = lv_label_create(screen);
     lv_obj_set_style_text_color(info_label, lv_color_hex(0xB7C4D4), 0);
@@ -536,12 +718,28 @@ void homedisplay_ui_apply_state(const char *json)
         cJSON *value = cJSON_GetObjectItem(tile, "value");
         if (!tile_id) continue;
         for (int index = 0; index < tile_count; index++) {
-            if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].label) {
-                lv_label_set_text(tiles[index].label, text ? text : "—");
-                lv_obj_set_style_bg_color(tiles[index].card, color_for(color), 0);
-                if (cJSON_IsNumber(value)) tiles[index].value = (int) value->valuedouble;
-                if (cJSON_IsBool(value)) tiles[index].value = cJSON_IsTrue(value) ? 1 : 0;
+            if (strcmp(tiles[index].tile_id, tile_id) != 0) continue;
+            if (tiles[index].label) lv_label_set_text(tiles[index].label, text ? text : "—");
+            if (tiles[index].card) lv_obj_set_style_bg_color(tiles[index].card, color_for(color), 0);
+            int number = tiles[index].value;
+            bool has_number = false;
+            if (cJSON_IsNumber(value)) {
+                number = (int) value->valuedouble;
+                has_number = true;
+            } else if (cJSON_IsBool(value)) {
+                number = cJSON_IsTrue(value) ? 1 : 0;
+                has_number = true;
             }
+            if (!has_number) continue;
+            tiles[index].applying = true;
+            tiles[index].value = number;
+            if (number > tiles[index].value_min) tiles[index].level = number;
+            place_level(&tiles[index], number);
+            if (tiles[index].power) {
+                if (number > tiles[index].value_min) lv_obj_add_state(tiles[index].power, LV_STATE_CHECKED);
+                else lv_obj_clear_state(tiles[index].power, LV_STATE_CHECKED);
+            }
+            tiles[index].applying = false;
         }
     }
     lvgl_port_unlock();

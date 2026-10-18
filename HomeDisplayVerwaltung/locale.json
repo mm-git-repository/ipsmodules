@@ -1,13 +1,19 @@
 {
     "translations": {
         "en": {
-            "Die Verwaltungsseite wird vom Webserver von IP-Symcon ausgeliefert. Eine Instanz genügt. Das Passwort schützt die Seite.": "The admin page is served by the IP-Symcon web server. One instance is enough. The password protects the page.",
+            "Die Verwaltung bündelt alle globalen Einstellungen der Hausanzeige: die Verwaltungsseite im Browser und den Dienst, über den alle Anzeigen Ansichten, Werte und Programm abholen. Eine Instanz genügt.": "The administration holds all global settings of the home display: the admin page in the browser and the service from which all displays fetch views, values and program. One instance is enough.",
             "Aktiv": "Active",
+            "Verwaltungsseite": "Admin page",
             "Passwort für die Verwaltungsseite": "Password for the admin page",
-            "Adresse wird nach dem Übernehmen angezeigt.": "The address appears after applying the changes.",
-            "Verwaltungsseite aktiv": "Admin page active",
-            "Verwaltungsseite inaktiv": "Admin page inactive",
-            "Verwaltungsseite konnte nicht gestartet werden": "Admin page could not be started",
+            "Verwaltungsseite: wird nach dem Übernehmen angezeigt.": "Admin page: shown after applying the changes.",
+            "Dienst für die Anzeigen": "Service for the displays",
+            "Der Dienst wird automatisch eingerichtet und läuft über die erste aktive Hausanzeige-Instanz. Die Anzeigen bekommen die Dienstadresse bei der Kopplung oder im Einrichtungs-WLAN.": "The service is set up automatically and runs on the first active home display instance. Displays receive the service address during pairing or in the setup Wi-Fi.",
+            "Dienstadresse (leer = automatisch, z. B. 192.168.1.10)": "Service address (empty = automatic, e.g. 192.168.1.10)",
+            "Dienst: wird nach dem Übernehmen angezeigt.": "Service: shown after applying the changes.",
+            "Dienst neu einrichten": "Set up service again",
+            "Verwaltung aktiv": "Administration active",
+            "Verwaltung inaktiv": "Administration inactive",
+            "Verwaltung konnte nicht gestartet werden": "Administration could not be started",
             "Passwort für die Verwaltungsseite fehlt": "Password for the admin page is missing"
         }
     }

@@ -177,7 +177,7 @@ final class HomeDisplayCatalogStore
     }
 
     /**
-     * Speichert ein hochgeladenes Bild. Mit GD wird es auf die Kachelgröße verkleinert und als PNG abgelegt.
+     * Speichert ein hochgeladenes Bild. Mit GD wird es auf höchstens 1024×600 verkleinert und als PNG abgelegt.
      * @return array<string, mixed>
      */
     public static function saveImage(string $name, string $binary): array
@@ -196,8 +196,8 @@ final class HomeDisplayCatalogStore
         if (function_exists('imagecreatefromstring')) {
             $source = @imagecreatefromstring($binary);
             if ($source !== false) {
-                $maxWidth = 960;
-                $maxHeight = 480;
+                $maxWidth = 1024;
+                $maxHeight = 600;
                 $scale = min(1.0, $maxWidth / max(1, $width), $maxHeight / max(1, $height));
                 $targetWidth = max(1, (int) round($width * $scale));
                 $targetHeight = max(1, (int) round($height * $scale));

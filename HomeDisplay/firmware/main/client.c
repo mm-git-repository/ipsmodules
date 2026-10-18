@@ -223,7 +223,7 @@ static void pair_until_token(void)
         }
         vTaskDelay(pdMS_TO_TICKS(3000));
     }
-    homedisplay_ui_status("HomeDisplay verbunden");
+    homedisplay_ui_status("Hausanzeige verbunden");
 }
 
 static int version_of(const char *text)
@@ -339,29 +339,38 @@ static esp_err_t download_to_file(const char *path, const char *target)
     return error;
 }
 
-/* Lädt alle Bilder einer Ansicht in den Flash, bevor die Ansicht gezeichnet wird. */
+static void fetch_one_image(const char *id, const char *file)
+{
+    if (!id || !id[0] || !file || !file[0]) return;
+    char target[96];
+    snprintf(target, sizeof(target), "/storage/%s", file);
+    struct stat info;
+    if (stat(target, &info) == 0 && info.st_size > 0) return;
+    char path[64];
+    snprintf(path, sizeof(path), "/v1/images/%s", id);
+    homedisplay_ui_status("Lade Bilder");
+    if (download_to_file(path, target) != ESP_OK) {
+        ESP_LOGW(TAG, "Bild %s konnte nicht geladen werden", id);
+    }
+}
+
+/* Lädt Kachelbilder und Seitenhintergründe in den Flash, bevor die Ansicht gezeichnet wird. */
 static void fetch_images(const char *layout_json)
 {
     cJSON *root = cJSON_Parse(layout_json);
     if (!root) return;
     cJSON *page = NULL;
     cJSON_ArrayForEach(page, cJSON_GetObjectItem(root, "pages")) {
+        fetch_one_image(
+            cJSON_GetStringValue(cJSON_GetObjectItem(page, "backgroundId")),
+            cJSON_GetStringValue(cJSON_GetObjectItem(page, "backgroundFile")));
         cJSON *tile = NULL;
         cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
             const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
-            const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageFile"));
-            const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageId"));
-            if (!kind || strcmp(kind, "image") != 0 || !file || !file[0] || !id) continue;
-            char target[96];
-            snprintf(target, sizeof(target), "/storage/%s", file);
-            struct stat info;
-            if (stat(target, &info) == 0 && info.st_size > 0) continue;
-            char path[64];
-            snprintf(path, sizeof(path), "/v1/images/%s", id);
-            homedisplay_ui_status("Lade Bilder");
-            if (download_to_file(path, target) != ESP_OK) {
-                ESP_LOGW(TAG, "Bild %s konnte nicht geladen werden", id);
-            }
+            if (!kind || strcmp(kind, "image") != 0) continue;
+            fetch_one_image(
+                cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageId")),
+                cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageFile")));
         }
     }
     cJSON_Delete(root);
@@ -510,17 +519,17 @@ static void maybe_update(void)
         return;
     }
     if (homedisplay_ui_busy() || !link_ok()) {
-        snprintf(update_error, sizeof(update_error), "Update zurückgestellt");
+        snprintf(update_error, sizeof(update_error), "Aktualisierung zurückgestellt");
         return;
     }
     homedisplay_ui_lock(true);
-    homedisplay_ui_status("Update");
+    homedisplay_ui_status("Aktualisierung");
     progress = 0;
     char url[220];
     snprintf(url, sizeof(url), "%s/v1/firmware", base_url);
     esp_err_t error = homedisplay_ota_run(url, token, firmware_sha, firmware_signature, &progress);
     homedisplay_ui_lock(false);
-    if (error != ESP_OK) snprintf(update_error, sizeof(update_error), "Update fehlgeschlagen");
+    if (error != ESP_OK) snprintf(update_error, sizeof(update_error), "Aktualisierung fehlgeschlagen");
 }
 
 static void confirm_boot(void)
@@ -602,12 +611,12 @@ static void client_task(void *argument)
             if (!unchanged) write_cache(STATE_CACHE, response);
             set_online(true);
             confirm_boot();
-            homedisplay_ui_status(layout_held ? "Layout wartet auf neuere Firmware" : "HomeDisplay verbunden");
+            homedisplay_ui_status(layout_held ? "Ansicht wartet auf ein neueres Programm" : "Hausanzeige verbunden");
         } else if (error != ESP_ERR_WIFI_NOT_CONNECT) {
             failures++;
             if (failures >= 3) {
                 set_online(false);
-                homedisplay_ui_status("Adapter nicht erreichbar");
+                homedisplay_ui_status("Dienst nicht erreichbar");
             }
             if (failures == 20 && strlen(CONFIG_HOMEDISPLAY_ADAPTER_URL) == 0) {
                 /* Adapter eventuell umgezogen: erneut per mDNS suchen. */

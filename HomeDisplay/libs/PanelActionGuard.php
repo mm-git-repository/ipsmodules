@@ -36,7 +36,7 @@ final class HomeDisplayPanelActionGuard
         }
         foreach (['scriptId', 'script', 'objectId', 'variableId', 'command'] as $forbidden) {
             if (array_key_exists($forbidden, $body)) {
-                throw new InvalidArgumentException('Dieses Feld nimmt der Adapter nicht an: ' . $forbidden);
+                throw new InvalidArgumentException('Dieses Feld nimmt der Dienst nicht an: ' . $forbidden);
             }
         }
         if (in_array($requestId, $seen, true)) {

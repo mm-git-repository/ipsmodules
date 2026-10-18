@@ -2,7 +2,7 @@
     "elements": [
         {
             "type": "Label",
-            "caption": "HomeDisplay ist ein Panel-Gerät. Genau eine Instanz stellt den Adapter für alle Panels bereit."
+            "caption": "Diese Instanz ist eine Anzeige. Dienst und Dienstadresse werden zentral in der Instanz „Hausanzeige Verwaltung“ eingestellt."
         },
         {
             "type": "CheckBox",
@@ -10,23 +10,13 @@
             "caption": "Aktiv"
         },
         {
-            "type": "CheckBox",
-            "name": "ServeAdapter",
-            "caption": "Adapter bereitstellen (nur bei einer Instanz aktivieren)"
-        },
-        {
-            "type": "ValidationTextBox",
-            "name": "AdapterHost",
-            "caption": "Adapter-Adresse (leer = automatisch, z. B. 192.168.1.10)"
-        },
-        {
             "type": "Label",
-            "caption": "Kopplung: Den Code vom Panel eintragen und übernehmen. Das Panel übernimmt den Token beim nächsten Abruf."
+            "caption": "Kopplung: Den Code von der Anzeige eintragen und übernehmen. Die Anzeige erhält den Schlüssel beim nächsten Abruf."
         },
         {
             "type": "ValidationTextBox",
             "name": "ClaimCode",
-            "caption": "Kopplungscode vom Panel"
+            "caption": "Kopplungscode von der Anzeige"
         },
         {
             "type": "Select",
@@ -42,7 +32,7 @@
         },
         {
             "type": "Label",
-            "caption": "Die Liste ist die Rückfallebene, wenn kein veröffentlichtes Layout mit Kacheln gewählt ist. Position sortiert die Zeilen. Freie Pixel gibt es nicht."
+            "caption": "Die Liste gilt, wenn keine veröffentlichte Ansicht mit Kacheln gewählt ist. Die Position sortiert die Zeilen. Eine freie Platzierung gibt es nicht."
         },
         {
             "type": "List",
@@ -85,6 +75,12 @@
                     {"caption": "Schalten", "value": "switch"},
                     {"caption": "Dimmen", "value": "dim"},
                     {"caption": "Position", "value": "position"}
+                ]}},
+                {"name": "Control", "caption": "Bedienung", "width": "140px", "add": "switch", "edit": {"type": "Select", "options": [
+                    {"caption": "Schalter", "value": "switch"},
+                    {"caption": "Dimmschalter", "value": "dimSwitch"},
+                    {"caption": "Dimmbalken", "value": "slider"},
+                    {"caption": "Kombischalter", "value": "combo"}
                 ]}}
             ]
         },
@@ -95,7 +91,7 @@
             "options": [
                 {"caption": "Uhrseite", "value": 0},
                 {"caption": "Letzte Seite", "value": 1},
-                {"caption": "Display aus", "value": 2}
+                {"caption": "Bildschirm aus", "value": 2}
             ]
         },
         {
@@ -148,14 +144,14 @@
         {
             "type": "NumberSpinner",
             "name": "MaintenanceFrom",
-            "caption": "Firmware-Wartung ab Stunde",
+            "caption": "Programmaktualisierung ab Stunde",
             "minimum": 0,
             "maximum": 23
         },
         {
             "type": "NumberSpinner",
             "name": "MaintenanceTo",
-            "caption": "Firmware-Wartung bis Stunde (exkl.)",
+            "caption": "Programmaktualisierung bis Stunde (exkl.)",
             "minimum": 0,
             "maximum": 23
         }
@@ -201,35 +197,35 @@
                 },
                 {
                     "type": "Button",
-                    "label": "Panel neu starten",
-                    "confirm": "Das Panel startet beim nächsten Manifest-Abruf neu. Fortfahren?",
+                    "label": "Anzeige neu starten",
+                    "confirm": "Die Anzeige startet beim nächsten Abruf neu. Fortfahren?",
                     "onClick": "echo HDISP_RestartPanel($_IPS['TARGET']);"
                 }
             ]
         },
         {
             "type": "Button",
-            "label": "Preset Energie",
+            "label": "Vorlage Energie",
             "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'energy');"
         },
         {
             "type": "Button",
-            "label": "Preset Whirlpool",
+            "label": "Vorlage Whirlpool",
             "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'whirl');"
         },
         {
             "type": "Button",
-            "label": "Preset Pool",
+            "label": "Vorlage Pool",
             "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'pool');"
         },
         {
             "type": "Button",
-            "label": "Preset Wasserwerte",
+            "label": "Vorlage Wasserwerte",
             "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'tuya');"
         },
         {
             "type": "Button",
-            "label": "Preset Garten",
+            "label": "Vorlage Garten",
             "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'gardena');"
         },
         {
@@ -239,8 +235,8 @@
         }
     ],
     "status": [
-        {"code": 102, "icon": "active", "caption": "HomeDisplay aktiv"},
-        {"code": 104, "icon": "inactive", "caption": "HomeDisplay inaktiv"},
-        {"code": 201, "icon": "error", "caption": "Adapter konnte nicht gestartet werden"}
+        {"code": 102, "icon": "active", "caption": "Hausanzeige aktiv"},
+        {"code": 104, "icon": "inactive", "caption": "Hausanzeige inaktiv"},
+        {"code": 203, "icon": "error", "caption": "Kein Dienst: Instanz „Hausanzeige Verwaltung“ anlegen"}
     ]
 }

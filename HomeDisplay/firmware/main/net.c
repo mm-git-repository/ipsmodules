@@ -108,13 +108,13 @@ bool homedisplay_wifi_connected(void)
 
 static const char provisioning_page[] =
     "<!doctype html><html lang=\"de\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\">"
-    "<title>HomeDisplay einrichten</title>"
+    "<title>Hausanzeige einrichten</title>"
     "<style>body{font-family:sans-serif;max-width:420px;margin:2em auto;padding:0 1em}label{display:block;margin-top:1em}"
     "input{width:100%;padding:.5em;font-size:1em}button{margin-top:1.5em;padding:.7em 1.2em;font-size:1em}</style>"
-    "<h1>HomeDisplay einrichten</h1><form method=\"post\" action=\"/save\">"
+    "<h1>Hausanzeige einrichten</h1><form method=\"post\" action=\"/save\">"
     "<label>WLAN-Name<input name=\"ssid\" required maxlength=\"32\"></label>"
     "<label>WLAN-Passwort<input name=\"password\" type=\"password\" maxlength=\"63\"></label>"
-    "<label>Adapter-URL (leer = automatisch suchen)<input name=\"adapter\" placeholder=\"https://192.168.1.10:3777/hook/homedisplay\" maxlength=\"150\"></label>"
+    "<label>Dienstadresse (leer = automatisch suchen)<input name=\"adapter\" placeholder=\"https://192.168.1.10:3777/hook/homedisplay\" maxlength=\"150\"></label>"
     "<button type=\"submit\">Speichern und neu starten</button></form></html>";
 
 static void url_decode(char *text)
@@ -179,7 +179,7 @@ static esp_err_t save_handler(httpd_req_t *request)
     homedisplay_nvs_set("pass", password);
     if (adapter[0]) homedisplay_nvs_set("base", adapter);
     httpd_resp_set_type(request, "text/html; charset=utf-8");
-    httpd_resp_send(request, "<meta charset=\"utf-8\"><h1>Gespeichert</h1><p>Das Panel startet neu.</p>", HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(request, "<meta charset=\"utf-8\"><h1>Gespeichert</h1><p>Die Anzeige startet neu.</p>", HTTPD_RESP_USE_STRLEN);
     vTaskDelay(pdMS_TO_TICKS(1500));
     esp_restart();
     return ESP_OK;
@@ -203,7 +203,7 @@ void homedisplay_provision_start(void)
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
     wifi_config_t ap = {0};
-    snprintf((char *) ap.ap.ssid, sizeof(ap.ap.ssid), "HomeDisplay-Setup-%02X%02X", mac[4], mac[5]);
+    snprintf((char *) ap.ap.ssid, sizeof(ap.ap.ssid), "Hausanzeige-Setup-%02X%02X", mac[4], mac[5]);
     ap.ap.ssid_len = strlen((char *) ap.ap.ssid);
     ap.ap.max_connection = 2;
     ap.ap.authmode = WIFI_AUTH_OPEN;

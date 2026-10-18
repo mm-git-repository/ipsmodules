@@ -3,17 +3,17 @@ menu "HomeDisplay"
         string "WLAN-Name (leer = Einrichtung über eigenes WLAN)"
         default ""
         help
-            Ohne Eintrag und ohne gespeicherte Zugangsdaten öffnet das Panel beim Start
-            zehn Minuten lang das WLAN „HomeDisplay-Setup“. Dort werden WLAN und Adapter eingetragen.
+            Ohne Eintrag und ohne gespeicherte Zugangsdaten öffnet die Anzeige beim Start
+            zehn Minuten lang das WLAN „Hausanzeige-Setup“. Dort werden WLAN und Dienstadresse eingetragen.
     config HOMEDISPLAY_WIFI_PASSWORD
         string "WLAN-Passwort"
         default ""
     config HOMEDISPLAY_ADAPTER_URL
-        string "Adapter-URL, leer sucht per mDNS"
+        string "Dienstadresse, leer sucht automatisch"
         default ""
         help
             Beispiel: https://192.168.1.10:3777/hook/homedisplay
-            Ohne Eintrag sucht das Panel den Dienst homedisplay.local.
+            Ohne Eintrag sucht die Anzeige den Dienst homedisplay.local.
     config HOMEDISPLAY_TLS_INSECURE
         bool "Lokales HTTPS-Zertifikat nicht prüfen"
         default y

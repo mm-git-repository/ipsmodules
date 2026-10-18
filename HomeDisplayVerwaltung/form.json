@@ -2,7 +2,7 @@
     "elements": [
         {
             "type": "Label",
-            "caption": "Die Verwaltungsseite wird vom Webserver von IP-Symcon ausgeliefert. Eine Instanz genügt. Das Passwort schützt die Seite."
+            "caption": "Die Verwaltung bündelt alle globalen Einstellungen der Hausanzeige: die Verwaltungsseite im Browser und den Dienst, über den alle Anzeigen Ansichten, Werte und Programm abholen. Eine Instanz genügt."
         },
         {
             "type": "CheckBox",
@@ -10,21 +10,56 @@
             "caption": "Aktiv"
         },
         {
-            "type": "PasswordTextBox",
-            "name": "AdminPassword",
-            "caption": "Passwort für die Verwaltungsseite"
+            "type": "ExpansionPanel",
+            "caption": "Verwaltungsseite",
+            "expanded": true,
+            "items": [
+                {
+                    "type": "PasswordTextBox",
+                    "name": "AdminPassword",
+                    "caption": "Passwort für die Verwaltungsseite"
+                },
+                {
+                    "type": "Label",
+                    "name": "AdminUrlLabel",
+                    "caption": "Verwaltungsseite: wird nach dem Übernehmen angezeigt."
+                }
+            ]
         },
         {
-            "type": "Label",
-            "name": "AdminUrlLabel",
-            "caption": "Adresse wird nach dem Übernehmen angezeigt."
+            "type": "ExpansionPanel",
+            "caption": "Dienst für die Anzeigen",
+            "expanded": true,
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Der Dienst wird automatisch eingerichtet und läuft über die erste aktive Hausanzeige-Instanz. Die Anzeigen bekommen die Dienstadresse bei der Kopplung oder im Einrichtungs-WLAN."
+                },
+                {
+                    "type": "ValidationTextBox",
+                    "name": "ServiceHost",
+                    "caption": "Dienstadresse (leer = automatisch, z. B. 192.168.1.10)",
+                    "validate": "^$|^[A-Za-z0-9.\\-]+$"
+                },
+                {
+                    "type": "Label",
+                    "name": "ServiceUrlLabel",
+                    "caption": "Dienst: wird nach dem Übernehmen angezeigt."
+                }
+            ]
         }
     ],
-    "actions": [],
+    "actions": [
+        {
+            "type": "Button",
+            "label": "Dienst neu einrichten",
+            "onClick": "echo 'Dienst: ' . HDADM_SyncService($_IPS['TARGET']);"
+        }
+    ],
     "status": [
-        {"code": 102, "icon": "active", "caption": "Verwaltungsseite aktiv"},
-        {"code": 104, "icon": "inactive", "caption": "Verwaltungsseite inaktiv"},
-        {"code": 201, "icon": "error", "caption": "Verwaltungsseite konnte nicht gestartet werden"},
+        {"code": 102, "icon": "active", "caption": "Verwaltung aktiv"},
+        {"code": 104, "icon": "inactive", "caption": "Verwaltung inaktiv"},
+        {"code": 201, "icon": "error", "caption": "Verwaltung konnte nicht gestartet werden"},
         {"code": 202, "icon": "error", "caption": "Passwort für die Verwaltungsseite fehlt"}
     ]
 }

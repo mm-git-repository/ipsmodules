@@ -7,7 +7,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_touch.h"
 
-#define HOMEDISPLAY_FIRMWARE_VERSION "0.3.0"
+#define HOMEDISPLAY_FIRMWARE_VERSION "0.3.2"
 #define HOMEDISPLAY_LCD_H_RES 1024
 #define HOMEDISPLAY_LCD_V_RES 600
 

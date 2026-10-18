@@ -12,8 +12,10 @@ const ICONS = [
   ["energy", "Energie"], ["temperature", "Temperatur"], ["light", "Licht"], ["shutter", "Rollladen"],
   ["pump", "Pumpe"], ["valve", "Ventil"], ["alarm", "Alarm"], ["home", "Haus"], ["clock", "Uhr"], ["info", "Info"]
 ];
-const KIND_NAMES = { value: "Wert", nav: "Tab-Wechsler", label: "Text", image: "Bild", separator: "Trennlinie", system: "Panel-Status" };
-const TYPE_NAMES = ["Bool", "Integer", "Float", "String"];
+const KIND_NAMES = { value: "Wert", nav: "Seitenwechsler", label: "Text", image: "Bild", separator: "Trennlinie", system: "Anzeigestatus" };
+const CONTROL_NAMES = { switch: "Schalter", dimSwitch: "Dimmschalter", slider: "Dimmbalken", combo: "Kombischalter" };
+const DIM_CONTROLS = ["dimSwitch", "slider", "combo"];
+const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text"];
 
 const state = {
   catalog: { layouts: [], configs: [] },
@@ -191,6 +193,23 @@ function renderPageTabs() {
 
 /* ---------- Raster ---------- */
 
+function renderPageBackground() {
+  const select = $("page-background");
+  const page = currentPage();
+  fillImageSelect(select);
+  select.value = page && page.backgroundId ? page.backgroundId : "";
+  select.disabled = !page;
+  const image = page ? state.images.find((item) => item.id === page.backgroundId) : null;
+  const grid = $("grid");
+  if (image) {
+    grid.style.backgroundImage = `url("images/${image.id}.${image.ext}")`;
+    grid.style.backgroundSize = "cover";
+    grid.style.backgroundPosition = "center";
+  } else {
+    grid.style.backgroundImage = "";
+  }
+}
+
 function tileAt(col, row) {
   const page = currentPage();
   if (!page) return null;
@@ -225,6 +244,7 @@ function renderGrid() {
   const page = currentPage();
   grid.style.gridTemplateColumns = `repeat(${state.layout.columns}, 1fr)`;
   grid.style.gridTemplateRows = `repeat(${state.layout.rows}, 1fr)`;
+  renderPageBackground();
   const covered = new Set();
   for (const tile of page.tiles) {
     for (let x = tile.col; x < tile.col + (tile.colSpan || 1); x += 1) {
@@ -268,10 +288,15 @@ function renderTile(tile) {
   element.title = `${KIND_NAMES[tile.kind]} – Doppelklick für Details`;
   if (tile.kind === "value") {
     const variable = variableById(tile.variableId);
-    element.innerHTML = `<div class="kicker">${iconName(tile.icon)}${tile.actionId ? " · schaltbar" : ""}</div><div class="name"></div><div class="value">${variable ? "12,3" : "—"}${tile.unit ? " " + escapeHtml(tile.unit) : ""}</div>`;
+    const control = tile.control || "switch";
+    if (DIM_CONTROLS.includes(control)) element.classList.add("dim");
+    const kicker = DIM_CONTROLS.includes(control) ? CONTROL_NAMES[control] : `${iconName(tile.icon)}${tile.actionId ? " · schaltbar" : ""}`;
+    const body = controlMarkup(control);
+    element.innerHTML = `<div class="kicker">${kicker}</div><div class="name"></div>${body || `<div class="value">${variable ? "12,3" : "—"}${tile.unit ? " " + escapeHtml(tile.unit) : ""}</div>`}`;
     element.querySelector(".name").textContent = tile.title || (variable ? variable.name : "Wert");
+    bindControlPreview(element);
   } else if (tile.kind === "nav") {
-    element.innerHTML = `<div class="kicker">${tile.icon ? iconName(tile.icon) + " · " : ""}Tab</div><div class="name"></div>`;
+    element.innerHTML = `<div class="kicker">${tile.icon ? iconName(tile.icon) + " · " : ""}Seite</div><div class="name"></div>`;
     element.querySelector(".name").textContent = tile.title || pageTitleIn(tile.targetPage);
   } else if (tile.kind === "label") {
     element.innerHTML = `<div class="text"></div>`;
@@ -279,8 +304,8 @@ function renderTile(tile) {
   } else if (tile.kind === "separator") {
     element.innerHTML = `<div class="line"></div>`;
   } else if (tile.kind === "system") {
-    element.innerHTML = `<div class="kicker">Panel-Status</div><div class="name"></div><div class="text">Firmware · WLAN · Laufzeit · Datenalter</div>`;
-    element.querySelector(".name").textContent = tile.title || "Panel";
+    element.innerHTML = `<div class="kicker">Anzeigestatus</div><div class="name"></div><div class="text">Programm · WLAN · Laufzeit · Datenalter</div>`;
+    element.querySelector(".name").textContent = tile.title || "Anzeige";
   } else if (tile.kind === "image") {
     const image = state.images.find((item) => item.id === tile.imageId);
     element.innerHTML = image ? `<img src="images/${image.id}.${image.ext}" alt="">` : `<div class="missing">Bild wählen</div>`;
@@ -306,6 +331,59 @@ function renderTile(tile) {
   return element;
 }
 
+function controlMarkup(control) {
+  if (control === "dimSwitch") return `<div class="ctl"><span class="sw"></span><span class="ctl-label">Aus</span></div>`;
+  if (control === "slider") return `<div class="ctl"><div class="track"><div class="fill"></div><div class="knob"></div></div></div>`;
+  if (control === "combo") return `<div class="ctl"><span class="sw"></span><div class="track"><div class="fill"></div><div class="knob"></div></div></div>`;
+  return "";
+}
+
+/* Vorschau im Editor: der Griff lässt sich ziehen, die Leiste selbst nicht. Der Wert wird nicht gespeichert. */
+function bindControlPreview(element) {
+  const knob = element.querySelector(".knob");
+  const track = element.querySelector(".track");
+  const fill = element.querySelector(".fill");
+  const sw = element.querySelector(".sw");
+  const label = element.querySelector(".ctl-label");
+  const stop = (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+  };
+  const box = element.querySelector(".ctl");
+  if (box) {
+    box.addEventListener("click", (event) => event.stopPropagation());
+    box.addEventListener("dblclick", (event) => event.stopPropagation());
+  }
+  if (sw) {
+    sw.addEventListener("pointerdown", stop);
+    sw.addEventListener("click", (event) => {
+      event.stopPropagation();
+      sw.classList.toggle("on");
+      if (label) label.textContent = sw.classList.contains("on") ? "Ein" : "Aus";
+    });
+  }
+  if (!knob || !track) return;
+  knob.addEventListener("pointerdown", (event) => {
+    stop(event);
+    knob.setPointerCapture(event.pointerId);
+    const move = (moveEvent) => {
+      const rect = track.getBoundingClientRect();
+      const travel = Math.max(1, rect.width - knob.offsetWidth);
+      const x = Math.min(travel, Math.max(0, moveEvent.clientX - rect.left - knob.offsetWidth / 2));
+      knob.style.left = `${x}px`;
+      if (fill) fill.style.width = `${x + knob.offsetWidth / 2}px`;
+      if (label) label.textContent = `${Math.round(x / travel * 100)} %`;
+      if (sw) sw.classList.toggle("on", x > 2);
+    };
+    const end = () => {
+      knob.removeEventListener("pointermove", move);
+      knob.removeEventListener("pointerup", end);
+    };
+    knob.addEventListener("pointermove", move);
+    knob.addEventListener("pointerup", end);
+  });
+}
+
 function bindDrop(target, col, row, existing) {
   target.addEventListener("dragover", (event) => {
     event.preventDefault();
@@ -317,6 +395,7 @@ function bindDrop(target, col, row, existing) {
     target.classList.remove("over");
     const movedId = event.dataTransfer.getData("text/homedisplay-tile");
     const kind = event.dataTransfer.getData("text/homedisplay-kind");
+    const control = event.dataTransfer.getData("text/homedisplay-control");
     const variableId = Number(event.dataTransfer.getData("text/homedisplay-variable"));
     if (movedId) {
       moveTile(movedId, col, row, existing);
@@ -330,7 +409,7 @@ function bindDrop(target, col, row, existing) {
       if (!existing) addTile("value", col, row, variableById(variableId));
       return;
     }
-    if (kind && !existing) addTile(kind, col, row, null);
+    if (kind && !existing) addTile(kind, col, row, null, control);
   });
 }
 
@@ -364,16 +443,22 @@ function moveTile(tileId, col, row, target) {
   renderProperties();
 }
 
-function addTile(kind, col, row, variable) {
+function addTile(kind, col, row, variable, control) {
   if (!state.layout) return;
   const page = currentPage();
   const stamp = Date.now().toString(36);
   const tile = { tileId: `t${stamp}`, kind, title: "", col, row, colSpan: 1, rowSpan: 1 };
   if (kind === "value") {
-    tile.icon = "energy";
+    tile.icon = DIM_CONTROLS.includes(control) ? "light" : "energy";
     tile.variableId = 0;
-    tile.unit = "";
+    tile.unit = DIM_CONTROLS.includes(control) ? "%" : "";
     tile.decimals = 0;
+    if (DIM_CONTROLS.includes(control)) {
+      tile.control = control;
+      tile.actionKind = "dim";
+      tile.valueMin = 0;
+      tile.valueMax = 100;
+    }
     if (variable) assignVariable(tile, variable, true);
   } else if (kind === "nav") {
     const other = state.layout.pages.find((item) => item.id !== state.page) || state.layout.pages[0];
@@ -386,7 +471,7 @@ function addTile(kind, col, row, variable) {
     tile.colSpan = Math.max(1, state.layout.columns);
     if (!fits(null, col, row, tile.colSpan, 1, null)) tile.colSpan = 1;
   } else if (kind === "system") {
-    tile.title = "Panel";
+    tile.title = "Anzeige";
     tile.colSpan = Math.min(2, state.layout.columns);
     tile.rowSpan = Math.min(2, state.layout.rows);
     if (!fits(null, col, row, tile.colSpan, tile.rowSpan, null)) {
@@ -418,6 +503,12 @@ function assignVariable(tile, variable, silent) {
     delete tile.actionId;
     delete tile.actionKind;
     tile.confirm = false;
+  } else if (DIM_CONTROLS.includes(tile.control)) {
+    tile.actionId = tile.actionId || `a-${tile.tileId}`;
+    tile.actionKind = "dim";
+    tile.valueMin = tile.valueMin ?? 0;
+    tile.valueMax = tile.valueMax ?? 100;
+    if (variable.actionKind && variable.actionKind !== "dim") setStatus("Diese Variable ist kein Dimmwert. Der Balken sendet trotzdem eine Zahl.");
   } else if (tile.actionId) {
     tile.actionKind = variable.actionKind || tile.actionKind || "switch";
   }
@@ -507,10 +598,18 @@ function renderProperties() {
   $("p-variable").value = variable ? `${variable.path ? variable.path + " / " : ""}${variable.name} (${variable.id})` : "";
   $("p-unit").value = tile.unit || "";
   $("p-decimals").value = tile.decimals || 0;
+  $("p-control").value = tile.control || "switch";
+  const hints = {
+    dimSwitch: "Schaltet den Dimmwert aus und stellt beim Einschalten den letzten Wert wieder her.",
+    slider: "Der Wert ändert sich nur, wenn der Griff gezogen wird. Tippen auf die Leiste bewirkt nichts.",
+    combo: "Schalter für Ein und Aus, Balken für den Dimmwert. Der Balken reagiert nur auf Ziehen am Griff."
+  };
+  $("p-control-hint").textContent = hints[tile.control] || "";
+  $("p-control-hint").classList.toggle("hidden", !hints[tile.control]);
   $("p-action").checked = Boolean(tile.actionId);
   $("p-action").disabled = !(variable && variable.action);
   $("p-confirm").checked = Boolean(tile.confirm);
-  $("p-actionkind").value = tile.actionKind || (variable ? variable.actionKind || "switch" : "switch");
+  $("p-actionkind").value = tile.actionKind || (DIM_CONTROLS.includes(tile.control) ? "dim" : (variable ? variable.actionKind || "switch" : "switch"));
   fillTargetSelect($("p-target"));
   $("p-target").value = tile.targetPage || "";
   $("p-text").value = tile.text || "";
@@ -543,13 +642,22 @@ function applyProperties() {
     tile.unit = $("p-unit").value;
     tile.decimals = Number($("p-decimals").value) || 0;
     const variable = variableById(tile.variableId);
+    const control = $("p-control").value || "switch";
+    tile.control = control === "switch" ? undefined : control;
+    if (control === "switch") delete tile.control;
+    if (DIM_CONTROLS.includes(control)) {
+      tile.actionKind = "dim";
+      tile.valueMin = tile.valueMin ?? 0;
+      tile.valueMax = tile.valueMax ?? 100;
+      if (!tile.unit) tile.unit = "%";
+    }
     if ($("p-action").checked && variable && variable.action) {
       tile.actionId = tile.actionId || `a-${tile.tileId}`;
-      tile.actionKind = $("p-actionkind").value;
+      tile.actionKind = DIM_CONTROLS.includes(control) ? "dim" : $("p-actionkind").value;
       tile.confirm = $("p-confirm").checked;
     } else {
       delete tile.actionId;
-      delete tile.actionKind;
+      if (!DIM_CONTROLS.includes(control)) delete tile.actionKind;
       tile.confirm = false;
     }
   }
@@ -564,6 +672,15 @@ function applyProperties() {
   renderProperties();
 }
 
+$("p-control").addEventListener("change", () => {
+  if (DIM_CONTROLS.includes($("p-control").value)) {
+    $("p-actionkind").value = "dim";
+    const tile = selectedTile();
+    const variable = tile ? variableById(tile.variableId) : null;
+    if (variable && variable.action) $("p-action").checked = true;
+  }
+  applyProperties();
+});
 for (const id of ["p-title", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-size", "p-image"]) {
   $(id).addEventListener("change", applyProperties);
 }
@@ -625,9 +742,13 @@ function openDetails(tile) {
     fields.variable = add("Variable", picker);
     fields.unit = add("Einheit", text(tile.unit));
     fields.decimals = add("Nachkommastellen", number(tile.decimals || 0, 0, 3));
+    const control = document.createElement("select");
+    control.innerHTML = '<option value="switch">Schalter</option><option value="dimSwitch">Dimmschalter</option><option value="slider">Dimmbalken</option><option value="combo">Kombischalter</option>';
+    control.value = tile.control || "switch";
+    fields.control = add("Bedienung", control);
     fields.action = add("Schaltbar", check(tile.actionId));
     fields.action.disabled = !(variable && variable.action);
-    fields.confirm = add("Bestätigung am Panel", check(tile.confirm));
+    fields.confirm = add("Bestätigung an der Anzeige", check(tile.confirm));
     const kind = document.createElement("select");
     kind.innerHTML = '<option value="switch">Schalten</option><option value="dim">Dimmen</option><option value="position">Position</option>';
     kind.value = tile.actionKind || "switch";
@@ -691,15 +812,19 @@ function openDetails(tile) {
       tile.variableId = chosen ? chosen.id : 0;
       tile.unit = fields.unit.value;
       tile.decimals = Number(fields.decimals.value) || 0;
+      const control = fields.control.value || "switch";
+      if (control === "switch") delete tile.control;
+      else tile.control = control;
+      if (DIM_CONTROLS.includes(control)) fields.actionKind.value = "dim";
       if (fields.action.checked && chosen && chosen.action) {
         tile.actionId = tile.actionId || `a-${tile.tileId}`;
-        tile.actionKind = fields.actionKind.value;
+        tile.actionKind = DIM_CONTROLS.includes(control) ? "dim" : fields.actionKind.value;
         tile.confirm = fields.confirm.checked;
         tile.valueMin = Number(fields.valueMin.value);
         tile.valueMax = Number(fields.valueMax.value);
       } else {
         delete tile.actionId;
-        delete tile.actionKind;
+        if (!DIM_CONTROLS.includes(control)) delete tile.actionKind;
         delete tile.valueMin;
         delete tile.valueMax;
         tile.confirm = false;
@@ -736,13 +861,20 @@ function openLayoutDialog() {
   list.innerHTML = "";
   for (const [id, name] of PAGES) {
     const existing = state.layout.pages.find((page) => page.id === id);
+    const row = document.createElement("div");
+    row.className = "page-row";
     const wrap = document.createElement("label");
     const check = Object.assign(document.createElement("input"), { type: "checkbox", checked: Boolean(existing), value: id });
     const title = Object.assign(document.createElement("input"), { type: "text", value: existing ? existing.title || name : name });
     const count = document.createElement("small");
-    count.textContent = existing ? `${existing.tiles.length} Kacheln` : "";
+    count.textContent = existing ? `${existing.tiles.length}` : "";
     wrap.append(check, title, count);
-    list.appendChild(wrap);
+    const background = document.createElement("select");
+    background.className = "page-bg";
+    fillImageSelect(background);
+    background.value = existing && existing.backgroundId ? existing.backgroundId : "";
+    row.append(wrap, background);
+    list.appendChild(row);
   }
   dialog.returnValue = "";
   dialog.showModal();
@@ -756,7 +888,11 @@ function openLayoutDialog() {
       const [check, title] = wrap.querySelectorAll("input");
       if (!check.checked) continue;
       const existing = state.layout.pages.find((page) => page.id === check.value);
-      pages.push(existing ? Object.assign(existing, { title: title.value.trim() || pageTitle(check.value) }) : { id: check.value, title: title.value.trim() || pageTitle(check.value), tiles: [] });
+      const page = existing ? Object.assign(existing, { title: title.value.trim() || pageTitle(check.value) }) : { id: check.value, title: title.value.trim() || pageTitle(check.value), tiles: [] };
+      const background = wrap.parentElement.querySelector("select.page-bg");
+      if (background && background.value) page.backgroundId = background.value;
+      else delete page.backgroundId;
+      pages.push(page);
     }
     if (!pages.length) pages.push(state.layout.pages[0] || { id: "start", title: "Start", tiles: [] });
     state.layout.pages = pages;
@@ -860,12 +996,13 @@ $("only-actions").addEventListener("change", renderVariableTree);
 for (const item of document.querySelectorAll(".palette-item")) {
   item.addEventListener("dragstart", (event) => {
     event.dataTransfer.setData("text/homedisplay-kind", item.dataset.kind);
+    event.dataTransfer.setData("text/homedisplay-control", item.dataset.control || "");
     event.dataTransfer.effectAllowed = "copy";
   });
   item.addEventListener("dblclick", () => {
     if (!state.layout) return;
     const cell = freeCell(1, 1);
-    if (cell) addTile(item.dataset.kind, cell.col, cell.row, null);
+    if (cell) addTile(item.dataset.kind, cell.col, cell.row, null, item.dataset.control || "");
     else setStatus("Auf dieser Seite ist keine Zelle frei.");
   });
 }
@@ -879,13 +1016,17 @@ function validateLayout(layout) {
     for (const tile of page.tiles) {
       if (seen.has(tile.tileId)) throw new Error("Doppelte Kachelkennung.");
       seen.add(tile.tileId);
+      if (tile.kind === "value" && DIM_CONTROLS.includes(tile.control) && !tile.actionId) throw new Error(`„${tile.title || tile.tileId}“ braucht eine schaltbare Dimmvariable.`);
       if (tile.kind === "value" && tile.actionId) {
         const variable = variableById(tile.variableId);
         if (!variable || !variable.action) throw new Error(`„${tile.title || tile.tileId}“ ist schaltbar, hat aber keine schaltbare Variable.`);
       }
-      if (tile.kind === "nav" && !layout.pages.some((item) => item.id === tile.targetPage)) throw new Error(`Der Tab-Wechsler „${tile.title || tile.tileId}“ zeigt auf eine fehlende Seite.`);
+      if (tile.kind === "nav" && !layout.pages.some((item) => item.id === tile.targetPage)) throw new Error(`Der Seitenwechsler „${tile.title || tile.tileId}“ zeigt auf eine fehlende Seite.`);
       if (tile.kind === "label" && !(tile.text || "").trim()) throw new Error("Eine Textkachel ist leer.");
       if (tile.kind === "image" && !tile.imageId) throw new Error("Eine Bildkachel hat kein Bild.");
+    }
+    if (page.backgroundId && !state.images.some((image) => image.id === page.backgroundId)) {
+      throw new Error(`Die Seite „${page.title || page.id}“ verweist auf ein gelöschtes Hintergrundbild.`);
     }
   }
 }
@@ -905,7 +1046,7 @@ async function store(publish) {
     const saved = state.catalog.layouts.find((item) => previousId ? item.id === previousId : item.name === previousName);
     if (saved) selectLayout(saved);
     renderLayoutSelect();
-    setStatus(publish ? "Ansicht veröffentlicht. Die Panels übernehmen sie beim nächsten Abruf." : "Entwurf gespeichert.");
+    setStatus(publish ? "Ansicht veröffentlicht. Die Anzeigen übernehmen sie beim nächsten Abruf." : "Entwurf gespeichert.");
   } catch (error) {
     setStatus(error.message);
   }
@@ -918,13 +1059,13 @@ $("tb-publish").addEventListener("click", () => store(true));
 $("new-layout").addEventListener("click", () => newLayout(prompt("Name der neuen Ansicht", "Neue Ansicht") || "Neue Ansicht"));
 $("template-layout").addEventListener("click", async () => {
   try {
-    const layout = await call("template", { name: prompt("Name der neuen Ansicht", "Dashboard") || "Dashboard" });
+    const layout = await call("template", { name: prompt("Name der neuen Ansicht", "Übersicht") || "Übersicht" });
     layout.id = "";
     layout.version = 0;
     layout.published = false;
     selectLayout(layout);
     markDirty();
-    setStatus("Dashboard-Vorlage geladen. Variablen zuordnen, dann speichern.");
+    setStatus("Übersicht geladen. Variablen zuordnen, dann speichern.");
   } catch (error) {
     setStatus(error.message);
   }
@@ -945,6 +1086,14 @@ $("edit-details").addEventListener("click", () => {
 });
 $("edit-delete").addEventListener("click", deleteSelected);
 $("edit-layout").addEventListener("click", openLayoutDialog);
+$("page-background").addEventListener("change", () => {
+  const page = currentPage();
+  if (!page) return;
+  if ($("page-background").value) page.backgroundId = $("page-background").value;
+  else delete page.backgroundId;
+  markDirty();
+  renderGrid();
+});
 $("layout-select").addEventListener("change", () => {
   const layout = state.catalog.layouts.find((item) => item.id === $("layout-select").value);
   if (!layout) return;
@@ -1163,6 +1312,68 @@ $("image-file").addEventListener("change", async () => {
   }
   $("image-file").value = "";
 });
+
+/* ---------- Einstellungen ---------- */
+
+function catalogName(list, id) {
+  const found = (list || []).find((item) => item.id === id);
+  return found ? found.name : (id || "–");
+}
+
+function renderSettings(settings) {
+  $("s-host").value = settings.serviceHost || "";
+  $("s-service-url").textContent = settings.serviceUrl || "kein Dienst – zuerst eine Anzeige-Instanz anlegen";
+  $("s-service-instance").textContent = settings.serviceInstance
+    ? `${settings.serviceInstanceName} (ID ${settings.serviceInstance})`
+    : "–";
+  $("s-admin-url").textContent = settings.adminUrl || "–";
+  const body = $("s-panels").querySelector("tbody");
+  body.innerHTML = "";
+  for (const panel of settings.panels || []) {
+    const row = document.createElement("tr");
+    if (panel.serves) row.classList.add("serves");
+    if (!panel.active) row.classList.add("inactive");
+    const cells = [
+      `${panel.name} (${panel.id})${panel.active ? "" : " – inaktiv"}`,
+      panel.paired ? (panel.pairing || "gekoppelt") : "nicht gekoppelt",
+      panel.status || "–",
+      catalogName(state.catalog.layouts, panel.layoutId),
+      catalogName(state.catalog.configs, panel.configId)
+    ];
+    for (const text of cells) {
+      const cell = document.createElement("td");
+      cell.textContent = text;
+      row.appendChild(cell);
+    }
+    body.appendChild(row);
+  }
+  if (!(settings.panels || []).length) {
+    body.innerHTML = '<tr><td colspan="5" class="hint">Noch keine Anzeige-Instanz angelegt.</td></tr>';
+  }
+}
+
+async function openSettings() {
+  const dialog = $("settings-dialog");
+  try {
+    renderSettings(await call("settings"));
+  } catch (error) {
+    setStatus(error.message);
+    return;
+  }
+  dialog.returnValue = "";
+  dialog.showModal();
+  dialog.onclose = async () => {
+    if (dialog.returnValue !== "ok") return;
+    try {
+      const result = await call("saveSettings", { serviceHost: $("s-host").value.trim() });
+      setStatus(result.serviceUrl ? `Einstellungen gespeichert. Dienst: ${result.serviceUrl}` : "Einstellungen gespeichert.");
+    } catch (error) {
+      setStatus(error.message);
+    }
+  };
+}
+
+$("open-settings").addEventListener("click", openSettings);
 
 /* ---------- Start ---------- */
 
