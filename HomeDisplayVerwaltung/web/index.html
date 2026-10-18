@@ -7,49 +7,217 @@
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
-  <header>
-    <h1>HomeDisplay Verwaltung</h1>
-    <span id="status">Lade …</span>
-  </header>
-  <main>
-    <section>
-      <h2>Ansichten</h2>
-      <ul id="layouts"></ul>
-      <button id="new-layout" type="button">Neue Ansicht</button>
-      <label>Name <input id="layout-name"></label>
-      <label>Spalten <input id="columns" type="number" min="1" max="4" value="2"></label>
-      <div class="row">
-        <button id="save" type="button">Entwurf speichern</button>
-        <button id="publish" type="button">Veröffentlichen</button>
+  <div id="menubar">
+    <div class="menu">
+      <button type="button" data-menu="file">Datei</button>
+      <div class="dropdown" id="menu-file">
+        <button type="button" id="new-layout">Neue Ansicht</button>
+        <button type="button" id="duplicate-layout">Ansicht duplizieren</button>
+        <hr>
+        <button type="button" id="save">Entwurf speichern</button>
+        <button type="button" id="publish">Veröffentlichen</button>
+        <hr>
+        <button type="button" id="export">Ansicht als JSON exportieren</button>
+        <button type="button" id="import">Ansicht aus JSON importieren</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button type="button" data-menu="edit">Bearbeiten</button>
+      <div class="dropdown" id="menu-edit">
+        <button type="button" id="edit-details">Details der Kachel …</button>
+        <button type="button" id="edit-delete">Kachel entfernen</button>
+        <hr>
+        <button type="button" id="edit-layout">Eigenschaften der Ansicht …</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button type="button" data-menu="pages">Seiten</button>
+      <div class="dropdown" id="menu-pages"></div>
+    </div>
+    <div class="menu">
+      <button type="button" data-menu="config">Konfigurationen</button>
+      <div class="dropdown" id="menu-config"></div>
+    </div>
+    <div class="menu">
+      <button type="button" id="open-images">Bilder …</button>
+    </div>
+    <span id="title" class="title"></span>
+  </div>
+
+  <div id="toolbar">
+    <label>Ansicht
+      <select id="layout-select"></select>
+    </label>
+    <span class="sep"></span>
+    <button type="button" id="tb-save" title="Entwurf speichern">Speichern</button>
+    <button type="button" id="tb-publish" title="Veröffentlichen">Veröffentlichen</button>
+    <span class="sep"></span>
+    <label>Spalten <input id="columns" type="number" min="1" max="4" value="2"></label>
+    <label>Zeilen <input id="rows" type="number" min="1" max="6" value="4"></label>
+    <label><input id="show-tabs" type="checkbox" checked> Reiterleiste am Panel</label>
+  </div>
+
+  <div id="workspace">
+    <aside id="palette">
+      <h2>Elemente</h2>
+      <div class="palette-items">
+        <div class="palette-item" draggable="true" data-kind="value">Wert</div>
+        <div class="palette-item" draggable="true" data-kind="nav">Tab-Wechsler</div>
+        <div class="palette-item" draggable="true" data-kind="label">Text</div>
+        <div class="palette-item" draggable="true" data-kind="image">Bild</div>
+        <div class="palette-item" draggable="true" data-kind="separator">Trennlinie</div>
+      </div>
+      <h2>Variablen</h2>
+      <input id="variable-search" type="search" placeholder="Suchen nach Name, Pfad oder ID">
+      <label class="small"><input id="only-actions" type="checkbox"> Nur schaltbare</label>
+      <div id="variable-tree"></div>
+    </aside>
+
+    <section id="canvas">
+      <div id="page-tabs"></div>
+      <div id="grid-wrap">
+        <div id="grid"></div>
       </div>
     </section>
-    <section>
-      <h2>Raster</h2>
-      <div id="grid"></div>
-      <h2>Kachel</h2>
-      <label>Titel <input id="tile-title"></label>
-      <label>Symbol
-        <select id="tile-icon">
-          <option value="energy">Energie</option>
-          <option value="temperature">Temperatur</option>
-          <option value="light">Licht</option>
-          <option value="shutter">Rollladen</option>
-          <option value="pump">Pumpe</option>
-          <option value="valve">Ventil</option>
-          <option value="alarm">Alarm</option>
+
+    <aside id="properties">
+      <h2>Eigenschaften</h2>
+      <div id="prop-empty" class="hint">Kachel im Raster auswählen oder ein Element aus der Palette ins Raster ziehen. Doppelklick öffnet die Details.</div>
+      <form id="prop-form" class="hidden">
+        <label>Art <input id="p-kind" readonly></label>
+        <label>Titel <input id="p-title"></label>
+        <div class="row">
+          <label>Spalte <input id="p-col" type="number" min="1"></label>
+          <label>Zeile <input id="p-row" type="number" min="1"></label>
+        </div>
+        <div class="row">
+          <label>Breite <input id="p-colspan" type="number" min="1" max="4" value="1"></label>
+          <label>Höhe <input id="p-rowspan" type="number" min="1" max="6" value="1"></label>
+        </div>
+        <div data-for="value nav">
+          <label>Symbol
+            <select id="p-icon"></select>
+          </label>
+        </div>
+        <div data-for="value">
+          <label>Variable <input id="p-variable" readonly placeholder="Aus dem Variablenbaum wählen"></label>
+          <div class="row">
+            <label>Einheit <input id="p-unit"></label>
+            <label>Nachkommastellen <input id="p-decimals" type="number" min="0" max="3" value="0"></label>
+          </div>
+          <label><input id="p-action" type="checkbox"> Schaltbar</label>
+          <label><input id="p-confirm" type="checkbox"> Bestätigung am Panel</label>
+          <label>Aktionsart
+            <select id="p-actionkind">
+              <option value="switch">Schalten</option>
+              <option value="dim">Dimmen</option>
+              <option value="position">Position</option>
+            </select>
+          </label>
+        </div>
+        <div data-for="nav">
+          <label>Zielseite <select id="p-target"></select></label>
+        </div>
+        <div data-for="label">
+          <label>Text <textarea id="p-text" rows="3"></textarea></label>
+          <label>Größe
+            <select id="p-size">
+              <option value="small">Klein</option>
+              <option value="large">Groß</option>
+            </select>
+          </label>
+        </div>
+        <div data-for="image">
+          <label>Bild <select id="p-image"></select></label>
+          <img id="p-image-preview" alt="">
+        </div>
+        <div class="row">
+          <button type="button" id="p-details">Details …</button>
+          <button type="button" id="p-delete">Entfernen</button>
+        </div>
+      </form>
+    </aside>
+  </div>
+
+  <div id="statusbar"><span id="status">Lade …</span><span id="hint"></span></div>
+
+  <dialog id="details">
+    <form method="dialog">
+      <h3 id="d-title">Kachel</h3>
+      <div id="d-body"></div>
+      <div class="row right">
+        <button value="cancel">Abbrechen</button>
+        <button value="ok" id="d-ok">Übernehmen</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="layout-dialog">
+    <form method="dialog">
+      <h3>Ansicht</h3>
+      <label>Name <input id="l-name"></label>
+      <div class="row">
+        <label>Spalten <input id="l-columns" type="number" min="1" max="4"></label>
+        <label>Zeilen <input id="l-rows" type="number" min="1" max="6"></label>
+      </div>
+      <label><input id="l-tabs" type="checkbox"> Reiterleiste am Panel anzeigen</label>
+      <h4>Seiten</h4>
+      <div id="l-pages"></div>
+      <div class="row right">
+        <button value="cancel">Abbrechen</button>
+        <button value="ok">Übernehmen</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="config-dialog">
+    <form method="dialog">
+      <h3>Konfiguration</h3>
+      <label>Name <input id="c-name"></label>
+      <label>Ruheanzeige
+        <select id="c-idle">
+          <option value="0">Uhrseite</option>
+          <option value="1">Letzte Seite</option>
+          <option value="2">Display aus</option>
         </select>
       </label>
-      <label>Variable
-        <select id="tile-variable"></select>
-      </label>
-      <label>Einheit <input id="tile-unit"></label>
-      <label>Nachkommastellen <input id="tile-decimals" type="number" min="0" max="3" value="0"></label>
-      <label><input id="tile-action" type="checkbox"> Schaltbar</label>
-      <label><input id="tile-confirm" type="checkbox"> Bestätigung am Panel</label>
-      <button id="add-tile" type="button">Kachel hinzufügen</button>
-      <button id="delete-tile" type="button">Kachel entfernen</button>
-    </section>
-  </main>
+      <div class="row">
+        <label>Helligkeit Tag <input id="c-day" type="number" min="0" max="100"></label>
+        <label>Helligkeit Nacht <input id="c-night" type="number" min="0" max="100"></label>
+      </div>
+      <div class="row">
+        <label>Nacht ab Stunde <input id="c-night-from" type="number" min="0" max="23"></label>
+        <label>Nacht bis Stunde <input id="c-night-to" type="number" min="0" max="23"></label>
+      </div>
+      <div class="row">
+        <label>Wertabruf (s) <input id="c-state" type="number" min="2" max="60"></label>
+        <label>Uhrseite (s) <input id="c-idle-state" type="number" min="5" max="300"></label>
+      </div>
+      <div class="row">
+        <label>Wartung ab Stunde <input id="c-maint-from" type="number" min="0" max="23"></label>
+        <label>Wartung bis Stunde <input id="c-maint-to" type="number" min="0" max="23"></label>
+      </div>
+      <div class="row right">
+        <button value="cancel">Schließen</button>
+        <button value="save">Entwurf speichern</button>
+        <button value="publish">Veröffentlichen</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="images-dialog">
+    <form method="dialog">
+      <h3>Bilder</h3>
+      <p class="hint">PNG oder JPEG hochladen. Bilder werden auf höchstens 960 × 480 Pixel verkleinert und vom Panel in den Flash geladen.</p>
+      <input id="image-file" type="file" accept="image/png,image/jpeg">
+      <div id="image-list"></div>
+      <div class="row right">
+        <button value="close">Schließen</button>
+      </div>
+    </form>
+  </dialog>
+
+  <input id="import-file" type="file" accept="application/json" class="hidden">
   <script src="app.js"></script>
 </body>
 </html>

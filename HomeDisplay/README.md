@@ -10,11 +10,19 @@ Panel-Modul für IP-Symcon. Jede Instanz ist ein Gerät. Genau eine Instanz stel
 4. Adapter-Adresse auf die erreichbare IP des Servers setzen, wenn die automatische Erkennung nicht passt.
 5. In IP-Symcon SSL einschalten, damit die Panel-Adresse mit `https` beginnt.
 
-## Editor
+## Verwaltung
 
-Das Rasterprogramm liegt in `editor`. Auf dem PC `python server.py` starten und `http://127.0.0.1:8765` öffnen. Es liest Variablen über die IP-Symcon-API, setzt Kacheln in feste Rasterzellen und schreibt nur geprüfte Ansichten und Konfigurationen in den Katalog. Ein Entwurf bleibt unsichtbar, bis er veröffentlicht wird.
+Instanz `HomeDisplay Verwaltung` anlegen, ein Passwort setzen und übernehmen. Die Adresse steht in der Instanz, zum Beispiel `http://192.168.1.10:3777/hook/homedisplay-admin/`. Der Browser fragt nach Benutzer und Passwort; der Benutzername ist beliebig.
 
-Die Instanz `HomeDisplay Verwaltung` liefert dieselbe Art von Seite zusätzlich über den Webserver von IP-Symcon. Adresse und Passwort stehen in der Instanz.
+Die Oberfläche ist ein Designer mit Menüleiste, Palette, Raster und Eigenschaften:
+
+- Palette links: Wert, Tab-Wechsler, Text, Bild und Trennlinie per Drag-and-drop ins Raster ziehen. Doppelklick legt das Element in die nächste freie Zelle.
+- Variablenbaum: nach Kategoriepfad gruppiert, sortiert, mit Suche nach Name, Pfad oder ID und Filter „Nur schaltbare“. Variable auf eine Zelle ziehen oder auf eine Wertkachel fallen lassen.
+- Raster: Seitenreiter oben, Kacheln verschieben oder tauschen, Doppelklick öffnet die Details. Entf entfernt, Strg+S speichert den Entwurf.
+- Bilder: Menü „Bilder …“ lädt PNG oder JPEG hoch. IP-Symcon verkleinert auf höchstens 960 × 480 Pixel; das Panel holt die Datei einmal in den Flash.
+- Veröffentlichen schaltet die Ansicht für alle Panels frei, die sie in ihrer Instanz gewählt haben.
+
+Der Editor im Ordner `editor` zeigt dieselbe Oberfläche vom PC aus und meldet den Adapter per mDNS: `python server.py http://192.168.1.10:3777 benutzer passwort`, dann `http://127.0.0.1:8765` öffnen.
 
 ## Firmware
 

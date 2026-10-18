@@ -5,6 +5,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_spiffs.h"
 #include "esp_wifi.h"
 #include "nvs_flash.h"
 
@@ -32,6 +33,15 @@ void app_main(void)
     if (error == ESP_ERR_NVS_NO_FREE_PAGES || error == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ESP_ERROR_CHECK(nvs_flash_init());
+    }
+    esp_vfs_spiffs_conf_t storage = {
+        .base_path = "/storage",
+        .partition_label = "storage",
+        .max_files = 8,
+        .format_if_mount_failed = true,
+    };
+    if (esp_vfs_spiffs_register(&storage) != ESP_OK) {
+        ESP_LOGW(TAG, "Bildspeicher konnte nicht eingebunden werden");
     }
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_touch_handle_t touch = NULL;

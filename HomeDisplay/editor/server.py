@@ -1,45 +1,82 @@
 #!/usr/bin/env python3
-"""Lokaler HomeDisplay-Editor. Spricht nur die IP-Symcon-JSON-API und meldet den Adapter per mDNS."""
+"""HomeDisplay-Editor für den PC.
 
+Zeigt dieselbe Verwaltungsoberfläche wie die Instanz „HomeDisplay Verwaltung“ und spricht
+ausschließlich die JSON-API von IP-Symcon. Zusätzlich meldet er den Adapter per mDNS.
+
+Aufruf:  python server.py http://192.168.1.10:3777 benutzer passwort
+"""
+
+import base64
 import json
 import socket
 import struct
+import sys
 import threading
 import time
 import urllib.request
-import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+WEB = ROOT.parent.parent / "HomeDisplayVerwaltung" / "web"
 PORT = 8765
 MDNS_GROUP = "224.0.0.251"
 MDNS_PORT = 5353
+MODULE_ID = "{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}"
+CONNECTION = {"base": "", "user": "", "password": ""}
 
 
-ALLOWED = {
-    "IPS_GetInstanceListByModuleID",
-    "HDISP_GetService",
-    "HDISP_ListCatalog",
-    "HDISP_ListVariables",
-    "HDISP_SaveLayout",
-    "HDISP_PublishLayout",
-    "HDISP_SaveConfig",
-    "HDISP_PublishConfig",
-}
-
-
-def ips_call(base, user, password, method, params):
+def ips_call(method, params):
     payload = json.dumps({"jsonrpc": "2.0", "method": method, "params": params, "id": 1}).encode("utf-8")
-    request = urllib.request.Request(base.rstrip("/") + "/api/", data=payload, method="POST")
+    request = urllib.request.Request(CONNECTION["base"].rstrip("/") + "/api/", data=payload, method="POST")
     request.add_header("Content-Type", "application/json")
-    token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+    token = base64.b64encode(f"{CONNECTION['user']}:{CONNECTION['password']}".encode("utf-8")).decode("ascii")
     request.add_header("Authorization", f"Basic {token}")
-    with urllib.request.urlopen(request, timeout=15) as response:
+    with urllib.request.urlopen(request, timeout=30) as response:
         body = json.loads(response.read().decode("utf-8"))
     if "error" in body:
         raise RuntimeError(str(body["error"]))
-    return body.get("result")
+    result = body.get("result")
+    if isinstance(result, str):
+        try:
+            return json.loads(result)
+        except ValueError:
+            return result
+    return result
+
+
+def panel_id():
+    ids = ips_call("IPS_GetInstanceListByModuleID", [MODULE_ID])
+    if not ids:
+        raise RuntimeError("Keine HomeDisplay-Instanz gefunden.")
+    return ids[0]
+
+
+def api(incoming):
+    method = incoming.get("method")
+    panel = panel_id()
+    if method == "catalog":
+        result = ips_call("HDISP_ListCatalog", [panel])
+        service = result.get("service") if isinstance(result, dict) else None
+        if service and service.get("baseUrl"):
+            ADVERTISER.update(service["baseUrl"])
+        return result
+    if method == "variables":
+        return ips_call("HDISP_ListVariables", [panel])
+    if method == "images":
+        return ips_call("HDISP_ListImages", [panel])
+    if method == "uploadImage":
+        return ips_call("HDISP_SaveImage", [panel, str(incoming.get("name", "")), str(incoming.get("data", ""))])
+    if method == "deleteImage":
+        return ips_call("HDISP_DeleteImage", [panel, str(incoming.get("id", ""))])
+    if method in {"save", "publish"}:
+        layout = json.dumps(incoming.get("layout", {}), ensure_ascii=False)
+        return ips_call("HDISP_PublishLayout" if method == "publish" else "HDISP_SaveLayout", [panel, layout])
+    if method in {"saveConfig", "publishConfig"}:
+        config = json.dumps(incoming.get("config", {}), ensure_ascii=False)
+        return ips_call("HDISP_PublishConfig" if method == "publishConfig" else "HDISP_SaveConfig", [panel, config])
+    raise RuntimeError("Unbekannte Aktion.")
 
 
 def encode_name(name):
@@ -92,6 +129,7 @@ class Advertiser(threading.Thread):
         try:
             sock.bind(("", MDNS_PORT))
         except OSError:
+            print("mDNS: Port 5353 ist belegt. Die Panels brauchen dann die Adapter-URL aus menuconfig.")
             return
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(MDNS_GROUP) + socket.inet_aton("0.0.0.0"))
         sock.settimeout(1)
@@ -133,12 +171,11 @@ class Advertiser(threading.Thread):
         ptr = encode_name("_homedisplay._tcp.local")
         instance = encode_name("panel._homedisplay._tcp.local")
         host_name = encode_name("homedisplay.local")
-        ptr_data = instance
         port = 3777
         hostport = url.split("://", 1)[-1].split("/", 1)[0]
         if ":" in hostport:
             port = int(hostport.rsplit(":", 1)[1])
-        records = ptr + struct.pack("!HHIH", 12, 0x8001, 120, len(ptr_data)) + ptr_data
+        records = ptr + struct.pack("!HHIH", 12, 0x8001, 120, len(instance)) + instance
         srv_data = struct.pack("!HHH", 0, 0, port) + host_name
         records += instance + struct.pack("!HHIH", 33, 0x8001, 120, len(srv_data)) + srv_data
         records += host_name + struct.pack("!HHIH", 1, 0x8001, 120, 4) + ip
@@ -153,48 +190,63 @@ ADVERTISER = Advertiser()
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        name = "index.html" if self.path in {"/", "/index.html"} else self.path.lstrip("/")
-        path = (ROOT / name).resolve()
-        if not str(path).startswith(str(ROOT)) or not path.is_file():
+        path = self.path.split("?", 1)[0]
+        if path.startswith("/images/"):
+            self.serve_image(path[len("/images/"):])
+            return
+        name = "index.html" if path in {"/", "/index.html"} else path.lstrip("/")
+        target = (WEB / name).resolve()
+        if not str(target).startswith(str(WEB.resolve())) or not target.is_file():
             self.send_error(404)
             return
-        kind = "text/html" if path.suffix == ".html" else "text/css" if path.suffix == ".css" else "text/javascript"
-        data = path.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", f"{kind}; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        kind = "text/html" if target.suffix == ".html" else "text/css" if target.suffix == ".css" else "text/javascript"
+        data = target.read_bytes()
+        if target.suffix == ".html":
+            data = data.replace(b'<base href="/hook/homedisplay-admin/">', b'<base href="/">')
+        self.respond(200, f"{kind}; charset=utf-8", data)
+
+    def serve_image(self, name):
+        image_id = name.split(".", 1)[0]
+        try:
+            result = ips_call("HDISP_GetImage", [panel_id(), image_id])
+        except Exception:
+            result = None
+        if not isinstance(result, dict) or not result.get("ok"):
+            self.send_error(404)
+            return
+        self.respond(200, result.get("mime", "image/png"), base64.b64decode(result.get("data", "")))
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         incoming = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
         try:
-            if self.path == "/api/call":
-                if incoming.get("method") not in ALLOWED:
-                    raise RuntimeError("Dieser Aufruf ist im Editor nicht zugelassen.")
-                result = ips_call(incoming["base"], incoming["user"], incoming["password"], incoming["method"], incoming.get("params", []))
-                if incoming["method"] == "HDISP_GetService" and isinstance(result, str):
-                    info = json.loads(result)
-                    if info.get("baseUrl"):
-                        ADVERTISER.update(info["baseUrl"])
-                body = json.dumps({"ok": True, "result": result}).encode("utf-8")
-            else:
+            if self.path.split("?", 1)[0] != "/api":
                 self.send_error(404)
                 return
+            body = json.dumps({"ok": True, "result": api(incoming)}).encode("utf-8")
         except Exception as error:
             body = json.dumps({"ok": False, "error": str(error)}).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        self.respond(200, "application/json", body)
+
+    def respond(self, code, kind, data):
+        self.send_response(code)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(data)
 
     def log_message(self, fmt, *args):
         return
 
 
 if __name__ == "__main__":
+    if len(sys.argv) < 4:
+        print("Aufruf: python server.py http://IP-SYMCON:3777 BENUTZER PASSWORT")
+        sys.exit(1)
+    CONNECTION.update(base=sys.argv[1], user=sys.argv[2], password=sys.argv[3])
+    if not WEB.is_dir():
+        print(f"Oberfläche fehlt: {WEB}")
+        sys.exit(1)
     ADVERTISER.start()
     print(f"HomeDisplay-Editor: http://127.0.0.1:{PORT}")
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

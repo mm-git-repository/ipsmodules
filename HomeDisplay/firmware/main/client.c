@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static const char *TAG = "client";
 
@@ -211,6 +212,95 @@ static void copy_string(cJSON *item, char *target, size_t length)
     snprintf(target, length, "%s", value ? value : "");
 }
 
+static esp_err_t download_to_file(const char *path, const char *target)
+{
+    char url[260];
+    snprintf(url, sizeof(url), "%s%s", base_url, path);
+    esp_http_client_config_t config = {
+        .url = url,
+        .timeout_ms = 15000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+#if CONFIG_HOMEDISPLAY_TLS_INSECURE
+    config.skip_cert_common_name_check = true;
+    config.crt_bundle_attach = NULL;
+#endif
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    char header[64];
+    snprintf(header, sizeof(header), "Bearer %s", token);
+    esp_http_client_set_header(client, "Authorization", header);
+    esp_err_t error = esp_http_client_open(client, 0);
+    if (error != ESP_OK) {
+        esp_http_client_cleanup(client);
+        return error;
+    }
+    esp_http_client_fetch_headers(client);
+    if (esp_http_client_get_status_code(client) != 200) {
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return ESP_FAIL;
+    }
+    char temp[96];
+    snprintf(temp, sizeof(temp), "%s.part", target);
+    FILE *file = fopen(temp, "wb");
+    if (!file) {
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return ESP_FAIL;
+    }
+    char buffer[1024];
+    while (true) {
+        int read = esp_http_client_read(client, buffer, sizeof(buffer));
+        if (read < 0) {
+            error = ESP_FAIL;
+            break;
+        }
+        if (read == 0) break;
+        if (fwrite(buffer, 1, read, file) != (size_t) read) {
+            error = ESP_FAIL;
+            break;
+        }
+    }
+    fclose(file);
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    if (error == ESP_OK) {
+        remove(target);
+        if (rename(temp, target) != 0) error = ESP_FAIL;
+    } else {
+        remove(temp);
+    }
+    return error;
+}
+
+/* Lädt alle Bilder einer Ansicht in den Flash, bevor die Ansicht gezeichnet wird. */
+static void fetch_images(const char *layout_json)
+{
+    cJSON *root = cJSON_Parse(layout_json);
+    if (!root) return;
+    cJSON *page = NULL;
+    cJSON_ArrayForEach(page, cJSON_GetObjectItem(root, "pages")) {
+        cJSON *tile = NULL;
+        cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
+            const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
+            const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageFile"));
+            const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageId"));
+            if (!kind || strcmp(kind, "image") != 0 || !file || !file[0] || !id) continue;
+            char target[96];
+            snprintf(target, sizeof(target), "/storage/%s", file);
+            struct stat info;
+            if (stat(target, &info) == 0 && info.st_size > 0) continue;
+            char path[64];
+            snprintf(path, sizeof(path), "/v1/images/%s", id);
+            homedisplay_ui_status("Lade Bilder");
+            if (download_to_file(path, target) != ESP_OK) {
+                ESP_LOGW(TAG, "Bild %s konnte nicht geladen werden", id);
+            }
+        }
+    }
+    cJSON_Delete(root);
+}
+
 static void pull_manifest(char *response, size_t length)
 {
     if (request("/v1/manifest", "GET", NULL, response, length) != ESP_OK) return;
@@ -246,6 +336,7 @@ static void pull_manifest(char *response, size_t length)
         }
     }
     if (!layout_held && next_layout[0] && strcmp(next_layout, layout_sha) != 0 && request("/v1/layout", "GET", NULL, response, length) == ESP_OK) {
+        fetch_images(response);
         snprintf(layout_sha, sizeof(layout_sha), "%s", next_layout);
         homedisplay_ui_apply_layout(response);
     }

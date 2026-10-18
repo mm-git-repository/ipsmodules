@@ -83,6 +83,10 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
                 $this->sendFile('app.js', 'text/javascript; charset=utf-8');
                 return;
             }
+            if ($method === 'GET' && str_starts_with($route, '/images/')) {
+                $this->sendImage(substr($route, strlen('/images/')));
+                return;
+            }
             if ($method === 'POST' && $route === '/api') {
                 $this->json($this->api($this->body()));
                 return;
@@ -113,6 +117,29 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
         }
         if ($method === 'variables') {
             return ['ok' => true, 'result' => $this->decodeCall(HDISP_ListVariables($panel))];
+        }
+        if ($method === 'images') {
+            return ['ok' => true, 'result' => $this->decodeCall(HDISP_ListImages($panel))];
+        }
+        if ($method === 'uploadImage') {
+            $name = (string) ($body['name'] ?? '');
+            $data = (string) ($body['data'] ?? '');
+            return ['ok' => true, 'result' => $this->decodeCall(HDISP_SaveImage($panel, $name, $data))];
+        }
+        if ($method === 'deleteImage') {
+            return ['ok' => true, 'result' => $this->decodeCall(HDISP_DeleteImage($panel, (string) ($body['id'] ?? '')))];
+        }
+        if ($method === 'saveConfig' || $method === 'publishConfig') {
+            $config = $body['config'] ?? null;
+            if (!is_array($config)) {
+                return ['ok' => false, 'error' => 'Konfiguration fehlt.'];
+            }
+            $json = json_encode($config, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if (!is_string($json)) {
+                return ['ok' => false, 'error' => 'Konfiguration konnte nicht gelesen werden.'];
+            }
+            $raw = $method === 'publishConfig' ? HDISP_PublishConfig($panel, $json) : HDISP_SaveConfig($panel, $json);
+            return ['ok' => true, 'result' => $this->decodeCall($raw)];
         }
         if ($method === 'save' || $method === 'publish') {
             $layout = $body['layout'] ?? null;
@@ -177,6 +204,29 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             }
         }
         return ($https ? 'https://' : 'http://') . $host . ':' . $port . self::HOOK . '/';
+    }
+
+    private function sendImage(string $id): void
+    {
+        $id = preg_replace('/\.[a-z]+$/', '', $id) ?? $id;
+        if (!preg_match('/^[a-f0-9]{16}$/', $id) || !function_exists('HDISP_GetImage')) {
+            http_response_code(404);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo 'Bild fehlt.';
+            return;
+        }
+        $panel = $this->panelId();
+        $result = $panel > 0 ? $this->decodeCall(HDISP_GetImage($panel, $id)) : [];
+        if (empty($result['ok'])) {
+            http_response_code(404);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo 'Bild fehlt.';
+            return;
+        }
+        $binary = base64_decode((string) ($result['data'] ?? ''), true);
+        header('Content-Type: ' . (string) ($result['mime'] ?? 'image/png'));
+        header('Cache-Control: max-age=3600');
+        echo is_string($binary) ? $binary : '';
     }
 
     private function sendFile(string $name, string $type): void

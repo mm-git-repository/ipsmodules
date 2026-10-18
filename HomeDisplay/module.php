@@ -9,7 +9,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 3;
+    private const MODULE_BUILD = 4;
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
     private const FIRMWARE_VERSION = '0.1.0';
@@ -152,6 +152,7 @@ class HomeDisplay extends IPSModuleStrict
     public function ListVariables(): string
     {
         $rows = [];
+        $names = [];
         foreach (IPS_GetObjectList() as $id) {
             $object = @IPS_GetObject((int) $id);
             if (!is_array($object) || (int) ($object['ObjectType'] ?? -1) !== 2) {
@@ -161,20 +162,74 @@ class HomeDisplay extends IPSModuleStrict
             if (!is_array($variable)) {
                 continue;
             }
+            $profile = (string) ($variable['VariableCustomProfile'] ?? '');
+            if ($profile === '') {
+                $profile = (string) ($variable['VariableProfile'] ?? '');
+            }
             $rows[] = [
                 'id' => (int) $id,
                 'name' => (string) ($object['ObjectName'] ?? ''),
+                'path' => $this->objectPath((int) ($object['ParentID'] ?? 0), $names),
                 'category' => $this->categoryName((int) ($object['ParentID'] ?? 0)),
-                'profile' => (string) ($variable['VariableProfile'] ?? $variable['VariableCustomProfile'] ?? ''),
+                'profile' => $profile,
                 'type' => (int) ($variable['VariableType'] ?? -1),
                 'action' => (int) ($variable['VariableAction'] ?? 0) > 0 || (int) ($variable['VariableCustomAction'] ?? 0) > 0,
                 'actionKind' => $this->actionKind($variable),
             ];
-            if (count($rows) >= 2000) {
+            if (count($rows) >= 5000) {
                 break;
             }
         }
+        usort($rows, static function ($left, $right) {
+            $byPath = strcasecmp($left['path'], $right['path']);
+            return $byPath !== 0 ? $byPath : strcasecmp($left['name'], $right['name']);
+        });
         return $this->encode(['variables' => $rows]);
+    }
+
+    public function ListImages(): string
+    {
+        return $this->encode(['images' => HomeDisplayCatalogStore::listImages()]);
+    }
+
+    public function SaveImage(string $Name, string $Base64): string
+    {
+        try {
+            $data = $Base64;
+            if (str_contains($data, ',')) {
+                $data = substr($data, strpos($data, ',') + 1);
+            }
+            $binary = base64_decode($data, true);
+            if (!is_string($binary)) {
+                throw new InvalidArgumentException('Bilddaten konnten nicht gelesen werden.');
+            }
+            return $this->encode(['ok' => true, 'image' => HomeDisplayCatalogStore::saveImage($Name, $binary)]);
+        } catch (Throwable $e) {
+            return $this->encode(['ok' => false, 'error' => $e->getMessage()]);
+        }
+    }
+
+    public function DeleteImage(string $Id): string
+    {
+        try {
+            HomeDisplayCatalogStore::deleteImage($Id);
+            return '{"ok":true}';
+        } catch (Throwable $e) {
+            return $this->encode(['ok' => false, 'error' => $e->getMessage()]);
+        }
+    }
+
+    public function GetImage(string $Id): string
+    {
+        if (!HomeDisplayCatalogStore::imageExists($Id)) {
+            return $this->encode(['ok' => false, 'error' => 'Bild nicht gefunden.']);
+        }
+        $path = HomeDisplayCatalogStore::imagePath($Id);
+        return $this->encode([
+            'ok' => true,
+            'mime' => str_ends_with($path, '.jpg') ? 'image/jpeg' : 'image/png',
+            'data' => base64_encode((string) file_get_contents($path)),
+        ]);
     }
 
     public function SaveLayout(string $Json): string
@@ -291,6 +346,10 @@ class HomeDisplay extends IPSModuleStrict
             }
             if ($method === 'GET' && $route === '/v1/firmware') {
                 $this->sendFirmware();
+                return;
+            }
+            if ($method === 'GET' && str_starts_with($route, '/v1/images/')) {
+                $this->sendImage(substr($route, strlen('/v1/images/')));
                 return;
             }
             if ($method === 'POST' && $route === '/v1/actions') {
@@ -669,7 +728,7 @@ class HomeDisplay extends IPSModuleStrict
                 continue;
             }
             foreach ($page['tiles'] ?? [] as $tile) {
-                if (!is_array($tile)) {
+                if (!is_array($tile) || (string) ($tile['kind'] ?? 'value') !== 'value') {
                     continue;
                 }
                 $tileId = (string) $tile['tileId'];
@@ -733,7 +792,7 @@ class HomeDisplay extends IPSModuleStrict
             return ['ok' => true, 'duplicate' => true];
         }
         $tile = $this->findTile($device['id'], $tileId);
-        if ($tile === null || (string) ($tile['actionId'] ?? '') !== $actionId) {
+        if ($tile === null || (string) ($tile['kind'] ?? 'value') !== 'value' || (string) ($tile['actionId'] ?? '') !== $actionId) {
             throw new InvalidArgumentException('Aktion nicht freigegeben.');
         }
         $variableId = (int) ($tile['variableId'] ?? 0);
@@ -860,6 +919,20 @@ class HomeDisplay extends IPSModuleStrict
         ];
     }
 
+    private function sendImage(string $id): void
+    {
+        $id = preg_replace('/\.[a-z]+$/', '', $id) ?? $id;
+        if (!HomeDisplayCatalogStore::imageExists($id)) {
+            http_response_code(404);
+            $this->json(['error' => 'image']);
+            return;
+        }
+        $path = HomeDisplayCatalogStore::imagePath($id);
+        header('Content-Type: ' . (str_ends_with($path, '.jpg') ? 'image/jpeg' : 'image/png'));
+        header('Content-Length: ' . (string) filesize($path));
+        readfile($path);
+    }
+
     private function sendFirmware(): void
     {
         $firmware = $this->firmwareDescriptor();
@@ -956,6 +1029,27 @@ class HomeDisplay extends IPSModuleStrict
             return '';
         }
         return IPS_GetName($parentId);
+    }
+
+    /** @param array<int, string> $cache */
+    private function objectPath(int $parentId, array &$cache): string
+    {
+        if ($parentId <= 0) {
+            return '';
+        }
+        if (isset($cache[$parentId])) {
+            return $cache[$parentId];
+        }
+        $parts = [];
+        $current = $parentId;
+        $guard = 0;
+        while ($current > 0 && $guard < 32 && IPS_ObjectExists($current)) {
+            array_unshift($parts, IPS_GetName($current));
+            $current = (int) (IPS_GetObject($current)['ParentID'] ?? 0);
+            $guard++;
+        }
+        $cache[$parentId] = implode(' / ', $parts);
+        return $cache[$parentId];
     }
 
     /** @param array<string, mixed>|null $layout */

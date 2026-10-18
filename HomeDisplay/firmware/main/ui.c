@@ -15,6 +15,7 @@
 typedef struct {
     char tile_id[40];
     char action_id[40];
+    char target_page[24];
     char title[48];
     int value;
     bool has_action;
@@ -56,6 +57,9 @@ static const char *icon_symbol(const char *icon)
     if (strcmp(icon, "pump") == 0) return LV_SYMBOL_LOOP;
     if (strcmp(icon, "valve") == 0) return LV_SYMBOL_MINUS;
     if (strcmp(icon, "alarm") == 0) return LV_SYMBOL_WARNING;
+    if (strcmp(icon, "home") == 0) return LV_SYMBOL_HOME;
+    if (strcmp(icon, "clock") == 0) return LV_SYMBOL_BELL;
+    if (strcmp(icon, "info") == 0) return LV_SYMBOL_LIST;
     return LV_SYMBOL_MINUS;
 }
 
@@ -91,6 +95,31 @@ static void page_event(lv_event_t *event)
     show_page((int) (intptr_t) lv_event_get_user_data(event));
 }
 
+static int page_by_id(const char *id)
+{
+    cJSON *pages = layout_root ? cJSON_GetObjectItem(layout_root, "pages") : NULL;
+    int count = cJSON_GetArraySize(pages);
+    for (int index = 0; index < count; index++) {
+        const char *candidate = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(pages, index), "id"));
+        if (candidate && id && strcmp(candidate, id) == 0) return index;
+    }
+    return 0;
+}
+
+static void nav_event(lv_event_t *event)
+{
+    note_touch();
+    if (locked) return;
+    tile_view_t *tile = lv_event_get_user_data(event);
+    if (tile) show_page(page_by_id(tile->target_page));
+}
+
+static int json_int(cJSON *object, const char *key, int fallback)
+{
+    cJSON *item = cJSON_GetObjectItem(object, key);
+    return cJSON_IsNumber(item) ? item->valueint : fallback;
+}
+
 static void show_page(int index)
 {
     cJSON *pages = layout_root ? cJSON_GetObjectItem(layout_root, "pages") : NULL;
@@ -99,44 +128,108 @@ static void show_page(int index)
     if (index < 0 || index >= count) index = 0;
     page_index = index;
     cJSON *page = cJSON_GetArrayItem(pages, index);
+    bool show_tabs = !cJSON_IsFalse(cJSON_GetObjectItem(layout_root, "showTabs"));
     lv_obj_clean(page_bar);
     lv_obj_clean(grid);
     tile_count = 0;
-    for (int item = 0; item < count; item++) {
-        cJSON *candidate = cJSON_GetArrayItem(pages, item);
-        lv_obj_t *button = lv_btn_create(page_bar);
-        lv_obj_t *caption = lv_label_create(button);
-        const char *title = cJSON_GetStringValue(cJSON_GetObjectItem(candidate, "title"));
-        lv_label_set_text(caption, title ? title : "");
-        lv_obj_add_event_cb(button, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) item);
+    if (show_tabs) {
+        lv_obj_clear_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_size(grid, 980, 500);
+        for (int item = 0; item < count; item++) {
+            cJSON *candidate = cJSON_GetArrayItem(pages, item);
+            lv_obj_t *button = lv_btn_create(page_bar);
+            lv_obj_t *caption = lv_label_create(button);
+            const char *title = cJSON_GetStringValue(cJSON_GetObjectItem(candidate, "title"));
+            lv_label_set_text(caption, title ? title : "");
+            if (item == index) lv_obj_set_style_bg_color(button, lv_color_hex(0xFFB547), 0);
+            lv_obj_add_event_cb(button, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) item);
+        }
+    } else {
+        lv_obj_add_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_size(grid, 980, 556);
     }
-    columns = cJSON_GetObjectItem(layout_root, "columns") ? cJSON_GetObjectItem(layout_root, "columns")->valueint : 2;
+    columns = json_int(layout_root, "columns", 2);
     if (columns < 1) columns = 1;
     if (columns > 4) columns = 4;
+    int rows = json_int(layout_root, "rows", 4);
+    if (rows < 1) rows = 1;
+    if (rows > 6) rows = 6;
+    int grid_h = show_tabs ? 500 : 556;
     int cell_w = 960 / columns;
+    int cell_h = (grid_h - 20) / rows;
     cJSON *tile = NULL;
     cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
         if (tile_count >= TILE_MAX) break;
         tile_view_t *view = &tiles[tile_count++];
         memset(view, 0, sizeof(*view));
+        const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
         const char *tile_id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
         const char *action_id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "actionId"));
         const char *title = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "title"));
         const char *icon = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "icon"));
+        if (!kind) kind = "value";
         snprintf(view->tile_id, sizeof(view->tile_id), "%s", tile_id ? tile_id : "");
         snprintf(view->title, sizeof(view->title), "%s", title ? title : "");
-        view->has_action = action_id && action_id[0];
-        if (view->has_action) snprintf(view->action_id, sizeof(view->action_id), "%s", action_id);
         view->confirm = cJSON_IsTrue(cJSON_GetObjectItem(tile, "confirm"));
-        int col = cJSON_GetObjectItem(tile, "col") ? cJSON_GetObjectItem(tile, "col")->valueint : 0;
-        int row = cJSON_GetObjectItem(tile, "row") ? cJSON_GetObjectItem(tile, "row")->valueint : 0;
-        int col_span = cJSON_GetObjectItem(tile, "colSpan") ? cJSON_GetObjectItem(tile, "colSpan")->valueint : 1;
-        int row_span = cJSON_GetObjectItem(tile, "rowSpan") ? cJSON_GetObjectItem(tile, "rowSpan")->valueint : 1;
+        int col = json_int(tile, "col", 0);
+        int row = json_int(tile, "row", 0);
+        int col_span = json_int(tile, "colSpan", 1);
+        int row_span = json_int(tile, "rowSpan", 1);
         if (col_span < 1) col_span = 1;
         if (row_span < 1) row_span = 1;
         view->card = lv_obj_create(grid);
-        lv_obj_set_pos(view->card, col * cell_w, row * 110);
-        lv_obj_set_size(view->card, cell_w * col_span - 8, 110 * row_span - 8);
+        lv_obj_set_pos(view->card, col * cell_w, row * cell_h);
+        lv_obj_set_size(view->card, cell_w * col_span - 8, cell_h * row_span - 8);
+        lv_obj_set_style_bg_color(view->card, lv_color_hex(0x1D3350), 0);
+        lv_obj_set_style_border_width(view->card, 0, 0);
+        lv_obj_set_style_text_color(view->card, lv_color_hex(0xF4F7FB), 0);
+        if (strcmp(kind, "nav") == 0) {
+            const char *target = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "targetPage"));
+            snprintf(view->target_page, sizeof(view->target_page), "%s", target ? target : "");
+            lv_obj_set_style_bg_color(view->card, lv_color_hex(0x2A4F7C), 0);
+            lv_obj_t *name = lv_label_create(view->card);
+            char caption[80];
+            snprintf(caption, sizeof(caption), "%s %s", icon && icon[0] ? icon_symbol(icon) : LV_SYMBOL_RIGHT, view->title);
+            lv_label_set_text(name, caption);
+            lv_obj_set_style_text_font(name, &lv_font_montserrat_28, 0);
+            lv_obj_center(name);
+            lv_obj_add_event_cb(view->card, nav_event, LV_EVENT_CLICKED, view);
+            continue;
+        }
+        if (strcmp(kind, "label") == 0) {
+            const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "text"));
+            const char *size = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "size"));
+            lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
+            lv_obj_t *label = lv_label_create(view->card);
+            lv_label_set_text(label, text ? text : "");
+            lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+            lv_obj_set_width(label, cell_w * col_span - 32);
+            if (size && strcmp(size, "large") == 0) lv_obj_set_style_text_font(label, &lv_font_montserrat_28, 0);
+            lv_obj_align(label, LV_ALIGN_LEFT_MID, 0, 0);
+            continue;
+        }
+        if (strcmp(kind, "separator") == 0) {
+            lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
+            lv_obj_t *line = lv_obj_create(view->card);
+            lv_obj_set_size(line, cell_w * col_span - 40, 2);
+            lv_obj_set_style_bg_color(line, lv_color_hex(0x5A7391), 0);
+            lv_obj_set_style_border_width(line, 0, 0);
+            lv_obj_center(line);
+            continue;
+        }
+        if (strcmp(kind, "image") == 0) {
+            const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageFile"));
+            lv_obj_set_style_bg_color(view->card, lv_color_hex(0x0B1626), 0);
+            lv_obj_set_style_pad_all(view->card, 0, 0);
+            lv_obj_t *image = lv_img_create(view->card);
+            char path[80];
+            snprintf(path, sizeof(path), "S:/%s", file ? file : "");
+            lv_img_set_src(image, path);
+            lv_obj_center(image);
+            continue;
+        }
+        view->has_action = action_id && action_id[0];
+        if (view->has_action) snprintf(view->action_id, sizeof(view->action_id), "%s", action_id);
         lv_obj_t *symbol = lv_label_create(view->card);
         lv_label_set_text(symbol, icon_symbol(icon));
         lv_obj_align(symbol, LV_ALIGN_LEFT_MID, 8, 0);
@@ -145,6 +238,7 @@ static void show_page(int index)
         lv_obj_align(name, LV_ALIGN_TOP_LEFT, 36, 8);
         view->label = lv_label_create(view->card);
         lv_label_set_text(view->label, "—");
+        lv_obj_set_style_text_font(view->label, &lv_font_montserrat_28, 0);
         lv_obj_align(view->label, LV_ALIGN_BOTTOM_LEFT, 36, -8);
         if (view->has_action) lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
     }
