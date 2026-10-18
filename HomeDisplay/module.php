@@ -10,7 +10,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 8;
+    private const MODULE_BUILD = 10;
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
@@ -87,9 +87,6 @@ class HomeDisplay extends IPSModuleStrict
             if (($element['name'] ?? '') === 'LayoutId') {
                 $element['options'] = $this->optionsFrom($catalog['layouts']);
             }
-            if (($element['name'] ?? '') === 'ConfigId') {
-                $element['options'] = $this->optionsFrom($catalog['configs']);
-            }
         }
         unset($element);
         $encoded = json_encode($form, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -127,6 +124,37 @@ class HomeDisplay extends IPSModuleStrict
         IPS_ApplyChanges($this->InstanceID);
         $this->SetValue('PanelStatus', 'Nicht gekoppelt');
         return 'Kopplung gelöst.';
+    }
+
+    /** Manifest, Konfiguration, Ansicht und Werte dieser Anzeige, wie sie die Anzeige abruft. */
+    public function Inspect(): string
+    {
+        $device = ['id' => $this->InstanceID, 'token' => ''];
+        return $this->encode([
+            'ok' => true,
+            'manifest' => $this->manifest($device),
+            'config' => $this->deviceConfig($device),
+            'layout' => $this->deviceLayout($device),
+            'state' => $this->deviceState($device),
+        ]);
+    }
+
+    /** Führt eine freigegebene Kachelaktion dieser Anzeige aus. Leerer Wert schaltet um. */
+    public function SimulateAction(string $TileId, string $ActionId, string $Value): string
+    {
+        try {
+            $body = [
+                'tileId' => $TileId,
+                'actionId' => $ActionId,
+                'requestId' => bin2hex(random_bytes(8)),
+            ];
+            if ($Value !== '' && is_numeric($Value)) {
+                $body['value'] = str_contains($Value, '.') ? (float) $Value : (int) $Value;
+            }
+            return $this->encode($this->performAction(['id' => $this->InstanceID, 'token' => ''], $body));
+        } catch (Throwable $e) {
+            return $this->encode(['ok' => false, 'error' => $e->getMessage()]);
+        }
     }
 
     public function GetService(): string
@@ -389,7 +417,6 @@ class HomeDisplay extends IPSModuleStrict
     private function updateFormOptions(array $catalog): void
     {
         $this->UpdateFormField('LayoutId', 'options', json_encode($this->optionsFrom($catalog['layouts'])));
-        $this->UpdateFormField('ConfigId', 'options', json_encode($this->optionsFrom($catalog['configs'])));
     }
 
     /** @param array<int, mixed> $items @return list<array{caption: string, value: string}> */
@@ -604,7 +631,7 @@ class HomeDisplay extends IPSModuleStrict
     /** @param array{id: int, token: string} $device @return array<string, mixed> */
     private function manifest(array $device): array
     {
-        $config = $this->assigned($device['id'], 'configs', 'ConfigId');
+        $configDocument = $this->configDocument($device['id']);
         $layout = $this->assigned($device['id'], 'layouts', 'LayoutId');
         $layoutDocument = $this->deviceLayout($device);
         $firmware = $this->firmwareDescriptor();
@@ -622,8 +649,8 @@ class HomeDisplay extends IPSModuleStrict
                 'available' => $firmware['available'],
             ],
             'config' => [
-                'version' => is_array($config) ? (int) ($config['version'] ?? 0) : 0,
-                'sha256' => $this->hash($this->configDocument($device['id'], $config)),
+                'version' => (int) $configDocument['version'],
+                'sha256' => $this->hash($configDocument),
             ],
             'layout' => [
                 'version' => (int) ($layoutDocument['version'] ?? 0),
@@ -637,19 +664,17 @@ class HomeDisplay extends IPSModuleStrict
     /** @param array{id: int, token: string} $device @return array<string, mixed> */
     private function deviceConfig(array $device): array
     {
-        $config = $this->assigned($device['id'], 'configs', 'ConfigId');
-        return $this->configDocument($device['id'], $config);
+        return $this->configDocument($device['id']);
     }
 
-    /** @param array<string, mixed>|null $config @return array<string, mixed> */
-    private function configDocument(int $instanceId, ?array $config): array
+    /** Helligkeit, Ruheanzeige und Intervalle stammen nur aus der Anzeige-Instanz. @return array<string, mixed> */
+    private function configDocument(int $instanceId): array
     {
-        $idle = (int) IPS_GetProperty($instanceId, 'IdleMode');
-        $document = [
+        return [
             'contract' => self::CONTRACT,
-            'id' => (string) ($config['id'] ?? IPS_GetProperty($instanceId, 'ConfigId')),
-            'version' => (int) ($config['version'] ?? 1),
-            'idleMode' => $idle,
+            'id' => 'anzeige-' . $instanceId,
+            'version' => 1,
+            'idleMode' => (int) IPS_GetProperty($instanceId, 'IdleMode'),
             'nightDim' => (bool) IPS_GetProperty($instanceId, 'NightDim'),
             'dayBrightness' => (int) IPS_GetProperty($instanceId, 'DayBrightness'),
             'nightBrightness' => (int) IPS_GetProperty($instanceId, 'NightBrightness'),
@@ -660,14 +685,6 @@ class HomeDisplay extends IPSModuleStrict
             'maintenanceFrom' => (int) IPS_GetProperty($instanceId, 'MaintenanceFrom'),
             'maintenanceTo' => (int) IPS_GetProperty($instanceId, 'MaintenanceTo'),
         ];
-        if (is_array($config)) {
-            foreach (['idleMode', 'nightDim', 'dayBrightness', 'nightBrightness', 'nightFrom', 'nightTo', 'stateIntervalSec', 'idleStateIntervalSec', 'maintenanceFrom', 'maintenanceTo'] as $key) {
-                if (array_key_exists($key, $config)) {
-                    $document[$key] = $config[$key];
-                }
-            }
-        }
-        return $document;
     }
 
     /** @param array{id: int, token: string} $device @return array<string, mixed> */

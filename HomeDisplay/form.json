@@ -25,12 +25,6 @@
             "options": []
         },
         {
-            "type": "Select",
-            "name": "ConfigId",
-            "caption": "Konfiguration",
-            "options": []
-        },
-        {
             "type": "Label",
             "caption": "Die Liste gilt, wenn keine veröffentlichte Ansicht mit Kacheln gewählt ist. Die Position sortiert die Zeilen. Eine freie Platzierung gibt es nicht."
         },
@@ -83,6 +77,10 @@
                     {"caption": "Kombischalter", "value": "combo"}
                 ]}}
             ]
+        },
+        {
+            "type": "Label",
+            "caption": "Helligkeit, Ruheanzeige und Abruf gelten nur für diese Anzeige."
         },
         {
             "type": "Select",
@@ -159,79 +157,79 @@
     "actions": [
         {
             "type": "Button",
-            "label": "Kopplungscode übernehmen",
-            "onClick": "HDISP_Pair($_IPS['TARGET']);"
+            "caption": "Kopplungscode übernehmen",
+            "onClick": "HDISP_Pair($id);"
         },
         {
             "type": "Button",
-            "label": "Kopplung lösen",
-            "onClick": "HDISP_Unpair($_IPS['TARGET']);"
+            "caption": "Kopplung lösen",
+            "onClick": "HDISP_Unpair($id);"
         },
         {
             "type": "RowLayout",
             "items": [
                 {
                     "type": "Button",
-                    "label": "Verbindung testen",
-                    "onClick": "echo HDISP_TestConnection($_IPS['TARGET']);"
+                    "caption": "Verbindung testen",
+                    "onClick": "echo HDISP_TestConnection($id);"
                 },
                 {
                     "type": "Button",
-                    "label": "Vorschau senden",
-                    "onClick": "echo HDISP_SendPreview($_IPS['TARGET']);"
+                    "caption": "Vorschau senden",
+                    "onClick": "echo HDISP_SendPreview($id);"
                 },
                 {
                     "type": "Button",
-                    "label": "Vollständig synchronisieren",
-                    "onClick": "echo HDISP_Resynchronize($_IPS['TARGET']);"
+                    "caption": "Vollständig synchronisieren",
+                    "onClick": "echo HDISP_Resynchronize($id);"
                 },
                 {
                     "type": "Button",
-                    "label": "Testbild an",
-                    "onClick": "echo HDISP_ShowTestPattern($_IPS['TARGET'], true);"
+                    "caption": "Testbild an",
+                    "onClick": "echo HDISP_ShowTestPattern($id, true);"
                 },
                 {
                     "type": "Button",
-                    "label": "Testbild aus",
-                    "onClick": "echo HDISP_ShowTestPattern($_IPS['TARGET'], false);"
+                    "caption": "Testbild aus",
+                    "onClick": "echo HDISP_ShowTestPattern($id, false);"
                 },
                 {
                     "type": "Button",
-                    "label": "Anzeige neu starten",
+                    "caption": "Anzeige neu starten",
                     "confirm": "Die Anzeige startet beim nächsten Abruf neu. Fortfahren?",
-                    "onClick": "echo HDISP_RestartPanel($_IPS['TARGET']);"
+                    "onClick": "echo HDISP_RestartPanel($id);"
                 }
             ]
         },
         {
             "type": "Button",
-            "label": "Vorlage Energie",
-            "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'energy');"
+            "caption": "Vorlage Energie",
+            "onClick": "HDISP_ApplyPreset($id, 'energy');"
         },
         {
             "type": "Button",
-            "label": "Vorlage Whirlpool",
-            "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'whirl');"
+            "caption": "Vorlage Whirlpool",
+            "onClick": "HDISP_ApplyPreset($id, 'whirl');"
         },
         {
             "type": "Button",
-            "label": "Vorlage Pool",
-            "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'pool');"
+            "caption": "Vorlage Pool",
+            "onClick": "HDISP_ApplyPreset($id, 'pool');"
         },
         {
             "type": "Button",
-            "label": "Vorlage Wasserwerte",
-            "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'tuya');"
+            "caption": "Vorlage Wasserwerte",
+            "onClick": "HDISP_ApplyPreset($id, 'tuya');"
         },
         {
             "type": "Button",
-            "label": "Vorlage Garten",
-            "onClick": "HDISP_ApplyPreset($_IPS['TARGET'], 'gardena');"
+            "caption": "Vorlage Garten",
+            "onClick": "HDISP_ApplyPreset($id, 'gardena');"
         },
         {
             "type": "Button",
-            "label": "Kachelliste veröffentlichen",
-            "onClick": "HDISP_PublishFallback($_IPS['TARGET']);"
+            "caption": "Kachelliste veröffentlichen",
+            "onClick": "HDISP_PublishFallback($id);"
         }
     ],
     "status": [

@@ -82,7 +82,16 @@ def settings():
             "active": bool(ips_call("IPS_GetProperty", [instance, "Active"])),
             "paired": str(ips_call("IPS_GetProperty", [instance, "DeviceToken"])) != "",
             "layoutId": str(ips_call("IPS_GetProperty", [instance, "LayoutId"])),
-            "configId": str(ips_call("IPS_GetProperty", [instance, "ConfigId"])),
+            "idleMode": int(ips_call("IPS_GetProperty", [instance, "IdleMode"])),
+            "nightDim": bool(ips_call("IPS_GetProperty", [instance, "NightDim"])),
+            "dayBrightness": int(ips_call("IPS_GetProperty", [instance, "DayBrightness"])),
+            "nightBrightness": int(ips_call("IPS_GetProperty", [instance, "NightBrightness"])),
+            "nightFrom": int(ips_call("IPS_GetProperty", [instance, "NightFrom"])),
+            "nightTo": int(ips_call("IPS_GetProperty", [instance, "NightTo"])),
+            "stateIntervalSec": int(ips_call("IPS_GetProperty", [instance, "StateIntervalSec"])),
+            "idleStateIntervalSec": int(ips_call("IPS_GetProperty", [instance, "IdleStateIntervalSec"])),
+            "maintenanceFrom": int(ips_call("IPS_GetProperty", [instance, "MaintenanceFrom"])),
+            "maintenanceTo": int(ips_call("IPS_GetProperty", [instance, "MaintenanceTo"])),
             "pairing": variable_text(instance, "PairingState"),
             "status": variable_text(instance, "PanelStatus"),
             "serves": instance == service_instance,
@@ -98,6 +107,12 @@ def settings():
     }
 
 
+def checked(result):
+    if isinstance(result, dict) and result.get("ok") is False:
+        raise RuntimeError(str(result.get("error") or "Aufruf fehlgeschlagen."))
+    return result
+
+
 def api(incoming):
     method = incoming.get("method")
     if method == "settings":
@@ -111,7 +126,27 @@ def api(incoming):
             raise RuntimeError("Die Dienstadresse darf nur Hostname oder IP enthalten, ohne http:// und ohne Port.")
         ips_call("IPS_SetProperty", [admin, "ServiceHost", host])
         ips_call("IPS_ApplyChanges", [admin])
+        panel = incoming.get("panel")
+        if isinstance(panel, dict):
+            checked(ips_call("HDADM_SavePanel", [admin, json.dumps(panel, ensure_ascii=False)]))
         return settings()
+    if method == "pairPanel":
+        admin = admin_id()
+        return checked(ips_call("HDADM_PairPanel", [admin, int(incoming.get("id", 0)), str(incoming.get("code", ""))]))
+    if method == "unpairPanel":
+        return checked(ips_call("HDADM_UnpairPanel", [admin_id(), int(incoming.get("id", 0))]))
+    if method == "testPanel":
+        return checked(ips_call("HDADM_TestPanel", [admin_id(), int(incoming.get("id", 0))]))
+    if method == "inspect":
+        return checked(ips_call("HDISP_Inspect", [int(incoming.get("id", 0))]))
+    if method == "simulateAction":
+        value = incoming.get("value", "")
+        return checked(ips_call("HDISP_SimulateAction", [
+            int(incoming.get("id", 0)),
+            str(incoming.get("tileId", "")),
+            str(incoming.get("actionId", "")),
+            "" if value is None else str(value),
+        ]))
     panel = panel_id()
     if method == "catalog":
         result = ips_call("HDISP_ListCatalog", [panel])

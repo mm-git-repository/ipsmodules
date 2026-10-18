@@ -1159,67 +1159,6 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-/* ---------- Konfigurationen ---------- */
-
-function renderConfigMenu() {
-  const menu = $("menu-config");
-  menu.innerHTML = "";
-  for (const config of state.catalog.configs || []) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.textContent = `${config.name} v${config.version || 0}${config.published ? "" : " (Entwurf)"}`;
-    item.addEventListener("click", () => openConfig(config));
-    menu.appendChild(item);
-  }
-  menu.appendChild(document.createElement("hr"));
-  const add = document.createElement("button");
-  add.type = "button";
-  add.textContent = "Neue Konfiguration …";
-  add.addEventListener("click", () => openConfig({ id: "", name: "Neue Konfiguration", version: 0, idleMode: 0, nightDim: true, dayBrightness: 70, nightBrightness: 15, nightFrom: 22, nightTo: 6, stateIntervalSec: 3, idleStateIntervalSec: 15, maintenanceFrom: 3, maintenanceTo: 5 }));
-  menu.appendChild(add);
-}
-
-function openConfig(config) {
-  const dialog = $("config-dialog");
-  const draft = JSON.parse(JSON.stringify(config));
-  draft.baseVersion = config.version || 0;
-  $("c-name").value = draft.name || "";
-  $("c-idle").value = String(draft.idleMode ?? 0);
-  $("c-day").value = draft.dayBrightness ?? 70;
-  $("c-night").value = draft.nightBrightness ?? 15;
-  $("c-night-from").value = draft.nightFrom ?? 22;
-  $("c-night-to").value = draft.nightTo ?? 6;
-  $("c-state").value = draft.stateIntervalSec ?? 3;
-  $("c-idle-state").value = draft.idleStateIntervalSec ?? 15;
-  $("c-maint-from").value = draft.maintenanceFrom ?? 3;
-  $("c-maint-to").value = draft.maintenanceTo ?? 5;
-  dialog.returnValue = "";
-  dialog.showModal();
-  dialog.onclose = async () => {
-    if (dialog.returnValue !== "save" && dialog.returnValue !== "publish") return;
-    draft.name = $("c-name").value.trim();
-    draft.idleMode = Number($("c-idle").value);
-    draft.nightDim = true;
-    draft.dayBrightness = Number($("c-day").value);
-    draft.nightBrightness = Number($("c-night").value);
-    draft.nightFrom = Number($("c-night-from").value);
-    draft.nightTo = Number($("c-night-to").value);
-    draft.stateIntervalSec = Number($("c-state").value);
-    draft.idleStateIntervalSec = Number($("c-idle-state").value);
-    draft.maintenanceFrom = Number($("c-maint-from").value);
-    draft.maintenanceTo = Number($("c-maint-to").value);
-    try {
-      const result = await call(dialog.returnValue === "publish" ? "publishConfig" : "saveConfig", { config: draft });
-      if (!result.ok) throw new Error(result.error || "Speichern fehlgeschlagen");
-      state.catalog = await call("catalog");
-      renderConfigMenu();
-      setStatus(dialog.returnValue === "publish" ? "Konfiguration veröffentlicht." : "Konfigurationsentwurf gespeichert.");
-    } catch (error) {
-      setStatus(error.message);
-    }
-  };
-}
-
 /* ---------- Bilder ---------- */
 
 async function loadImages() {
@@ -1315,41 +1254,93 @@ $("image-file").addEventListener("change", async () => {
 
 /* ---------- Einstellungen ---------- */
 
-function catalogName(list, id) {
-  const found = (list || []).find((item) => item.id === id);
-  return found ? found.name : (id || "–");
+let settingsCache = { panels: [] };
+
+function selectedSettingsPanel() {
+  return (settingsCache.panels || []).find((panel) => String(panel.id) === $("s-panel").value) || null;
+}
+
+function fillLayoutSelect(selected) {
+  const select = $("s-layout");
+  select.innerHTML = "";
+  const layouts = (state.catalog.layouts || []).filter((layout) => layout.published || layout.id === selected);
+  for (const layout of layouts) {
+    const option = document.createElement("option");
+    option.value = layout.id;
+    option.textContent = `${layout.name} v${layout.version || 0}${layout.published ? "" : " (Entwurf)"}`;
+    select.appendChild(option);
+  }
+  if (selected && !layouts.some((layout) => layout.id === selected)) {
+    const option = document.createElement("option");
+    option.value = selected;
+    option.textContent = selected;
+    select.appendChild(option);
+  }
+  if (selected) select.value = selected;
+}
+
+function fillPanelForm(panel) {
+  if (!panel) {
+    $("s-report").textContent = "Noch keine Anzeige-Instanz angelegt.";
+    return;
+  }
+  fillLayoutSelect(panel.layoutId || "");
+  $("s-code").value = "";
+  $("s-idle").value = String(panel.idleMode ?? 0);
+  $("s-night-dim").checked = panel.nightDim !== false;
+  $("s-day").value = panel.dayBrightness ?? 70;
+  $("s-night").value = panel.nightBrightness ?? 15;
+  $("s-night-from").value = panel.nightFrom ?? 22;
+  $("s-night-to").value = panel.nightTo ?? 6;
+  $("s-state").value = panel.stateIntervalSec ?? 3;
+  $("s-idle-state").value = panel.idleStateIntervalSec ?? 15;
+  $("s-maint-from").value = panel.maintenanceFrom ?? 3;
+  $("s-maint-to").value = panel.maintenanceTo ?? 5;
+  const parts = [
+    panel.active ? "" : "inaktiv",
+    panel.serves ? "stellt den Dienst" : "",
+    panel.paired ? (panel.pairing || "gekoppelt") : "nicht gekoppelt",
+    panel.status || ""
+  ].filter(Boolean);
+  $("s-report").textContent = parts.join(" · ");
 }
 
 function renderSettings(settings) {
+  settingsCache = settings;
   $("s-host").value = settings.serviceHost || "";
   $("s-service-url").textContent = settings.serviceUrl || "kein Dienst – zuerst eine Anzeige-Instanz anlegen";
   $("s-service-instance").textContent = settings.serviceInstance
     ? `${settings.serviceInstanceName} (ID ${settings.serviceInstance})`
     : "–";
   $("s-admin-url").textContent = settings.adminUrl || "–";
-  const body = $("s-panels").querySelector("tbody");
-  body.innerHTML = "";
+  const select = $("s-panel");
+  const previous = select.value;
+  select.innerHTML = "";
   for (const panel of settings.panels || []) {
-    const row = document.createElement("tr");
-    if (panel.serves) row.classList.add("serves");
-    if (!panel.active) row.classList.add("inactive");
-    const cells = [
-      `${panel.name} (${panel.id})${panel.active ? "" : " – inaktiv"}`,
-      panel.paired ? (panel.pairing || "gekoppelt") : "nicht gekoppelt",
-      panel.status || "–",
-      catalogName(state.catalog.layouts, panel.layoutId),
-      catalogName(state.catalog.configs, panel.configId)
-    ];
-    for (const text of cells) {
-      const cell = document.createElement("td");
-      cell.textContent = text;
-      row.appendChild(cell);
-    }
-    body.appendChild(row);
+    const option = document.createElement("option");
+    option.value = String(panel.id);
+    option.textContent = `${panel.name} (${panel.id})${panel.active ? "" : " – inaktiv"}`;
+    select.appendChild(option);
   }
-  if (!(settings.panels || []).length) {
-    body.innerHTML = '<tr><td colspan="5" class="hint">Noch keine Anzeige-Instanz angelegt.</td></tr>';
-  }
+  if (previous && (settings.panels || []).some((panel) => String(panel.id) === previous)) select.value = previous;
+  fillPanelForm(selectedSettingsPanel());
+}
+
+function panelPayload() {
+  return {
+    id: Number($("s-panel").value),
+    layoutId: $("s-layout").value,
+    idleMode: Number($("s-idle").value),
+    nightDim: $("s-night-dim").checked,
+    dayBrightness: Number($("s-day").value),
+    nightBrightness: Number($("s-night").value),
+    nightFrom: Number($("s-night-from").value),
+    nightTo: Number($("s-night-to").value),
+    stateIntervalSec: Number($("s-state").value),
+    idleStateIntervalSec: Number($("s-idle-state").value),
+    maintenanceFrom: Number($("s-maint-from").value),
+    maintenanceTo: Number($("s-maint-to").value)
+  };
 }
 
 async function openSettings() {
@@ -1365,7 +1356,9 @@ async function openSettings() {
   dialog.onclose = async () => {
     if (dialog.returnValue !== "ok") return;
     try {
-      const result = await call("saveSettings", { serviceHost: $("s-host").value.trim() });
+      const extra = { serviceHost: $("s-host").value.trim() };
+      if ($("s-panel").value) extra.panel = panelPayload();
+      const result = await call("saveSettings", extra);
       setStatus(result.serviceUrl ? `Einstellungen gespeichert. Dienst: ${result.serviceUrl}` : "Einstellungen gespeichert.");
     } catch (error) {
       setStatus(error.message);
@@ -1373,7 +1366,147 @@ async function openSettings() {
   };
 }
 
+$("s-panel").addEventListener("change", () => fillPanelForm(selectedSettingsPanel()));
+
+async function runPanelAction(method, extra) {
+  if (!$("s-panel").value) return;
+  try {
+    const result = await call(method, { id: Number($("s-panel").value), ...(extra || {}) });
+    if (result.panels) renderSettings(result);
+    $("s-report").textContent = result.message || $("s-report").textContent;
+    setStatus(result.message || "Ausgeführt.");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+$("s-pair").addEventListener("click", () => runPanelAction("pairPanel", { code: $("s-code").value.trim() }));
+$("s-unpair").addEventListener("click", () => runPanelAction("unpairPanel"));
+$("s-test").addEventListener("click", () => runPanelAction("testPanel"));
 $("open-settings").addEventListener("click", openSettings);
+
+/* ---------- Prüfen ---------- */
+
+let probe = { page: "", snapshot: null };
+
+function renderProbe() {
+  const stage = $("probe-stage");
+  const pages = $("probe-pages");
+  stage.innerHTML = "";
+  pages.innerHTML = "";
+  const layout = probe.snapshot && probe.snapshot.layout;
+  if (!layout || !(layout.pages || []).length) {
+    stage.innerHTML = '<div class="hint">Diese Anzeige hat keine Ansicht.</div>';
+    return;
+  }
+  if (!probe.page || !(layout.pages || []).some((page) => page.id === probe.page)) probe.page = layout.pages[0].id;
+  const values = {};
+  for (const tile of (probe.snapshot.state && probe.snapshot.state.tiles) || []) values[tile.tileId] = tile;
+  for (const page of layout.pages) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = page.title || page.id;
+    if (page.id === probe.page) button.classList.add("active");
+    button.addEventListener("click", () => {
+      probe.page = page.id;
+      renderProbe();
+    });
+    pages.appendChild(button);
+  }
+  const current = layout.pages.find((page) => page.id === probe.page);
+  stage.style.gridTemplateColumns = `repeat(${layout.columns || 2}, minmax(0, 1fr))`;
+  for (const tile of (current && current.tiles) || []) {
+    const card = document.createElement("div");
+    card.className = "probe-tile";
+    card.style.gridColumn = `${(tile.col || 0) + 1} / span ${tile.colSpan || 1}`;
+    card.style.gridRow = `${(tile.row || 0) + 1} / span ${tile.rowSpan || 1}`;
+    const title = document.createElement("strong");
+    title.textContent = tile.title || tile.kind || "Kachel";
+    const value = document.createElement("div");
+    value.className = "probe-value";
+    const live = values[tile.tileId];
+    value.textContent = live ? live.text : (tile.kind === "value" ? "—" : "");
+    card.append(title, value);
+    if (tile.kind === "nav" && tile.targetPage) {
+      card.style.cursor = "pointer";
+      card.addEventListener("click", () => {
+        probe.page = tile.targetPage;
+        renderProbe();
+      });
+    }
+    if (tile.actionId) {
+      const action = document.createElement("button");
+      action.type = "button";
+      action.textContent = tile.actionKind === "dim" ? "Wert senden" : "Schalten";
+      action.addEventListener("click", () => sendProbeAction(tile));
+      card.appendChild(action);
+    }
+    stage.appendChild(card);
+  }
+}
+
+async function loadProbe() {
+  const id = Number($("probe-panel").value);
+  if (!id) {
+    probe.snapshot = null;
+    renderProbe();
+    return;
+  }
+  probe.snapshot = await call("inspect", { id });
+  renderProbe();
+}
+
+async function sendProbeAction(tile) {
+  let value = "";
+  if (tile.actionKind === "dim" || tile.actionKind === "position") {
+    const entered = prompt("Wert", "50");
+    if (entered === null) return;
+    value = entered.trim();
+  }
+  try {
+    const result = await call("simulateAction", {
+      id: Number($("probe-panel").value),
+      tileId: tile.tileId,
+      actionId: tile.actionId,
+      value
+    });
+    if (result.ok === false) throw new Error(result.error || "Aktion abgelehnt");
+    setStatus("Aktion ausgeführt.");
+    await loadProbe();
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function openProbe() {
+  const select = $("probe-panel");
+  try {
+    const settings = await call("settings");
+    select.innerHTML = "";
+    for (const panel of settings.panels || []) {
+      const option = document.createElement("option");
+      option.value = String(panel.id);
+      option.textContent = `${panel.name} (${panel.id})`;
+      select.appendChild(option);
+    }
+    if (!select.options.length) {
+      setStatus("Noch keine Anzeige-Instanz angelegt.");
+      return;
+    }
+    await loadProbe();
+  } catch (error) {
+    setStatus(error.message);
+    return;
+  }
+  $("probe-dialog").showModal();
+}
+
+$("probe-panel").addEventListener("change", () => {
+  probe.page = "";
+  loadProbe().catch((error) => setStatus(error.message));
+});
+$("probe-refresh").addEventListener("click", () => loadProbe().catch((error) => setStatus(error.message)));
+$("open-probe").addEventListener("click", openProbe);
 
 /* ---------- Start ---------- */
 
@@ -1384,7 +1517,6 @@ async function start() {
     state.variables = (variables.variables || []).filter((variable) => variable.type >= 0 && variable.type <= 3);
     await loadImages();
     renderVariableTree();
-    renderConfigMenu();
     if (state.catalog.layouts[0]) selectLayout(state.catalog.layouts[0]);
     else newLayout("Start");
     setStatus(`Bereit. ${state.variables.length} Variablen, ${state.catalog.layouts.length} Ansichten, ${state.images.length} Bilder.`);

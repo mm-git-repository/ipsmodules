@@ -52,8 +52,8 @@
     "actions": [
         {
             "type": "Button",
-            "label": "Dienst neu einrichten",
-            "onClick": "echo 'Dienst: ' . HDADM_SyncService($_IPS['TARGET']);"
+            "caption": "Dienst neu einrichten",
+            "onClick": "echo 'Dienst: ' . HDADM_SyncService($id);"
         }
     ],
     "status": [

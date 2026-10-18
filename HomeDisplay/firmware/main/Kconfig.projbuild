@@ -18,8 +18,8 @@ menu "HomeDisplay"
         bool "Lokales HTTPS-Zertifikat nicht prüfen"
         default y
         help
-            Für das erste Flashen gegen IP-Symcon mit eigenem Zertifikat.
-            Danach das Zertifikat fest hinterlegen und diese Option ausschalten.
+            IP-Symcon verwendet ein eigenes Zertifikat. Die Anzeige spricht HTTPS
+            und prüft dieses Zertifikat nicht. Die Option bleibt im Heimnetz an.
     config HOMEDISPLAY_BOOT_TEST_SECONDS
         int "Testbild nach dem Start (Sekunden, 0 = aus)"
         default 0

@@ -6,7 +6,7 @@
             "Kopplung: Den Code von der Anzeige eintragen und übernehmen. Die Anzeige erhält den Schlüssel beim nächsten Abruf.": "Pairing: enter the code shown on the display and apply. The display receives the key on its next poll.",
             "Kopplungscode von der Anzeige": "Pairing code from the display",
             "Seitenlayout": "Page layout",
-            "Konfiguration": "Configuration",
+            "Helligkeit, Ruheanzeige und Abruf gelten nur für diese Anzeige.": "Brightness, idle screen and polling apply to this display only.",
             "Die Liste gilt, wenn keine veröffentlichte Ansicht mit Kacheln gewählt ist. Die Position sortiert die Zeilen. Eine freie Platzierung gibt es nicht.": "The list is used when no published view with tiles is selected. Position sorts the rows. Free placement is not available.",
             "Ruheanzeige": "Idle screen",
             "Uhrseite": "Clock page",
