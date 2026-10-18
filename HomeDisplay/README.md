@@ -10,15 +10,9 @@ Panel-Modul für IP-Symcon. Jede Instanz ist ein Gerät. Genau eine Instanz stel
 4. Adapter-Adresse auf die erreichbare IP des Servers setzen, wenn die automatische Erkennung nicht passt.
 5. In IP-Symcon SSL einschalten, damit die Panel-Adresse mit `https` beginnt.
 
-## Editor
+## Verwaltung
 
-Auf dem PC im Ordner `editor` ausführen:
-
-```text
-python server.py
-```
-
-Dann `http://127.0.0.1:8765` öffnen, IP-Symcon-Adresse, Benutzer und Passwort eintragen und verbinden. Der Editor liest Variablen, speichert Entwürfe und veröffentlicht Layouts. Solange das Programm läuft, meldet es den Adapter im lokalen Netz als `homedisplay.local`.
+Instanz `HomeDisplay Verwaltung` anlegen, ein Passwort setzen und übernehmen. Die Adresse steht in der Instanz, zum Beispiel `http://192.168.1.10:3777/hook/homedisplay-admin/`. Diese Seite im Browser öffnen. Der Browser fragt nach Benutzer und Passwort. Der Benutzername ist beliebig, das Passwort ist das aus der Instanz. Die Seite liest Variablen, speichert Entwürfe und veröffentlicht Ansichten. Python ist dafür nicht nötig.
 
 ## Firmware
 

@@ -1,0 +1,14 @@
+{
+    "translations": {
+        "en": {
+            "Die Verwaltungsseite wird vom Webserver von IP-Symcon ausgeliefert. Eine Instanz genügt. Das Passwort schützt die Seite.": "The admin page is served by the IP-Symcon web server. One instance is enough. The password protects the page.",
+            "Aktiv": "Active",
+            "Passwort für die Verwaltungsseite": "Password for the admin page",
+            "Adresse wird nach dem Übernehmen angezeigt.": "The address appears after applying the changes.",
+            "Verwaltungsseite aktiv": "Admin page active",
+            "Verwaltungsseite inaktiv": "Admin page inactive",
+            "Verwaltungsseite konnte nicht gestartet werden": "Admin page could not be started",
+            "Passwort für die Verwaltungsseite fehlt": "Password for the admin page is missing"
+        }
+    }
+}

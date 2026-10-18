@@ -1,0 +1,30 @@
+{
+    "elements": [
+        {
+            "type": "Label",
+            "caption": "Die Verwaltungsseite wird vom Webserver von IP-Symcon ausgeliefert. Eine Instanz genügt. Das Passwort schützt die Seite."
+        },
+        {
+            "type": "CheckBox",
+            "name": "Active",
+            "caption": "Aktiv"
+        },
+        {
+            "type": "PasswordTextBox",
+            "name": "AdminPassword",
+            "caption": "Passwort für die Verwaltungsseite"
+        },
+        {
+            "type": "Label",
+            "name": "AdminUrlLabel",
+            "caption": "Adresse wird nach dem Übernehmen angezeigt."
+        }
+    ],
+    "actions": [],
+    "status": [
+        {"code": 102, "icon": "active", "caption": "Verwaltungsseite aktiv"},
+        {"code": 104, "icon": "inactive", "caption": "Verwaltungsseite inaktiv"},
+        {"code": 201, "icon": "error", "caption": "Verwaltungsseite konnte nicht gestartet werden"},
+        {"code": 202, "icon": "error", "caption": "Passwort für die Verwaltungsseite fehlt"}
+    ]
+}

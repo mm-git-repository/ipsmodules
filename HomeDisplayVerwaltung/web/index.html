@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>HomeDisplay Verwaltung</title>
+  <base href="/hook/homedisplay-admin/">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header>
+    <h1>HomeDisplay Verwaltung</h1>
+    <span id="status">Lade …</span>
+  </header>
+  <main>
+    <section>
+      <h2>Ansichten</h2>
+      <ul id="layouts"></ul>
+      <button id="new-layout" type="button">Neue Ansicht</button>
+      <label>Name <input id="layout-name"></label>
+      <label>Spalten <input id="columns" type="number" min="1" max="4" value="2"></label>
+      <div class="row">
+        <button id="save" type="button">Entwurf speichern</button>
+        <button id="publish" type="button">Veröffentlichen</button>
+      </div>
+    </section>
+    <section>
+      <h2>Raster</h2>
+      <div id="grid"></div>
+      <h2>Kachel</h2>
+      <label>Titel <input id="tile-title"></label>
+      <label>Symbol
+        <select id="tile-icon">
+          <option value="energy">Energie</option>
+          <option value="temperature">Temperatur</option>
+          <option value="light">Licht</option>
+          <option value="shutter">Rollladen</option>
+          <option value="pump">Pumpe</option>
+          <option value="valve">Ventil</option>
+          <option value="alarm">Alarm</option>
+        </select>
+      </label>
+      <label>Variable
+        <select id="tile-variable"></select>
+      </label>
+      <label>Einheit <input id="tile-unit"></label>
+      <label>Nachkommastellen <input id="tile-decimals" type="number" min="0" max="3" value="0"></label>
+      <label><input id="tile-action" type="checkbox"> Schaltbar</label>
+      <label><input id="tile-confirm" type="checkbox"> Bestätigung am Panel</label>
+      <button id="add-tile" type="button">Kachel hinzufügen</button>
+      <button id="delete-tile" type="button">Kachel entfernen</button>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
