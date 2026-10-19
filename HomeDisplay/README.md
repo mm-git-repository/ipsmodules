@@ -34,7 +34,7 @@ Die Oberfläche ist ein Designer mit Menüleiste, Palette und Raster. Eigenschaf
 - Raster: Seitenreiter oben, Kacheln verschieben oder tauschen, Doppelklick öffnet die Details. Entf entfernt, Strg+S speichert den Entwurf.
 - Bilder: Menü „Bilder …“ lädt PNG oder JPEG hoch. IP-Symcon verkleinert auf höchstens 1024 × 600 Bildpunkte; die Anzeige holt die Datei einmal in den Speicher. Über „Hintergrund dieser Seite“ liegt ein Bild hinter dem Raster einer Seite.
 - Veröffentlichen schaltet die Ansicht für alle Anzeigen frei, die sie in ihrer Instanz gewählt haben.
-- Menü „Einstellungen …“ hält die Dienstadresse und je Anzeige Kopplung, Ansicht, Helligkeit, Ruheanzeige, Abruf und das Wartungsfenster. Diese Werte gelten nur für die gewählte Anzeige.
+- Menü „Einstellungen …“ ändert nur die einmalige Dienstadresse und zeigt die Anzeigen. Kopplung, Ansicht, Helligkeit, Ruheanzeige und Abruf stehen in der jeweiligen Instanz „Hausanzeige“.
 - Menü „Prüfen …“ zeigt Ansicht und Werte wie die Anzeige sie abruft und kann eine freigegebene Aktion ausführen.
 
 Der Editor im Ordner `editor` zeigt dieselbe Oberfläche vom PC aus und meldet den Dienst per mDNS: `python server.py http://192.168.1.10:3777 benutzer passwort`, dann `http://127.0.0.1:8765` öffnen.

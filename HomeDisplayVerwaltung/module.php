@@ -219,7 +219,7 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
 
     private function baseUrl(): string
     {
-        $host = trim($this->ReadPropertyString('ServiceHost'));
+        $host = trim($this->serviceHost());
         if ($host === '') {
             $host = gethostbyname(gethostname());
         }
@@ -245,19 +245,9 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             $panels[] = [
                 'id' => $id,
                 'name' => IPS_GetName($id),
-                'active' => (bool) IPS_GetProperty($id, 'Active'),
-                'paired' => (string) IPS_GetProperty($id, 'DeviceToken') !== '',
-                'layoutId' => (string) IPS_GetProperty($id, 'LayoutId'),
-                'idleMode' => (int) IPS_GetProperty($id, 'IdleMode'),
-                'nightDim' => (bool) IPS_GetProperty($id, 'NightDim'),
-                'dayBrightness' => (int) IPS_GetProperty($id, 'DayBrightness'),
-                'nightBrightness' => (int) IPS_GetProperty($id, 'NightBrightness'),
-                'nightFrom' => (int) IPS_GetProperty($id, 'NightFrom'),
-                'nightTo' => (int) IPS_GetProperty($id, 'NightTo'),
-                'stateIntervalSec' => (int) IPS_GetProperty($id, 'StateIntervalSec'),
-                'idleStateIntervalSec' => (int) IPS_GetProperty($id, 'IdleStateIntervalSec'),
-                'maintenanceFrom' => (int) IPS_GetProperty($id, 'MaintenanceFrom'),
-                'maintenanceTo' => (int) IPS_GetProperty($id, 'MaintenanceTo'),
+                'active' => (bool) $this->panelProperty($id, 'Active', false),
+                'paired' => (string) $this->panelProperty($id, 'DeviceToken', '') !== '',
+                'layoutId' => (string) $this->panelProperty($id, 'LayoutId', ''),
                 'pairing' => $this->variableText($id, 'PairingState'),
                 'status' => $this->variableText($id, 'PanelStatus'),
                 'serves' => $id === $instance,
@@ -265,13 +255,32 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
         }
         return [
             'ok' => true,
-            'serviceHost' => $this->ReadPropertyString('ServiceHost'),
+            'serviceHost' => $this->serviceHost(),
             'serviceUrl' => $instance > 0 ? $this->serviceUrl() : '',
             'serviceInstance' => $instance,
             'serviceInstanceName' => $instance > 0 ? IPS_GetName($instance) : '',
             'adminUrl' => $this->pageUrl(),
             'panels' => $panels,
         ];
+    }
+
+    private function serviceHost(): string
+    {
+        try {
+            return trim($this->ReadPropertyString('ServiceHost'));
+        } catch (Throwable $e) {
+            return '';
+        }
+    }
+
+    /** @param mixed $default */
+    private function panelProperty(int $id, string $name, $default)
+    {
+        try {
+            return IPS_GetProperty($id, $name);
+        } catch (Throwable $e) {
+            return $default;
+        }
     }
 
     public function SavePanel(string $Json): string
@@ -397,6 +406,7 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
 
     public function ProcessHookData(): void
     {
+        ob_start();
         try {
             if ($this->ReadPropertyString('AdminPassword') === '') {
                 http_response_code(503);
@@ -448,27 +458,33 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
     {
         $method = (string) ($body['method'] ?? '');
         if ($method === 'settings') {
-            return ['ok' => true, 'result' => $this->settings()];
+            try {
+                return ['ok' => true, 'result' => $this->settings()];
+            } catch (Throwable $e) {
+                return ['ok' => false, 'error' => $e->getMessage()];
+            }
         }
         if ($method === 'saveSettings') {
             $host = trim((string) ($body['serviceHost'] ?? ''));
             if ($host !== '' && !preg_match('/^[A-Za-z0-9.\-]+$/', $host)) {
                 return ['ok' => false, 'error' => 'Die Dienstadresse darf nur Hostname oder IP enthalten, ohne http:// und ohne Port.'];
             }
-            if ($host !== $this->ReadPropertyString('ServiceHost')) {
-                IPS_SetProperty($this->InstanceID, 'ServiceHost', $host);
-                IPS_ApplyChanges($this->InstanceID);
-            } else {
-                $this->syncServiceHook();
-                $this->publishServiceUrl();
-            }
-            if (is_array($body['panel'] ?? null)) {
-                $saved = $this->decodeCall($this->SavePanel((string) json_encode($body['panel'], JSON_UNESCAPED_UNICODE)));
-                if (empty($saved['ok'])) {
-                    return ['ok' => false, 'error' => (string) ($saved['error'] ?? 'Speichern fehlgeschlagen.')];
+            try {
+                if ($host !== $this->serviceHost()) {
+                    IPS_SetProperty($this->InstanceID, 'ServiceHost', $host);
+                    IPS_ApplyChanges($this->InstanceID);
+                } else {
+                    $this->syncServiceHook();
+                    $this->publishServiceUrl();
                 }
+            } catch (Throwable $e) {
+                return ['ok' => false, 'error' => 'Dienstadresse konnte nicht gespeichert werden. Instanz „Hausanzeige Verwaltung“ neu anlegen. ' . $e->getMessage()];
             }
-            return ['ok' => true, 'result' => $this->settings()];
+            try {
+                return ['ok' => true, 'result' => $this->settings()];
+            } catch (Throwable $e) {
+                return ['ok' => false, 'error' => $e->getMessage()];
+            }
         }
         if ($method === 'pairPanel') {
             $result = $this->decodeCall($this->PairPanel((int) ($body['id'] ?? 0), (string) ($body['code'] ?? '')));
@@ -666,8 +682,16 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
     /** @param array<string, mixed> $payload */
     private function json(array $payload): void
     {
+        if (ob_get_level() > 0) {
+            ob_clean();
+        }
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+        if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+            $flags |= JSON_INVALID_UTF8_SUBSTITUTE;
+        }
+        $encoded = json_encode($payload, $flags);
+        echo is_string($encoded) ? $encoded : '{"ok":false,"error":"Antwort konnte nicht kodiert werden."}';
     }
 
     private function updateWebHookControl(bool $register): void

@@ -36,7 +36,11 @@ def ips_call(method, params):
     token = base64.b64encode(f"{CONNECTION['user']}:{CONNECTION['password']}".encode("utf-8")).decode("ascii")
     request.add_header("Authorization", f"Basic {token}")
     with urllib.request.urlopen(request, timeout=30) as response:
-        body = json.loads(response.read().decode("utf-8"))
+        raw = response.read().decode("utf-8", errors="replace")
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise RuntimeError("IP-Symcon hat kein JSON geliefert. Instanz „Hausanzeige Verwaltung“ anlegen und die Bibliothek neu laden.")
     if "error" in body:
         raise RuntimeError(str(body["error"]))
     result = body.get("result")
@@ -73,7 +77,15 @@ def variable_text(instance, ident):
 
 def settings():
     admin = admin_id()
-    service_instance = ips_call("HDADM_GetServiceInstance", [admin]) if admin else 0
+    service_instance = 0
+    service_url = ""
+    if admin:
+        try:
+            service_instance = ips_call("HDADM_GetServiceInstance", [admin]) or 0
+            service_url = ips_call("HDADM_GetServiceUrl", [admin]) or ""
+        except Exception:
+            service_instance = 0
+            service_url = ""
     panels = []
     for instance in sorted(ips_call("IPS_GetInstanceListByModuleID", [MODULE_ID]) or []):
         panels.append({
@@ -82,16 +94,6 @@ def settings():
             "active": bool(ips_call("IPS_GetProperty", [instance, "Active"])),
             "paired": str(ips_call("IPS_GetProperty", [instance, "DeviceToken"])) != "",
             "layoutId": str(ips_call("IPS_GetProperty", [instance, "LayoutId"])),
-            "idleMode": int(ips_call("IPS_GetProperty", [instance, "IdleMode"])),
-            "nightDim": bool(ips_call("IPS_GetProperty", [instance, "NightDim"])),
-            "dayBrightness": int(ips_call("IPS_GetProperty", [instance, "DayBrightness"])),
-            "nightBrightness": int(ips_call("IPS_GetProperty", [instance, "NightBrightness"])),
-            "nightFrom": int(ips_call("IPS_GetProperty", [instance, "NightFrom"])),
-            "nightTo": int(ips_call("IPS_GetProperty", [instance, "NightTo"])),
-            "stateIntervalSec": int(ips_call("IPS_GetProperty", [instance, "StateIntervalSec"])),
-            "idleStateIntervalSec": int(ips_call("IPS_GetProperty", [instance, "IdleStateIntervalSec"])),
-            "maintenanceFrom": int(ips_call("IPS_GetProperty", [instance, "MaintenanceFrom"])),
-            "maintenanceTo": int(ips_call("IPS_GetProperty", [instance, "MaintenanceTo"])),
             "pairing": variable_text(instance, "PairingState"),
             "status": variable_text(instance, "PanelStatus"),
             "serves": instance == service_instance,
@@ -99,7 +101,7 @@ def settings():
     return {
         "ok": True,
         "serviceHost": str(ips_call("IPS_GetProperty", [admin, "ServiceHost"])) if admin else "",
-        "serviceUrl": ips_call("HDADM_GetServiceUrl", [admin]) if admin else "",
+        "serviceUrl": service_url,
         "serviceInstance": service_instance,
         "serviceInstanceName": ips_call("IPS_GetName", [service_instance]) if service_instance else "",
         "adminUrl": variable_text(admin, "AdminUrl") if admin else "",
