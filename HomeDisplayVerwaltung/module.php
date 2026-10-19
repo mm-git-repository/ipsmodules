@@ -48,10 +48,13 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
     {
         $url = $this->serviceInstance() > 0 ? $this->serviceUrl() : '';
         $this->SetValue('ServiceUrl', $url);
-        foreach ($this->panelIds() as $id) {
-            $variableId = @IPS_GetObjectIDByIdent('AdapterUrl', $id);
-            if (is_int($variableId) && $variableId > 0) {
-                SetValue($variableId, $this->isActivePanel($id) ? $url : '');
+        if (function_exists('HDISP_SetAdapterUrl')) {
+            foreach ($this->panelIds() as $id) {
+                try {
+                    HDISP_SetAdapterUrl($id, $this->isActivePanel($id) ? $url : '');
+                } catch (Throwable $e) {
+                    $this->SendDebug('Dienst', $e->getMessage(), 0);
+                }
             }
         }
         return $url;

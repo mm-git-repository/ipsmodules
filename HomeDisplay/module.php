@@ -10,7 +10,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 12;
+    private const MODULE_BUILD = 13;
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
@@ -91,6 +91,18 @@ class HomeDisplay extends IPSModuleStrict
         unset($element);
         $encoded = json_encode($form, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         return $encoded === false ? $raw : $encoded;
+    }
+
+    /** Setzt die Dienstadresse. Aufruf aus der Verwaltung, weil die Variable von außen nur lesbar ist. */
+    public function SetAdapterUrl(string $Url): void
+    {
+        $this->SetValue('AdapterUrl', $Url);
+    }
+
+    /** Setzt den Anzeigestatus. Aufruf aus einer anderen Anzeige, weil die Variable von außen nur lesbar ist. */
+    public function SetPanelStatus(string $Text): void
+    {
+        $this->SetValue('PanelStatus', $Text);
     }
 
     public function Pair(): string
@@ -880,9 +892,11 @@ class HomeDisplay extends IPSModuleStrict
             unset($runtime[(string) $device['id']]['command']);
         }
         $this->saveRuntime($runtime);
-        $statusId = @IPS_GetObjectIDByIdent('PanelStatus', $device['id']);
-        if (is_int($statusId) && $statusId > 0) {
-            SetValue($statusId, implode(', ', $parts));
+        $status = implode(', ', $parts);
+        if ((int) $device['id'] === $this->InstanceID) {
+            $this->SetValue('PanelStatus', $status);
+        } elseif (function_exists('HDISP_SetPanelStatus')) {
+            HDISP_SetPanelStatus((int) $device['id'], $status);
         }
     }
 
