@@ -128,17 +128,7 @@ def api(incoming):
             raise RuntimeError("Die Dienstadresse darf nur Hostname oder IP enthalten, ohne http:// und ohne Port.")
         ips_call("IPS_SetProperty", [admin, "ServiceHost", host])
         ips_call("IPS_ApplyChanges", [admin])
-        panel = incoming.get("panel")
-        if isinstance(panel, dict):
-            checked(ips_call("HDADM_SavePanel", [admin, json.dumps(panel, ensure_ascii=False)]))
         return settings()
-    if method == "pairPanel":
-        admin = admin_id()
-        return checked(ips_call("HDADM_PairPanel", [admin, int(incoming.get("id", 0)), str(incoming.get("code", ""))]))
-    if method == "unpairPanel":
-        return checked(ips_call("HDADM_UnpairPanel", [admin_id(), int(incoming.get("id", 0))]))
-    if method == "testPanel":
-        return checked(ips_call("HDADM_TestPanel", [admin_id(), int(incoming.get("id", 0))]))
     if method == "inspect":
         return checked(ips_call("HDISP_Inspect", [int(incoming.get("id", 0))]))
     if method == "simulateAction":

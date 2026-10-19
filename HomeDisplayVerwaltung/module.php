@@ -283,93 +283,6 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
         }
     }
 
-    public function SavePanel(string $Json): string
-    {
-        $panel = json_decode($Json, true);
-        if (!is_array($panel)) {
-            return $this->encodeReply(['ok' => false, 'error' => 'Anzeige fehlt.']);
-        }
-        try {
-            $this->savePanel($panel);
-            return $this->encodeReply($this->settings());
-        } catch (Throwable $e) {
-            return $this->encodeReply(['ok' => false, 'error' => $e->getMessage()]);
-        }
-    }
-
-    public function PairPanel(int $Panel, string $Code): string
-    {
-        try {
-            $id = $this->panelOrFail($Panel);
-            $code = strtoupper(trim($Code));
-            if (!preg_match('/^[A-Z0-9]{6}$/', $code)) {
-                throw new InvalidArgumentException('Kopplungscode muss sechs Buchstaben oder Ziffern haben.');
-            }
-            if (!function_exists('HDISP_Pair')) {
-                throw new RuntimeException('HomeDisplay ist nicht geladen.');
-            }
-            IPS_SetProperty($id, 'ClaimCode', $code);
-            IPS_ApplyChanges($id);
-            $message = (string) HDISP_Pair($id);
-            $result = $this->settings();
-            $result['message'] = $message;
-            return $this->encodeReply($result);
-        } catch (Throwable $e) {
-            return $this->encodeReply(['ok' => false, 'error' => $e->getMessage()]);
-        }
-    }
-
-    public function UnpairPanel(int $Panel): string
-    {
-        try {
-            $id = $this->panelOrFail($Panel);
-            if (!function_exists('HDISP_Unpair')) {
-                throw new RuntimeException('HomeDisplay ist nicht geladen.');
-            }
-            $message = (string) HDISP_Unpair($id);
-            $result = $this->settings();
-            $result['message'] = $message;
-            return $this->encodeReply($result);
-        } catch (Throwable $e) {
-            return $this->encodeReply(['ok' => false, 'error' => $e->getMessage()]);
-        }
-    }
-
-    public function TestPanel(int $Panel): string
-    {
-        try {
-            $id = $this->panelOrFail($Panel);
-            if (!function_exists('HDISP_TestConnection')) {
-                throw new RuntimeException('HomeDisplay ist nicht geladen.');
-            }
-            return $this->encodeReply(['ok' => true, 'message' => (string) HDISP_TestConnection($id)]);
-        } catch (Throwable $e) {
-            return $this->encodeReply(['ok' => false, 'error' => $e->getMessage()]);
-        }
-    }
-
-    /** @param array<string, mixed> $panel */
-    private function savePanel(array $panel): void
-    {
-        $id = $this->panelOrFail((int) ($panel['id'] ?? 0));
-        $layoutId = trim((string) ($panel['layoutId'] ?? ''));
-        if ($layoutId !== '' && !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $layoutId)) {
-            throw new InvalidArgumentException('Ansicht unbekannt.');
-        }
-        IPS_SetProperty($id, 'LayoutId', $layoutId);
-        IPS_SetProperty($id, 'IdleMode', $this->bounded($panel['idleMode'] ?? 0, 0, 2));
-        IPS_SetProperty($id, 'NightDim', !empty($panel['nightDim']));
-        IPS_SetProperty($id, 'DayBrightness', $this->bounded($panel['dayBrightness'] ?? 70, 0, 100));
-        IPS_SetProperty($id, 'NightBrightness', $this->bounded($panel['nightBrightness'] ?? 15, 0, 100));
-        IPS_SetProperty($id, 'NightFrom', $this->bounded($panel['nightFrom'] ?? 22, 0, 23));
-        IPS_SetProperty($id, 'NightTo', $this->bounded($panel['nightTo'] ?? 6, 0, 23));
-        IPS_SetProperty($id, 'StateIntervalSec', $this->bounded($panel['stateIntervalSec'] ?? 3, 2, 60));
-        IPS_SetProperty($id, 'IdleStateIntervalSec', $this->bounded($panel['idleStateIntervalSec'] ?? 15, 5, 300));
-        IPS_SetProperty($id, 'MaintenanceFrom', $this->bounded($panel['maintenanceFrom'] ?? 3, 0, 23));
-        IPS_SetProperty($id, 'MaintenanceTo', $this->bounded($panel['maintenanceTo'] ?? 5, 0, 23));
-        IPS_ApplyChanges($id);
-    }
-
     private function panelOrFail(int $id): int
     {
         if ($id <= 0 || !IPS_InstanceExists($id)) {
@@ -380,19 +293,6 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             throw new InvalidArgumentException('Anzeige nicht gefunden.');
         }
         return $id;
-    }
-
-    private function bounded(mixed $value, int $min, int $max): int
-    {
-        $number = is_numeric($value) ? (int) $value : $min;
-        return max($min, min($max, $number));
-    }
-
-    /** @param array<string, mixed> $payload */
-    private function encodeReply(array $payload): string
-    {
-        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        return $json === false ? '{"ok":false}' : $json;
     }
 
     private function variableText(int $instanceId, string $ident): string
@@ -485,24 +385,6 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             } catch (Throwable $e) {
                 return ['ok' => false, 'error' => $e->getMessage()];
             }
-        }
-        if ($method === 'pairPanel') {
-            $result = $this->decodeCall($this->PairPanel((int) ($body['id'] ?? 0), (string) ($body['code'] ?? '')));
-            return empty($result['ok'])
-                ? ['ok' => false, 'error' => (string) ($result['error'] ?? 'Kopplung fehlgeschlagen.')]
-                : ['ok' => true, 'result' => $result];
-        }
-        if ($method === 'unpairPanel') {
-            $result = $this->decodeCall($this->UnpairPanel((int) ($body['id'] ?? 0)));
-            return empty($result['ok'])
-                ? ['ok' => false, 'error' => (string) ($result['error'] ?? 'Lösen fehlgeschlagen.')]
-                : ['ok' => true, 'result' => $result];
-        }
-        if ($method === 'testPanel') {
-            $result = $this->decodeCall($this->TestPanel((int) ($body['id'] ?? 0)));
-            return empty($result['ok'])
-                ? ['ok' => false, 'error' => (string) ($result['error'] ?? 'Prüfung fehlgeschlagen.')]
-                : ['ok' => true, 'result' => $result];
         }
         if ($method === 'inspect') {
             $id = (int) ($body['id'] ?? 0);
