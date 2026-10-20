@@ -346,6 +346,20 @@ final class HomeDisplayPanelSchema
                     if (in_array($control, ['dimSwitch', 'slider', 'combo', 'blinds'], true)) {
                         $public['valueMin'] = (float) ($tile['valueMin'] ?? 0);
                         $public['valueMax'] = (float) ($tile['valueMax'] ?? 100);
+                        if (isset($tile['dimShowPercent']) && $tile['dimShowPercent'] === false) {
+                            $public['dimShowPercent'] = false;
+                        }
+                        if (($tile['dimLayout'] ?? '') === 'stacked') {
+                            $public['dimLayout'] = 'stacked';
+                        }
+                        if (isset($tile['dimTapTrack'])) {
+                            $tap = $tile['dimTapTrack'];
+                            if ($tap === 'on' || $tap === true) {
+                                $public['dimTapTrack'] = 'on';
+                            } elseif ($tap === 'off' || $tap === false) {
+                                $public['dimTapTrack'] = 'off';
+                            }
+                        }
                     }
                     if ($control === 'setpoint' && isset($tile['setpointVariableId'])) {
                         $public['setpointVariableId'] = (int) $tile['setpointVariableId'];
@@ -806,8 +820,15 @@ final class HomeDisplayPanelSchema
             return;
         }
         if ($kind === 'scene') {
+            $icon = (string) ($tile['icon'] ?? '');
+            if ($icon !== '' && !in_array($icon, self::ICONS, true)) {
+                throw new InvalidArgumentException('Unbekanntes Symbol: ' . $icon);
+            }
             if ($publish && trim((string) ($tile['actionId'] ?? '')) === '') {
                 throw new InvalidArgumentException('Szenenkachel ohne freigegebene Aktion.');
+            }
+            if ($publish && trim((string) ($tile['actionId'] ?? '')) !== '' && (int) ($tile['variableId'] ?? 0) <= 0) {
+                throw new InvalidArgumentException('Szenenkachel ohne Aktions-Variable.');
             }
             self::validateAction($tile, $publish);
             return;
@@ -943,7 +964,11 @@ final class HomeDisplayPanelSchema
         if (!preg_match('/^[A-Za-z0-9_-]{1,40}$/', $actionId)) {
             throw new InvalidArgumentException('Ungültige actionId.');
         }
+        $tileKind = (string) ($tile['kind'] ?? 'value');
         $kind = (string) ($tile['actionKind'] ?? '');
+        if ($kind === '' && $tileKind === 'scene') {
+            $kind = 'switch';
+        }
         if (!in_array($kind, self::ACTIONS, true)) {
             throw new InvalidArgumentException('Aktion muss Schalten, Dimmen oder Position sein.');
         }
@@ -958,5 +983,69 @@ final class HomeDisplayPanelSchema
         if ((int) ($variable['VariableAction'] ?? 0) <= 0 && (int) ($variable['VariableCustomAction'] ?? 0) <= 0) {
             throw new InvalidArgumentException('Die Variable hat keine Aktion.');
         }
+    }
+
+    /** @param array<string, mixed> $layout @return list<int> */
+    public static function layoutVariableIds(array $layout): array
+    {
+        $seen = [];
+        foreach ($layout['pages'] ?? [] as $page) {
+            if (!is_array($page)) {
+                continue;
+            }
+            foreach ($page['tiles'] ?? [] as $tile) {
+                if (!is_array($tile)) {
+                    continue;
+                }
+                foreach (self::tileVariableIds($tile) as $id) {
+                    $seen[$id] = $id;
+                }
+            }
+        }
+
+        return array_values($seen);
+    }
+
+    /** @param array<string, mixed> $tile @return list<int> */
+    public static function tileVariableIds(array $tile): array
+    {
+        $kind = (string) ($tile['kind'] ?? 'value');
+        $ids = [];
+        if ($kind === 'energyflow') {
+            foreach (HomeDisplayEnergyFlow::variablePropertyKeys($tile) as $prop) {
+                $id = (int) ($tile[$prop] ?? 0);
+                if ($id > 0) {
+                    $ids[] = $id;
+                }
+            }
+
+            return $ids;
+        }
+        $primary = (int) ($tile['variableId'] ?? 0);
+        if ($primary > 0) {
+            $ids[] = $primary;
+        }
+        if ($kind === 'weather') {
+            $forecast = (int) ($tile['forecastVariableId'] ?? 0);
+            if ($forecast > 0) {
+                $ids[] = $forecast;
+            }
+        }
+        if ($kind === 'value' && (string) ($tile['control'] ?? '') === 'setpoint') {
+            $setpoint = (int) ($tile['setpointVariableId'] ?? 0);
+            if ($setpoint > 0) {
+                $ids[] = $setpoint;
+            }
+        }
+        if ($kind === 'chart') {
+            foreach (HomeDisplayChart::seriesDefinitions($tile) as $def) {
+                $id = (int) ($def['variableId'] ?? 0);
+                if ($id > 0) {
+                    $ids[] = $id;
+                }
+            }
+        }
+
+        return $ids;
     }
 }

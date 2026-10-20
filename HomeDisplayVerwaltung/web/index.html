@@ -108,11 +108,6 @@
 
     <section id="canvas">
       <div id="page-tabs"></div>
-      <div id="page-bg">
-        <label>Hintergrund dieser Seite
-          <select id="page-background"></select>
-        </label>
-      </div>
       <div id="grid-wrap">
         <div id="editor-viewport">
           <div id="editor-stage">
@@ -127,6 +122,12 @@
     <aside id="properties">
       <h2>Eigenschaften</h2>
       <div id="prop-empty" class="hint">Kachel im Raster auswählen oder ein Element aus der Palette ins Raster ziehen. Doppelklick öffnet die Details.</div>
+      <div id="prop-page" class="hidden">
+        <label>Hintergrund dieser Seite
+          <select id="page-background"></select>
+        </label>
+        <p class="hint">Gilt für die aktive Seite (Tabs). An der Anzeige sichtbar, im Editor-Raster nicht.</p>
+      </div>
       <form id="prop-form" class="hidden">
         <label>Art <input id="p-kind" readonly></label>
         <label>Titel <input id="p-title"></label>
@@ -198,21 +199,36 @@
           </label>
         </div>
         <div data-for="scene">
-          <label><input id="p-scene-action" type="checkbox"> Schaltbar (Aktion)</label>
-          <label><input id="p-scene-confirm" type="checkbox"> Bestätigung</label>
-          <p class="hint">Szene löst eine freigegebene IPS-Aktion aus (openHAB-Rule).</p>
+          <label>Aktions-Variable <input id="p-scene-variable" readonly placeholder="Schaltbare Variable aus dem Baum wählen"></label>
+          <label>Aktions-ID <input id="p-scene-actionid" placeholder="Automatisch (a-Kennung)" maxlength="40" pattern="[A-Za-z0-9_-]*"></label>
+          <label>Symbol
+            <select id="p-scene-icon"></select>
+          </label>
+          <label><input id="p-scene-confirm" type="checkbox"> Bestätigung an der Anzeige</label>
+          <p class="hint">Variable mit IPS-Aktion (Skript). Tippen an der Anzeige löst die Aktion aus — wie eine openHAB-Szene.</p>
         </div>
         <div data-for="weather">
-          <label>Prognose-Variable <input id="p-weather-forecast" readonly placeholder="Textvariable"></label>
+          <label>Temperatur-Variable <input id="p-weather-variable" readonly placeholder="Zahlvariable aus dem Baum"></label>
+          <div class="row">
+            <label>Einheit <input id="p-weather-unit"></label>
+            <label>Nachkommastellen <input id="p-weather-decimals" type="number" min="0" max="3" value="1"></label>
+          </div>
+          <label>Prognose (optional) <input id="p-weather-forecast" readonly placeholder="Textvariable im Baum anklicken"></label>
           <label>Symbol <select id="p-weather-icon"></select></label>
+          <p class="hint">Temperatur: Variable im Baum anklicken. Prognose: danach Textvariable anklicken (Fußzeile der Karte).</p>
         </div>
         <div data-for="presence">
+          <label>Variable <input id="p-presence-variable" readonly placeholder="z. B. Anwesenheit oder Alarm"></label>
           <label>Modus
             <select id="p-presence-mode">
               <option value="home">Anwesenheit</option>
               <option value="alarm">Alarm</option>
             </select>
           </label>
+          <p class="hint">Variable im Baum anklicken (meist Ja/Nein). Modus steuert Darstellung an der Anzeige.</p>
+        </div>
+        <div data-for="separator">
+          <p class="hint">Horizontale Trennlinie über die volle Breite der Zeile. Nur Titel optional.</p>
         </div>
         <div data-for="value">
           <div class="row">
@@ -257,6 +273,24 @@
                 <option value="right">Rechts</option>
                 <option value="top">Oben</option>
                 <option value="bottom">Unten</option>
+              </select>
+            </label>
+          </div>
+          <div id="p-dim-wrap" class="hidden">
+            <div class="row">
+              <label><input id="p-dim-show-percent" type="checkbox" checked> Prozent am Balken</label>
+              <label>Anordnung
+                <select id="p-dim-layout">
+                  <option value="horizontal">Nebeneinander</option>
+                  <option value="stacked">Schalter über Balken</option>
+                </select>
+              </label>
+            </div>
+            <label>Leiste antippen
+              <select id="p-dim-tap">
+                <option value="auto">Standard (Kombi/Rolladen ja, reiner Dimmer nein)</option>
+                <option value="on">Immer – Springen zur Position</option>
+                <option value="off">Nur Griff ziehen</option>
               </select>
             </label>
           </div>
@@ -445,16 +479,19 @@
   <dialog id="probe-dialog">
     <form method="dialog" class="probe-form">
       <h3>Prüfen</h3>
-      <p class="hint">Live-Vorschau im gewählten Display-Profil (Auflösung wie Waveshare oder FireBeetle E-Ink). Aktionen werden in IP-Symcon wirklich ausgeführt.</p>
-      <fieldset class="probe-source">
-        <legend>Quelle</legend>
-        <label class="inline"><input type="radio" name="probe-source" value="draft" checked> Editor-Entwurf (Display-Profil der Ansicht)</label>
-        <label class="inline"><input type="radio" name="probe-source" value="device"> Anzeige (veröffentlicht / Geräte-Vorschau)</label>
-      </fieldset>
-      <label>Anzeige (Variablen &amp; Aktionen) <select id="probe-panel"></select></label>
-      <p id="probe-meta" class="hint"></p>
-      <label class="small"><input id="probe-live" type="checkbox" checked> Live (Intervall aus Anzeige-Konfiguration)</label>
-      <div id="probe-pages" class="probe-pages"></div>
+      <p class="hint">Live-Vorschau im gewählten Display-Profil. Aktionen werden in IP-Symcon wirklich ausgeführt.</p>
+      <div class="probe-toolbar">
+        <fieldset class="probe-source">
+          <legend>Quelle</legend>
+          <label class="inline"><input type="radio" name="probe-source" value="draft" checked> Entwurf</label>
+          <label class="inline"><input type="radio" name="probe-source" value="device"> Anzeige</label>
+        </fieldset>
+        <label class="probe-panel-pick">Panel <select id="probe-panel"></select></label>
+        <label class="probe-live-pick"><input id="probe-live" type="checkbox" checked> Live</label>
+        <button type="button" id="probe-refresh">Aktualisieren</button>
+        <div id="probe-pages" class="probe-pages"></div>
+        <span id="probe-meta" class="hint probe-meta-inline"></span>
+      </div>
       <div id="probe-viewport">
         <div id="probe-stage">
           <div id="probe-screen">
@@ -464,7 +501,6 @@
         </div>
       </div>
       <div class="row right">
-        <button type="button" id="probe-refresh">Aktualisieren</button>
         <button value="close">Schließen</button>
       </div>
     </form>

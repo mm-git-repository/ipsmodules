@@ -38,7 +38,9 @@ Version steht in `VERSION` und `platformio.ini` (`HOMEDISPLAY_FB_FIRMWARE_VERSIO
 ## Betrieb
 
 - Dauerbetrieb: WLAN bleibt aktiv, Abrufintervall aus IPS (`StateIntervalSec`, mindestens 5 s in der Firmware)
-- E-Ink-Update bei Layout- oder State-Änderung (Vollrefresh)
+- E-Ink: **partielle Updates** pro geänderter Kachel (S/W-Panels, Standard), etwa alle 18 Partials ein Vollrefresh gegen Ghosting
+- Optional **Server-Frame** (Instanz-Eigenschaft `EpdServerFrame`): IPS rendert die Seite per GD (`/v1/epd/frame/{page}`), das Display überträgt nur geänderte Kachelbereiche per Partial Update
+- Layout-Wechsel, 3-Farben-Panel (S/W/R) und Bild/Kamera-Kacheln: weiterhin Vollrefresh
 - Kacheln v1: Wert, Text, Nav, Trennlinie, System, Bild/Kamera/Medien (JPEG, Graustufen)
 
 ## Abgrenzung

@@ -34,6 +34,16 @@
         },
         {
             "type": "Label",
+            "name": "EpdServerFrameHint",
+            "caption": "E-Ink FireBeetle: Auf dem Display sind partielle Updates standardmäßig an (nur geänderte Kacheln). Optional rendert IPS die ganze Seite; das Gerät lädt das Bitmap und aktualisiert nur geänderte Bereiche — einheitlichere Grafik, weniger Rechenlast auf dem ESP. Voraussetzung: PHP-Erweiterung GD."
+        },
+        {
+            "type": "CheckBox",
+            "name": "EpdServerFrame",
+            "caption": "E-Ink: Seitenbild auf dem Server rendern"
+        },
+        {
+            "type": "Label",
             "caption": "Die Liste gilt, wenn keine veröffentlichte Ansicht mit Kacheln gewählt ist. Die Position sortiert die Zeilen. Eine freie Platzierung gibt es nicht."
         },
         {

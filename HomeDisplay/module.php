@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/libs/CatalogStore.php';
 require_once __DIR__ . '/libs/Media.php';
 require_once __DIR__ . '/libs/PanelActionGuard.php';
+require_once __DIR__ . '/libs/EpdFrame.php';
 
 class HomeDisplay extends IPSModuleStrict
 {
@@ -40,6 +41,7 @@ class HomeDisplay extends IPSModuleStrict
         $this->RegisterPropertyInteger('MaintenanceTo', 5);
         $this->RegisterPropertyString('DeviceId', '');
         $this->RegisterPropertyString('FallbackTiles', '[]');
+        $this->RegisterPropertyBoolean('EpdServerFrame', false);
 
         $this->RegisterVariableString('PairingState', 'Kopplung', '', 1);
         $this->RegisterVariableString('AdapterUrl', 'Dienstadresse', '', 2);
@@ -97,6 +99,26 @@ class HomeDisplay extends IPSModuleStrict
                     $options[] = ['caption' => (string) ($meta['label'] ?? $id), 'value' => $id];
                 }
                 $element['options'] = $options;
+            }
+        }
+        unset($element);
+        $profileId = (string) IPS_GetProperty($this->InstanceID, 'DisplayProfile');
+        $firebeetleEpd = str_starts_with($profileId, 'firebeetle-epd-');
+        $gdOk = function_exists('imagecreatetruecolor');
+        foreach ($form['elements'] as &$element) {
+            if (!is_array($element)) {
+                continue;
+            }
+            $name = (string) ($element['name'] ?? '');
+            if ($name === 'EpdServerFrame') {
+                $element['visible'] = $firebeetleEpd;
+            }
+            if ($name === 'EpdServerFrameHint') {
+                $element['visible'] = $firebeetleEpd;
+                if ($firebeetleEpd && !$gdOk) {
+                    $element['caption'] = (string) ($element['caption'] ?? '')
+                        . ' Hinweis: GD ist auf diesem IPS-Host nicht verfügbar — Server-Rendering kann nicht genutzt werden.';
+                }
             }
         }
         unset($element);
@@ -172,7 +194,7 @@ class HomeDisplay extends IPSModuleStrict
             'manifest' => $this->manifest($device),
             'config' => $this->deviceConfig($device),
             'layout' => $this->deviceLayout($device),
-            'state' => $this->deviceState($device),
+            'state' => $this->deviceState($device, -1),
             'probe' => [
                 'previewActive' => $previewActive,
                 'layoutId' => is_array($active) ? (string) ($active['id'] ?? '') : '',
@@ -437,6 +459,13 @@ class HomeDisplay extends IPSModuleStrict
         try {
             $payload = json_decode($json, true);
             $this->storeCatalogItem($bucket, is_array($payload) ? $payload : [], $publish);
+            if ($publish && $bucket === 'layouts' && is_array($payload)) {
+                $publishedId = (string) ($payload['id'] ?? '');
+                if ($publishedId !== '' && $publishedId === $this->ReadPropertyString('LayoutId')) {
+                    $this->subscribeLayoutVariables();
+                    $this->bumpStateSeq();
+                }
+            }
             return '{"ok":true}';
         } catch (Throwable $e) {
             $this->SendDebug('Editor', $e->getMessage(), 0);
@@ -467,6 +496,11 @@ class HomeDisplay extends IPSModuleStrict
     public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
     {
         unset($TimeStamp, $SenderID, $Message, $Data);
+        $this->bumpStateSeq();
+    }
+
+    private function bumpStateSeq(): void
+    {
         $runtime = $this->runtime();
         $key = (string) $this->InstanceID;
         $runtime[$key]['seq'] = (int) ($runtime[$key]['seq'] ?? 0) + 1;
@@ -520,6 +554,10 @@ class HomeDisplay extends IPSModuleStrict
             }
             if ($method === 'GET' && preg_match('#^/v1/camera/([A-Za-z0-9_-]{1,40})$#', $route, $match) === 1) {
                 $this->sendCameraSnapshot($device, $match[1]);
+                return;
+            }
+            if ($method === 'GET' && preg_match('#^/v1/epd/frame/(\d+)$#', $route, $match) === 1) {
+                $this->sendEpdFrame($device, (int) $match[1]);
                 return;
             }
             if ($method === 'GET' && preg_match('#^/v1/chart/([A-Za-z0-9_-]{1,40})$#', $route, $match) === 1) {
@@ -863,6 +901,10 @@ class HomeDisplay extends IPSModuleStrict
             $document['targetWidth'] = 1024;
             $document['targetHeight'] = 600;
         }
+        $firebeetle = str_starts_with($profileId, 'firebeetle-epd-');
+        $document['epdPartialRefresh'] = $firebeetle;
+        $document['epdServerFrame'] = $firebeetle && $this->ReadPropertyBoolean('EpdServerFrame')
+            && function_exists('imagecreatetruecolor');
         return $document;
     }
 
@@ -905,12 +947,14 @@ class HomeDisplay extends IPSModuleStrict
     }
 
     /** @param array{id: int, token: string} $device @return array<string, mixed> */
-    private function deviceState(array $device): array
+    private function deviceState(array $device, int $since = -2): array
     {
         $layout = $this->activeLayout($device['id']);
         $runtime = $this->runtime();
         $seq = (int) ($runtime[(string) $device['id']]['seq'] ?? 0);
-        $since = isset($_GET['since']) ? (int) $_GET['since'] : -1;
+        if ($since === -2) {
+            $since = isset($_GET['since']) ? (int) $_GET['since'] : -1;
+        }
         if ($since >= 0 && $since >= $seq) {
             return [
                 'contract' => self::CONTRACT,
@@ -1180,6 +1224,47 @@ class HomeDisplay extends IPSModuleStrict
             'presenceMode' => $mode,
             'quality' => $quality,
         ];
+    }
+
+    /** @param array{id: int, token: string} $device */
+    private function sendEpdFrame(array $device, int $pageIndex): void
+    {
+        if (!$this->ReadPropertyBoolean('EpdServerFrame') || !function_exists('imagecreatetruecolor')) {
+            http_response_code(404);
+            $this->json(['error' => 'epd']);
+            return;
+        }
+        $layout = $this->activeLayout($device['id']);
+        if (!is_array($layout)) {
+            http_response_code(404);
+            $this->json(['error' => 'layout']);
+            return;
+        }
+        $profileId = (string) IPS_GetProperty($device['id'], 'DisplayProfile');
+        try {
+            $profile = HomeDisplayPanelSchema::profile($profileId !== '' ? $profileId : HomeDisplayPanelSchema::defaultProfileId());
+            $width = (int) $profile['width'];
+            $height = (int) $profile['height'];
+        } catch (Throwable $e) {
+            $width = 400;
+            $height = 300;
+        }
+        $state = $this->stateForLayout($layout, $device['id'], -1);
+        $tiles = is_array($state['tiles'] ?? null) ? $state['tiles'] : [];
+        $mono = HomeDisplayEpdFrame::monoPage($width, $height, $layout, $tiles, $pageIndex);
+        if ($mono === '') {
+            http_response_code(503);
+            $this->json(['error' => 'render']);
+            return;
+        }
+        $runtime = $this->runtime();
+        $seq = (int) ($runtime[(string) $device['id']]['seq'] ?? 0);
+        header('Content-Type: application/octet-stream');
+        header('Cache-Control: no-store');
+        header('X-Epd-Width: ' . $width);
+        header('X-Epd-Height: ' . $height);
+        header('X-Epd-Seq: ' . $seq);
+        echo $mono;
     }
 
     /** @param array{id: int, token: string} $device */
@@ -2104,22 +2189,9 @@ class HomeDisplay extends IPSModuleStrict
     private function subscribeLayoutVariables(): void
     {
         $layout = $this->activeLayout($this->InstanceID) ?? [];
-        foreach ($layout['pages'] ?? [] as $page) {
-            foreach ($page['tiles'] ?? [] as $tile) {
-                $kind = (string) ($tile['kind'] ?? 'value');
-                if ($kind === 'energyflow') {
-                    foreach (HomeDisplayEnergyFlow::variablePropertyKeys($tile) as $prop) {
-                        $variableId = (int) ($tile[$prop] ?? 0);
-                        if ($variableId > 0 && IPS_VariableExists($variableId)) {
-                            $this->RegisterMessage($variableId, 10603);
-                        }
-                    }
-                    continue;
-                }
-                $variableId = (int) ($tile['variableId'] ?? 0);
-                if ($variableId > 0 && IPS_VariableExists($variableId)) {
-                    $this->RegisterMessage($variableId, 10603);
-                }
+        foreach (HomeDisplayPanelSchema::layoutVariableIds($layout) as $variableId) {
+            if ($variableId > 0 && IPS_VariableExists($variableId)) {
+                $this->RegisterMessage($variableId, 10603);
             }
         }
     }

@@ -46,7 +46,8 @@ final class HomeDisplayPanelActionGuard
         if (count($window) >= self::MAX_ACTIONS_PER_MINUTE) {
             throw new RuntimeException('Zu viele Aktionen in kurzer Zeit.');
         }
-        if ($tile === null || (string) ($tile['kind'] ?? 'value') !== 'value') {
+        $tileKind = (string) ($tile['kind'] ?? 'value');
+        if ($tile === null || !in_array($tileKind, ['value', 'scene'], true)) {
             throw new InvalidArgumentException('Aktion nicht freigegeben.');
         }
         if ((string) ($tile['actionId'] ?? '') === '' || (string) $tile['actionId'] !== $actionId) {

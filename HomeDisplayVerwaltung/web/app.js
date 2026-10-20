@@ -179,6 +179,10 @@ function scaledTileHtml(mainText, iconId, subText) {
 
 function fitTileContentBox(box) {
   if (!box) return;
+  if (box.closest && box.closest(".tile.chart")) {
+    box.style.setProperty("--tile-scale", "1");
+    return;
+  }
   const maxW = box.clientWidth - 2;
   const maxH = box.clientHeight - 2;
   if (maxW <= 0 || maxH <= 0) return;
@@ -265,14 +269,55 @@ const INTERACTION_NAMES = { switch: "Schalter (Ein/Aus)", iconSwitch: "Icon-Scha
 const INTERACTION_HINTS = {
   switch: "Ein/Aus per Schalter an der Anzeige.",
   iconSwitch: "Tipp schaltet um; das Symbol wechselt zwischen Ein und Aus.",
-  dimSwitch: "Schaltet den Dimmwert aus und stellt beim Einschalten den letzten Wert wieder her.",
-  slider: "Der Wert ändert sich nur, wenn der Griff gezogen wird. Tippen auf die Leiste bewirkt nichts.",
-  combo: "Schalter für Ein und Aus, Balken für den Dimmwert. Der Balken reagiert nur auf Ziehen am Griff.",
+  dimSwitch: "Schalter schaltet aus; Balken stellt Helligkeit ein (ziehen oder optional antippen).",
+  slider: "Dimmen am Balken – Griff ziehen; optional Leiste antippen (Eigenschaften).",
+  combo: "Schalter Ein/Aus plus Dimmer-Balken (ziehen oder antippen).",
   battery: "Ladestand grafisch, ohne Schaltaktion an der Anzeige.",
   blinds: "Position 0–100 % oder Fahrt über schaltbare Variable (Aktionsart Position).",
   setpoint: "Ist-Wert anzeigen, Sollwert mit +/- an der Anzeige ändern."
 };
 const DIM_CONTROLS = ["dimSwitch", "slider", "combo"];
+const PROBE_INLINE_CONTROLS = ["switch", "iconSwitch", "dimSwitch", "slider", "combo", "blinds", "setpoint"];
+
+function numericLiveValue(tile, live) {
+  if (!live) return null;
+  if (typeof live.value === "number" && !Number.isNaN(live.value)) return live.value;
+  if (typeof live.value === "boolean") return live.value ? (tile.valueMax ?? 100) : (tile.valueMin ?? 0);
+  if (live.text) {
+    const match = String(live.text).replace(",", ".").match(/-?\d+(?:\.\d+)?/);
+    if (match) return parseFloat(match[0]);
+  }
+  return null;
+}
+
+function dimPercentFromTile(tile, live, fallbackPct) {
+  const min = tile.valueMin ?? 0;
+  const max = tile.valueMax ?? 100;
+  const span = max - min || 1;
+  const v = numericLiveValue(tile, live);
+  if (v == null) return fallbackPct != null ? fallbackPct : 50;
+  return Math.round(Math.min(100, Math.max(0, ((v - min) / span) * 100)));
+}
+
+function valueFromDimPercent(tile, pct) {
+  const min = tile.valueMin ?? 0;
+  const max = tile.valueMax ?? 100;
+  const raw = min + (pct / 100) * (max - min);
+  const decimals = tile.decimals != null ? tile.decimals : 0;
+  if (decimals <= 0) return Math.round(raw);
+  return Math.round(raw * 10 ** decimals) / 10 ** decimals;
+}
+
+function dimTapTrackEnabled(tile, control) {
+  const mode = tile.dimTapTrack;
+  if (mode === "on" || mode === true) return true;
+  if (mode === "off" || mode === false) return false;
+  return control === "combo" || control === "blinds";
+}
+
+function tileHasInlineProbeControl(tile) {
+  return Boolean(tile.actionId && tile.kind === "value" && PROBE_INLINE_CONTROLS.includes(tile.control || "switch"));
+}
 
 function tileInteractionMode(tile) {
   if (!tile || tile.kind !== "value") return "switch";
@@ -298,10 +343,51 @@ function applyTileStatus(element, live, tile) {
   }
 }
 
+function normalizeChartSeries(series) {
+  if (!Array.isArray(series)) return [];
+  const out = [];
+  for (const raw of series) {
+    if (typeof raw === "number" && !Number.isNaN(raw)) out.push(raw);
+    else {
+      const n = parseFloat(String(raw).replace(",", "."));
+      if (!Number.isNaN(n)) out.push(n);
+    }
+  }
+  return out;
+}
+
+function chartSeriesUsable(series) {
+  return normalizeChartSeries(series).length >= 2;
+}
+
 function chartSeriesFromTile(tile, live) {
-  if (live && Array.isArray(live.seriesAll) && live.seriesAll.length) return live.seriesAll;
-  if (live && Array.isArray(live.series) && live.series.length >= 2) return [live.series];
+  if (live && Array.isArray(live.seriesAll)) {
+    const usable = live.seriesAll.map(normalizeChartSeries).filter((s) => s.length >= 2);
+    if (usable.length) return usable;
+  }
+  if (live && chartSeriesUsable(live.series)) return [normalizeChartSeries(live.series)];
   return [demoChartSeries(tile)];
+}
+
+function chartBoundsForTile(tile, live, seriesList) {
+  const flat = seriesList.flat();
+  if ((tile.chartYMode || "auto") === "fixed" && tile.chartYMin != null && tile.chartYMax != null) {
+    return { min: tile.chartYMin, max: tile.chartYMax };
+  }
+  if (live && live.seriesMin != null && live.seriesMax != null && flat.length >= 2) {
+    return { min: live.seriesMin, max: live.seriesMax };
+  }
+  return chartSeriesMinMax(flat);
+}
+
+function chartHtmlForTile(tile, live) {
+  const seriesList = chartSeriesFromTile(tile, live);
+  const bounds = chartBoundsForTile(tile, live, seriesList);
+  const style = tile.chartStyle || "area";
+  const yesterday = live && Array.isArray(live.seriesYesterday) && chartSeriesUsable(live.seriesYesterday)
+    ? normalizeChartSeries(live.seriesYesterday)
+    : [];
+  return chartSvgMulti(seriesList, style, bounds.min, bounds.max, yesterday);
 }
 
 function chartSvgMulti(seriesList, style, min, max, yesterday) {
@@ -330,7 +416,24 @@ function chartSvgMulti(seriesList, style, min, max, yesterday) {
   }
   const extras = seriesList.slice(1).map((s) => line(s, "oh-chart-line oh-chart-line-alt")).join("");
   const yesterdayLine = yesterday && yesterday.length >= 2 ? line(yesterday, "oh-chart-line oh-chart-yesterday") : "";
-  return `<svg class="oh-chart-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${area}${yesterdayLine}${line(primary, "oh-chart-line")}${extras}</svg>`;
+  const primaryLine = line(primary, "oh-chart-line");
+  if (!primaryLine && !extras && !yesterdayLine) {
+    return `<div class="chart-empty">Keine Verlaufsdaten</div>`;
+  }
+  return `<svg class="oh-chart-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${area}${yesterdayLine}${primaryLine}${extras}</svg>`;
+}
+
+function paintChartTileContent(element, tile, live) {
+  if (!element || !tile || tile.kind !== "chart") return;
+  const variable = variableById(tile.variableId);
+  const label = tile.title || (variable ? variable.name : "Diagramm");
+  const stateText = live && live.text ? escapeHtml(live.text) : escapeHtml(tile.unit ? `12,3 ${tile.unit}` : "—");
+  const chartHtml = chartHtmlForTile(tile, live);
+  const periodKey = tile.chartPeriod || "24h";
+  const periodLabel = CHART_PERIOD_LABELS[periodKey] || periodKey;
+  const kicker = element.querySelector(".kicker");
+  const kickerHtml = kicker ? kicker.outerHTML : "";
+  element.innerHTML = `${kickerHtml}<div class="tile-scale">${ohCardMarkup(label, stateText, chartHtml, escapeHtml(periodLabel))}</div>`;
 }
 
 function variableArchived(id) {
@@ -366,6 +469,7 @@ function syncInteractionPropertyPanels() {
     if (variable && variable.action && $("p-action")) $("p-action").checked = true;
   }
   $("p-setpoint-wrap")?.classList.toggle("hidden", mode !== "setpoint");
+  $("p-dim-wrap")?.classList.toggle("hidden", !(DIM_CONTROLS.includes(mode) || mode === "blinds"));
 }
 const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text"];
 const MEDIA_ROLES = {
@@ -789,13 +893,21 @@ function applyPageBackground(element, page) {
   }
 }
 
+function clearEditorGridBackground() {
+  const grid = $("grid");
+  if (!grid) return;
+  grid.style.backgroundImage = "";
+  grid.style.backgroundSize = "";
+  grid.style.backgroundPosition = "";
+}
+
 function renderPageBackground() {
   const select = $("page-background");
+  if (!select) return;
   const page = currentPage();
   fillImageSelect(select);
   select.value = page && page.backgroundId ? page.backgroundId : "";
   select.disabled = !page;
-  applyPageBackground($("grid"), page);
 }
 
 function tileAt(col, row) {
@@ -832,7 +944,7 @@ function renderGrid() {
   const page = currentPage();
   grid.style.gridTemplateColumns = `repeat(${state.layout.columns}, 1fr)`;
   grid.style.gridTemplateRows = `repeat(${state.layout.rows}, 1fr)`;
-  renderPageBackground();
+  clearEditorGridBackground();
   const covered = new Set();
   for (const tile of page.tiles) {
     for (let x = tile.col; x < tile.col + (tile.colSpan || 1); x += 1) {
@@ -1044,13 +1156,15 @@ function buildTileElement(tile, context) {
     if (control === "setpoint") element.classList.add("setpoint");
     const iconId = effectiveIcon(tile, live ? live.value : undefined, demoOn);
     const kicker = INTERACTION_NAMES[interaction] || CONTROL_NAMES[control] || `${iconName(iconId)}${tile.actionId ? " · schaltbar" : ""}`;
-    const body = controlMarkup(control, tile);
+    const body = controlMarkup(control, tile, live, demoOn);
     const displayText = live && live.text ? live.text : (variable ? "12,3" : "—");
     const label = tile.title || (variable ? variable.name : "Wert");
     const stateLine = escapeHtml(displayText) + (body ? "" : (tile.unit ? " " + escapeHtml(tile.unit) : ""));
     const cardBody = body || (iconId ? `<div class="oh-card-icon">${escapeHtml(iconName(iconId))}</div>` : "");
     element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, stateLine, cardBody)}</div>`;
-    if (mode === "edit") bindControlPreview(element, tile);
+    if (DIM_CONTROLS.includes(control) || control === "blinds" || control === "setpoint" || control === "switch" || interaction === "iconSwitch") {
+      bindTileControls(element, tile, mode, live);
+    }
   } else if (tile.kind === "nav") {
     const navIcon = tile.icon ? `<div class="tile-fit-icon">${escapeHtml(iconName(tile.icon))}</div>` : "";
     element.innerHTML = `${editorKicker(mode, `${tile.icon ? iconName(tile.icon) + " · " : ""}Seite`)}<div class="tile-scale">${navIcon}<div class="name"></div></div>`;
@@ -1071,20 +1185,10 @@ function buildTileElement(tile, context) {
     element.innerHTML = `${editorKicker(mode, "Anzeige")}<div class="tile-scale">${ohCardMarkup(label, stateText, body)}</div>`;
   } else if (tile.kind === "chart") {
     element.classList.add("chart");
-    const variable = variableById(tile.variableId);
-    const label = tile.title || (variable ? variable.name : "Diagramm");
-    const stateText = live && live.text ? escapeHtml(live.text) : escapeHtml(tile.unit ? `12,3 ${tile.unit}` : "—");
-    const seriesList = chartSeriesFromTile(tile, live);
-    const flat = seriesList.flat();
-    const bounds = live && live.seriesMin != null && live.seriesMax != null
-      ? { min: live.seriesMin, max: live.seriesMax }
-      : chartSeriesMinMax(flat);
-    const style = tile.chartStyle || "area";
-    const yesterday = live && Array.isArray(live.seriesYesterday) ? live.seriesYesterday : [];
-    const chartHtml = chartSvgMulti(seriesList, style, bounds.min, bounds.max, yesterday);
     const periodKey = tile.chartPeriod || "24h";
     const periodLabel = CHART_PERIOD_LABELS[periodKey] || periodKey;
-    element.innerHTML = `${editorKicker(mode, `Diagramm · ${periodLabel}`)}<div class="tile-scale">${ohCardMarkup(label, stateText, chartHtml, escapeHtml(periodLabel))}</div>`;
+    element.innerHTML = `${editorKicker(mode, `Diagramm · ${periodLabel}`)}<div class="tile-scale"></div>`;
+    paintChartTileContent(element, tile, live);
   } else if (tile.kind === "energyflow") {
     element.classList.add("energyflow");
     element.innerHTML = buildEnergyFlowHtml(tile, live, mode);
@@ -1180,7 +1284,7 @@ function buildTileElement(tile, context) {
     bindDrop(element, tile.col, tile.row, tile);
     if (state.selected === tile.tileId) bindResizeHandles(element, tile);
   }
-  if (mode === "probe" && tile.actionId) {
+  if (mode === "probe" && tile.actionId && !tileHasInlineProbeControl(tile)) {
     const action = document.createElement("button");
     action.type = "button";
     action.textContent = tile.actionKind === "dim" ? "Wert senden" : "Schalten";
@@ -1215,73 +1319,221 @@ function renderTile(tile) {
   });
 }
 
-function controlMarkup(control, tile) {
-  if (control === "dimSwitch") return `<div class="ctl"><span class="sw"></span><span class="ctl-label">Aus</span></div>`;
-  if (control === "slider") return `<div class="ctl"><div class="track"><div class="fill"></div><div class="knob"></div></div></div>`;
-  if (control === "combo") return `<div class="ctl"><span class="sw"></span><div class="track"><div class="fill"></div><div class="knob"></div></div></div>`;
+function dimTrackMarkup(tile, control, live, pct) {
+  const showSw = control === "dimSwitch" || control === "combo";
+  const showValue = tile.dimShowPercent !== false;
+  const layout = tile.dimLayout || "horizontal";
+  const min = tile.valueMin ?? 0;
+  const numeric = numericLiveValue(tile, live);
+  const swOn = control === "dimSwitch" ? (numeric != null ? numeric > min + 0.001 : pct > 2) : pct > 2;
+  const swHtml = showSw ? `<span class="sw${swOn ? " on" : ""}"></span>` : "";
+  const valueHtml = showValue ? `<span class="ctl-value">${pct} %</span>` : "";
+  const trackHtml = `<div class="track" data-dim-track><div class="fill" style="width:${pct}%"></div><div class="knob" style="left:calc(${pct}% - 1.4em)"></div></div>`;
+  const offClass = showSw && control === "dimSwitch" && !swOn ? " dim-off" : "";
+  if (layout === "stacked" && showSw) {
+    return `<div class="ctl dim-ctl layout-stacked${offClass}">${swHtml}<div class="dim-slider-row">${trackHtml}${valueHtml}</div></div>`;
+  }
+  return `<div class="ctl dim-ctl${offClass}">${swHtml}${trackHtml}${valueHtml}</div>`;
+}
+
+function controlMarkup(control, tile, live, demoOn) {
+  if (control === "dimSwitch" || control === "slider" || control === "combo") {
+    const pct = dimPercentFromTile(tile, live);
+    return dimTrackMarkup(tile, control, live, pct);
+  }
+  if (control === "switch" || control === "iconSwitch") {
+    let on = Boolean(demoOn);
+    if (live && typeof live.value === "boolean") on = live.value;
+    else if (live && live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
+    return `<div class="ctl"><span class="sw${on ? " on" : ""}"></span></div>`;
+  }
   if (control === "battery") {
     const pad = tile && tile.batteryPad != null ? tile.batteryPad : 8;
     const label = tile && tile.batteryLabel ? tile.batteryLabel : "inside";
-    const pctInside = label === "inside" ? `<span class="battery-pct">72 %</span>` : "";
-    const pctOutside = label !== "inside" ? `<span class="battery-pct">72 %</span>` : "";
-    return `<div class="battery" style="padding:${pad}px">${pctOutside}<div class="battery-body"><div class="battery-fill" style="width:72%"></div></div><div class="battery-cap"></div>${pctInside}</div>`;
+    const pct = dimPercentFromTile(tile, live, 72);
+    const pctInside = label === "inside" ? `<span class="battery-pct">${pct} %</span>` : "";
+    const pctOutside = label !== "inside" ? `<span class="battery-pct">${pct} %</span>` : "";
+    return `<div class="battery" style="padding:${pad}px">${pctOutside}<div class="battery-body"><div class="battery-fill" style="width:${pct}%"></div></div><div class="battery-cap"></div>${pctInside}</div>`;
   }
   if (control === "blinds") {
-    return `<div class="ctl blinds"><button type="button" class="bl-btn">▲</button><div class="track"><div class="fill" style="width:40%"></div><div class="knob" style="left:40%"></div></div><button type="button" class="bl-btn">▼</button></div>`;
+    const pct = dimPercentFromTile(tile, live, 40);
+    const showValue = tile.dimShowPercent !== false;
+    const valueHtml = showValue ? `<span class="ctl-value">${pct} %</span>` : "";
+    const trackHtml = `<div class="track" data-dim-track><div class="fill" style="width:${pct}%"></div><div class="knob" style="left:calc(${pct}% - 1.4em)"></div></div>`;
+    return `<div class="ctl blinds"><button type="button" class="bl-btn" data-blind="up">▲</button><div class="dim-slider-row">${trackHtml}${valueHtml}</div><button type="button" class="bl-btn" data-blind="down">▼</button></div>`;
   }
   if (control === "setpoint") {
-    return `<div class="ctl setpoint"><button type="button" class="sp-btn">−</button><span class="sp-val">21,0 °C</span><button type="button" class="sp-btn">+</button></div>`;
+    const displayText = live && live.text ? live.text : "21,0 °C";
+    return `<div class="ctl setpoint"><button type="button" class="sp-btn" data-setpoint="down">−</button><span class="sp-val">${escapeHtml(displayText)}</span><button type="button" class="sp-btn" data-setpoint="up">+</button></div>`;
   }
   return "";
 }
 
-/* Vorschau im Editor: der Griff lässt sich ziehen, die Leiste selbst nicht. Der Wert wird nicht gespeichert. */
-function bindControlPreview(element, tile) {
-  const knob = element.querySelector(".knob");
-  const track = element.querySelector(".track");
-  const fill = element.querySelector(".fill");
+function applyDimVisual(element, pct, tile) {
+  const track = element.querySelector("[data-dim-track]") || element.querySelector(".track");
+  const fill = track ? track.querySelector(".fill") : element.querySelector(".fill");
+  const knob = track ? track.querySelector(".knob") : element.querySelector(".knob");
+  const valueEl = element.querySelector(".ctl-value");
+  const clamped = Math.round(Math.min(100, Math.max(0, pct)));
+  if (fill) fill.style.width = `${clamped}%`;
+  if (knob) knob.style.left = `calc(${clamped}% - 1.4em)`;
+  if (valueEl) valueEl.textContent = `${clamped} %`;
+  const control = tile.control || "switch";
   const sw = element.querySelector(".sw");
-  const label = element.querySelector(".ctl-label");
+  if (sw && control === "combo") sw.classList.toggle("on", clamped > 2);
+  element.dataset.lastDimPct = String(clamped);
+  return clamped;
+}
+
+function bindTileControls(element, tile, mode, live) {
+  const control = tile.control || "switch";
+  const iconSwitch = tileInteractionMode(tile) === "iconSwitch";
   const stop = (event) => {
     event.stopPropagation();
     event.preventDefault();
   };
-  const box = element.querySelector(".ctl");
-  if (box) {
-    box.addEventListener("click", (event) => event.stopPropagation());
-    box.addEventListener("dblclick", (event) => event.stopPropagation());
+  const ctlRoot = element.querySelector(".ctl");
+  if (ctlRoot) {
+    ctlRoot.addEventListener("click", (event) => event.stopPropagation());
+    ctlRoot.addEventListener("dblclick", (event) => event.stopPropagation());
   }
-  if (sw) {
+  const dimCtl = element.querySelector(".dim-ctl");
+  const sw = element.querySelector(".sw");
+  let lastPct = dimPercentFromTile(tile, live);
+  element.dataset.lastDimPct = String(lastPct);
+
+  const syncSwitchOffState = () => {
+    if (!dimCtl || control !== "dimSwitch") return;
+    const on = sw && sw.classList.contains("on");
+    dimCtl.classList.toggle("dim-off", !on);
+  };
+
+  if (sw && (control === "dimSwitch" || control === "combo" || control === "switch" || iconSwitch)) {
     sw.addEventListener("pointerdown", stop);
     sw.addEventListener("click", (event) => {
-      event.stopPropagation();
+      stop(event);
+      const wasOn = sw.classList.contains("on");
+      if (control === "switch" || iconSwitch) {
+        sw.classList.toggle("on");
+        if (mode === "edit" && iconSwitch) {
+          state.editorIconDemo[tile.tileId] = sw.classList.contains("on");
+          renderGrid();
+          return;
+        }
+        if (mode === "probe" && tile.actionId) sendProbeAction(tile, { switchToggle: true });
+        return;
+      }
+      if (control === "dimSwitch") {
+        if (wasOn) {
+          lastPct = applyDimVisual(element, Number(element.dataset.lastDimPct || lastPct) || lastPct, tile);
+          element.dataset.storedDimPct = String(lastPct);
+          sw.classList.remove("on");
+          applyDimVisual(element, 0, tile);
+          syncSwitchOffState();
+          if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(tile.valueMin ?? 0) });
+        } else {
+          sw.classList.add("on");
+          const restore = Number(element.dataset.storedDimPct || element.dataset.lastDimPct || 50) || 50;
+          applyDimVisual(element, restore, tile);
+          syncSwitchOffState();
+          if (mode === "probe" && tile.actionId) {
+            sendProbeAction(tile, { value: String(valueFromDimPercent(tile, Number(element.dataset.lastDimPct || restore))) });
+          }
+        }
+        return;
+      }
       sw.classList.toggle("on");
-      if (label) label.textContent = sw.classList.contains("on") ? "Ein" : "Aus";
-      if (tile && (tile.iconMode || "static") === "toggle") {
-        state.editorIconDemo[tile.tileId] = sw.classList.contains("on");
-        renderGrid();
+      if (control === "combo") {
+        if (!sw.classList.contains("on")) {
+          applyDimVisual(element, 0, tile);
+          if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(tile.valueMin ?? 0) });
+        } else if (mode === "probe" && tile.actionId) sendProbeAction(tile, { switchToggle: true });
       }
     });
   }
-  if (!knob || !track) return;
-  knob.addEventListener("pointerdown", (event) => {
-    stop(event);
-    knob.setPointerCapture(event.pointerId);
-    const move = (moveEvent) => {
-      const rect = track.getBoundingClientRect();
-      const travel = Math.max(1, rect.width - knob.offsetWidth);
-      const x = Math.min(travel, Math.max(0, moveEvent.clientX - rect.left - knob.offsetWidth / 2));
-      knob.style.left = `${x}px`;
-      if (fill) fill.style.width = `${x + knob.offsetWidth / 2}px`;
-      if (label) label.textContent = `${Math.round(x / travel * 100)} %`;
-      if (sw) sw.classList.toggle("on", x > 2);
+  syncSwitchOffState();
+
+  const track = element.querySelector("[data-dim-track]") || element.querySelector(".track");
+  const knob = track ? track.querySelector(".knob") : null;
+  const tapTrack = dimTapTrackEnabled(tile, control);
+
+  const canAdjustDim = () => {
+    if (control === "dimSwitch" && sw && !sw.classList.contains("on")) return false;
+    return Boolean(track && knob);
+  };
+
+  const pctFromPointer = (clientX) => {
+    const rect = track.getBoundingClientRect();
+    const ratio = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
+    return applyDimVisual(element, ratio * 100, tile);
+  };
+
+  if (track && knob) {
+    if (tapTrack) track.classList.add("tap-enabled");
+    const endDrag = (endEvent, sendValue) => {
+      try {
+        track.releasePointerCapture(endEvent.pointerId);
+      } catch (_e) { /* ignore */ }
+      track.removeEventListener("pointermove", onMove);
+      track.removeEventListener("pointerup", onUp);
+      track.removeEventListener("lostpointercapture", onUp);
+      if (mode === "edit") element.draggable = true;
+      if (sendValue && mode === "probe" && tile.actionId) {
+        const pct = Number(element.dataset.lastDimPct || lastPct);
+        sendProbeAction(tile, { value: String(valueFromDimPercent(tile, pct)) });
+      }
     };
-    const end = () => {
-      knob.removeEventListener("pointermove", move);
-      knob.removeEventListener("pointerup", end);
+    let onMove;
+    let onUp;
+    const startDrag = (event) => {
+      if (!canAdjustDim()) return;
+      stop(event);
+      if (mode === "edit") element.draggable = false;
+      track.setPointerCapture(event.pointerId);
+      lastPct = pctFromPointer(event.clientX);
+      onMove = (moveEvent) => {
+        lastPct = pctFromPointer(moveEvent.clientX);
+      };
+      onUp = (endEvent) => endDrag(endEvent, true);
+      track.addEventListener("pointermove", onMove);
+      track.addEventListener("pointerup", onUp);
+      track.addEventListener("lostpointercapture", onUp);
     };
-    knob.addEventListener("pointermove", move);
-    knob.addEventListener("pointerup", end);
+    knob.addEventListener("pointerdown", startDrag);
+    track.addEventListener("pointerdown", (event) => {
+      if (event.target === knob || knob.contains(event.target)) return;
+      if (!tapTrack) {
+        stop(event);
+        return;
+      }
+      startDrag(event);
+    });
+  }
+
+  element.querySelectorAll(".bl-btn").forEach((btn) => {
+    btn.addEventListener("pointerdown", stop);
+    btn.addEventListener("click", (event) => {
+      stop(event);
+      const dir = btn.dataset.blind === "up" ? 1 : -1;
+      const step = 10;
+      const pct = Number(element.dataset.lastDimPct || dimPercentFromTile(tile, live));
+      const next = applyDimVisual(element, pct + dir * step, tile);
+      if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(valueFromDimPercent(tile, next)) });
+    });
+  });
+
+  element.querySelectorAll(".sp-btn").forEach((btn) => {
+    btn.addEventListener("pointerdown", stop);
+    btn.addEventListener("click", (event) => {
+      stop(event);
+      const step = tile.setpointStep != null ? tile.setpointStep : 0.5;
+      const dir = btn.dataset.setpoint === "up" ? 1 : -1;
+      const spVal = element.querySelector(".sp-val");
+      const current = numericLiveValue(tile, live) ?? 21;
+      const next = Math.round((current + dir * step) * 10) / 10;
+      if (spVal) spVal.textContent = `${String(next).replace(".", ",")}${tile.unit ? " " + tile.unit : " °C"}`;
+      if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(next) });
+    });
   });
 }
 
@@ -1316,7 +1568,7 @@ function bindDrop(target, col, row, existing) {
         assignVariable(existing, variable);
         return;
       }
-      if (existing && (existing.kind === "value" || existing.kind === "display" || existing.kind === "chart")) {
+      if (existing && (existing.kind === "value" || existing.kind === "display" || existing.kind === "chart" || existing.kind === "scene" || existing.kind === "weather" || existing.kind === "presence")) {
         assignVariable(existing, variable);
         return;
       }
@@ -1418,7 +1670,10 @@ function addTile(kind, col, row, variable, control) {
   } else if (kind === "scene") {
     tile.icon = "home";
     tile.title = tile.title || "Szene";
-    tile.actionId = `a-${tile.tileId}`;
+    tile.variableId = 0;
+    if (variable && variable.action) {
+      assignVariable(tile, variable, true);
+    }
   } else if (kind === "weather") {
     tile.icon = "sun";
     tile.unit = "°C";
@@ -1543,12 +1798,45 @@ function assignVariable(tile, variable, silent) {
     }
     return;
   }
-  if (tile.kind === "weather" || tile.kind === "presence") {
+  if (tile.kind === "weather") {
+    if (variable.type !== 1 && variable.type !== 2) {
+      setStatus("Wetter: Temperatur als Ganzzahl- oder Dezimalvariable wählen (Text = Prognose separat anklicken).");
+      return;
+    }
     tile.variableId = variable.id;
     if (!tile.title) tile.title = variable.name;
-    if (variable.unit && tile.kind === "weather") tile.unit = variable.unit;
-    if (variable.decimals != null && tile.kind === "weather") tile.decimals = variable.decimals;
+    if (variable.unit) tile.unit = variable.unit;
+    if (variable.decimals != null) tile.decimals = variable.decimals;
     delete tile.actionId;
+    if (!silent) {
+      markDirty();
+      renderGrid();
+      renderProperties();
+      setStatus("Temperatur-Variable zugewiesen.");
+    }
+    return;
+  }
+  if (tile.kind === "presence") {
+    tile.variableId = variable.id;
+    if (!tile.title) tile.title = variable.name;
+    delete tile.actionId;
+    if (!silent) {
+      markDirty();
+      renderGrid();
+      renderProperties();
+    }
+    return;
+  }
+  if (tile.kind === "scene") {
+    if (!variable.action) {
+      setStatus("Szene: bitte eine Variable mit IPS-Aktion wählen (Filter „Nur schaltbare“).");
+      return;
+    }
+    tile.variableId = variable.id;
+    if (!tile.title) tile.title = variable.name;
+    tile.actionId = tile.actionId || `a-${tile.tileId}`;
+    tile.actionKind = "switch";
+    tile.icon = tile.icon || guessIcon(variable) || "home";
     if (!silent) {
       markDirty();
       renderGrid();
@@ -1675,8 +1963,13 @@ function fillImageSelect(select) {
 
 function renderProperties() {
   const tile = selectedTile();
-  $("prop-empty").classList.toggle("hidden", Boolean(tile));
+  const hasLayout = Boolean(state.layout);
+  $("prop-empty").classList.toggle("hidden", Boolean(tile) || hasLayout);
   $("prop-form").classList.toggle("hidden", !tile);
+  if ($("prop-page")) {
+    $("prop-page").classList.toggle("hidden", !hasLayout || Boolean(tile));
+    if (hasLayout && !tile) renderPageBackground();
+  }
   if (!tile) return;
   for (const block of document.querySelectorAll("#prop-form [data-for]")) {
     block.classList.toggle("hidden", !block.dataset.for.split(" ").includes(tile.kind));
@@ -1703,6 +1996,14 @@ function renderProperties() {
     if ($("p-iconoff")) $("p-iconoff").value = tile.iconOff || "lightOff";
     if ($("p-interaction")) $("p-interaction").value = tileInteractionMode(tile);
     syncInteractionPropertyPanels();
+    if ($("p-dim-show-percent")) $("p-dim-show-percent").checked = tile.dimShowPercent !== false;
+    if ($("p-dim-layout")) $("p-dim-layout").value = tile.dimLayout || "horizontal";
+    if ($("p-dim-tap")) {
+      const tap = tile.dimTapTrack;
+      if (tap === true || tap === "on") $("p-dim-tap").value = "on";
+      else if (tap === false || tap === "off") $("p-dim-tap").value = "off";
+      else $("p-dim-tap").value = "auto";
+    }
   }
   const variable = variableById(tile.variableId);
   const mediaObj = tile.mediaObjectId ? variableById(tile.mediaObjectId) : null;
@@ -1767,18 +2068,30 @@ function renderProperties() {
   }
   if (tile.kind === "label" && $("p-label-style")) $("p-label-style").value = tile.labelStyle || "text";
   if (tile.kind === "scene") {
-    if ($("p-scene-action")) $("p-scene-action").checked = Boolean(tile.actionId);
+    fillIconSelect($("p-scene-icon"), false);
+    if ($("p-scene-icon")) $("p-scene-icon").value = tile.icon || "home";
+    const sceneVar = variableById(tile.variableId);
+    if ($("p-scene-variable")) {
+      $("p-scene-variable").value = sceneVar
+        ? `${sceneVar.path ? sceneVar.path + " / " : ""}${sceneVar.name} (${sceneVar.id})`
+        : "";
+    }
+    if ($("p-scene-actionid")) $("p-scene-actionid").value = tile.actionId || "";
     if ($("p-scene-confirm")) $("p-scene-confirm").checked = Boolean(tile.confirm);
   }
   if (tile.kind === "weather") {
     fillIconSelect($("p-weather-icon"), false);
     if ($("p-weather-icon")) $("p-weather-icon").value = tile.icon || "sun";
+    if ($("p-weather-variable")) $("p-weather-variable").value = variablePickLabel(variable);
+    if ($("p-weather-unit")) $("p-weather-unit").value = tile.unit || "°C";
+    if ($("p-weather-decimals")) $("p-weather-decimals").value = tile.decimals ?? 1;
     const fv = variableById(tile.forecastVariableId);
-    if ($("p-weather-forecast")) {
-      $("p-weather-forecast").value = fv ? `${fv.path ? fv.path + " / " : ""}${fv.name} (${fv.id})` : "";
-    }
+    if ($("p-weather-forecast")) $("p-weather-forecast").value = variablePickLabel(fv);
   }
-  if (tile.kind === "presence" && $("p-presence-mode")) $("p-presence-mode").value = tile.presenceMode || "home";
+  if (tile.kind === "presence") {
+    if ($("p-presence-variable")) $("p-presence-variable").value = variablePickLabel(variable);
+    if ($("p-presence-mode")) $("p-presence-mode").value = tile.presenceMode || "home";
+  }
   if (tile.kind === "value" && tile.control === "setpoint") {
     const sp = variableById(tile.setpointVariableId);
     if ($("p-setpoint-var")) $("p-setpoint-var").value = sp ? `${sp.path ? sp.path + " / " : ""}${sp.name} (${sp.id})` : "";
@@ -1909,6 +2222,21 @@ function applyProperties() {
       tile.valueMax = tile.valueMax ?? 100;
       if (!tile.unit) tile.unit = "%";
     }
+    if (DIM_CONTROLS.includes(mode) || mode === "blinds") {
+      if ($("p-dim-show-percent") && !$("p-dim-show-percent").checked) tile.dimShowPercent = false;
+      else delete tile.dimShowPercent;
+      const layout = $("p-dim-layout") ? $("p-dim-layout").value : "horizontal";
+      if (layout === "stacked") tile.dimLayout = "stacked";
+      else delete tile.dimLayout;
+      const tapMode = $("p-dim-tap") ? $("p-dim-tap").value : "auto";
+      if (tapMode === "on") tile.dimTapTrack = "on";
+      else if (tapMode === "off") tile.dimTapTrack = "off";
+      else delete tile.dimTapTrack;
+    } else {
+      delete tile.dimShowPercent;
+      delete tile.dimLayout;
+      delete tile.dimTapTrack;
+    }
     if (mode !== "battery" && $("p-action").checked && variable && variable.action) {
       tile.actionId = tile.actionId || `a-${tile.tileId}`;
       tile.actionKind = mode === "blinds" ? "position" : (DIM_CONTROLS.includes(mode) || mode === "setpoint" ? "dim" : $("p-actionkind").value);
@@ -1950,17 +2278,26 @@ function applyProperties() {
     tile.labelStyle = $("p-label-style") ? $("p-label-style").value : "text";
   }
   if (tile.kind === "scene") {
-    if ($("p-scene-action")?.checked) {
-      tile.actionId = tile.actionId || `a-${tile.tileId}`;
+    tile.icon = $("p-scene-icon") ? $("p-scene-icon").value || "home" : (tile.icon || "home");
+    const sceneVar = variableById(tile.variableId);
+    const actionIdRaw = ($("p-scene-actionid")?.value || "").trim();
+    if (sceneVar && sceneVar.action) {
+      tile.actionId = actionIdRaw || tile.actionId || `a-${tile.tileId}`;
+      if (!/^[A-Za-z0-9_-]{1,40}$/.test(tile.actionId)) {
+        tile.actionId = `a-${tile.tileId}`;
+      }
+      tile.actionKind = "switch";
       tile.confirm = Boolean($("p-scene-confirm")?.checked);
     } else {
       delete tile.actionId;
+      delete tile.actionKind;
       tile.confirm = false;
     }
-    tile.icon = tile.icon || "home";
   }
   if (tile.kind === "weather") {
-    tile.icon = $("p-weather-icon") ? $("p-weather-icon").value : "sun";
+    tile.icon = $("p-weather-icon") ? $("p-weather-icon").value || "sun" : "sun";
+    tile.unit = $("p-weather-unit") ? $("p-weather-unit").value : (tile.unit || "°C");
+    tile.decimals = $("p-weather-decimals") ? Number($("p-weather-decimals").value) || 0 : (tile.decimals ?? 1);
   }
   if (tile.kind === "presence") {
     tile.presenceMode = $("p-presence-mode") ? $("p-presence-mode").value : "home";
@@ -2029,7 +2366,7 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-scene-action", "p-scene-confirm", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode"]) {
+for (const id of ["p-title", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-scene-actionid", "p-scene-icon", "p-scene-confirm", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
@@ -2332,6 +2669,10 @@ function openDetails(tile) {
     fields.target.value = tile.targetPage;
   }
   if (tile.kind === "label") {
+    const style = document.createElement("select");
+    style.innerHTML = '<option value="text">Text</option><option value="section">Abschnitt (Frame)</option>';
+    style.value = tile.labelStyle || "text";
+    fields.labelStyle = add("Stil", style);
     const area = document.createElement("textarea");
     area.rows = 4;
     area.value = tile.text || "";
@@ -2465,6 +2806,86 @@ function openDetails(tile) {
   if (tile.kind === "energyflow") {
     appendEnergyFlowDetails(body, tile, fields, add, check, number, text);
   }
+  if (tile.kind === "scene") {
+    const picker = document.createElement("select");
+    picker.innerHTML = '<option value="0">Keine Variable</option>';
+    for (const item of state.variables) {
+      if (!item.action) continue;
+      const option = document.createElement("option");
+      option.value = String(item.id);
+      option.textContent = variablePickLabel(item);
+      picker.appendChild(option);
+    }
+    picker.value = String(tile.variableId || 0);
+    fields.variable = add("Aktions-Variable", picker);
+    fields.actionId = add("Aktions-ID", text(tile.actionId || ""));
+    fields.icon = add("Symbol", document.createElement("select"));
+    fillIconSelect(fields.icon, false);
+    fields.icon.value = tile.icon || "home";
+    fields.confirm = add("Bestätigung an der Anzeige", check(tile.confirm));
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "Nur Variablen mit IPS-Aktion. Die Anzeige sendet beim Tippen eine Schaltaktion (RequestAction).";
+    body.appendChild(hint);
+    picker.addEventListener("change", () => {
+      const chosen = variableById(Number(picker.value));
+      if (chosen && !fields.title.value) fields.title.value = chosen.name;
+    });
+  }
+  if (tile.kind === "weather") {
+    const tempPicker = document.createElement("select");
+    tempPicker.innerHTML = '<option value="0">Keine Variable</option>';
+    for (const item of state.variables) {
+      if (item.type !== 1 && item.type !== 2) continue;
+      const option = document.createElement("option");
+      option.value = String(item.id);
+      option.textContent = variablePickLabel(item);
+      tempPicker.appendChild(option);
+    }
+    tempPicker.value = String(tile.variableId || 0);
+    fields.variable = add("Temperatur-Variable", tempPicker);
+    fields.unit = add("Einheit", text(tile.unit || "°C"));
+    fields.decimals = add("Nachkommastellen", number(tile.decimals ?? 1, 0, 3));
+    const forecastPicker = document.createElement("select");
+    forecastPicker.innerHTML = '<option value="0">Keine Prognose</option>';
+    for (const item of state.variables) {
+      if (item.type !== 3) continue;
+      const option = document.createElement("option");
+      option.value = String(item.id);
+      option.textContent = variablePickLabel(item);
+      forecastPicker.appendChild(option);
+    }
+    forecastPicker.value = String(tile.forecastVariableId || 0);
+    fields.forecast = add("Prognose-Variable (Text)", forecastPicker);
+    fields.icon = add("Symbol", document.createElement("select"));
+    fillIconSelect(fields.icon, false);
+    fields.icon.value = tile.icon || "sun";
+    tempPicker.addEventListener("change", () => {
+      const chosen = variableById(Number(tempPicker.value));
+      if (chosen && !fields.title.value) fields.title.value = chosen.name;
+      if (chosen && chosen.unit && !fields.unit.value) fields.unit.value = chosen.unit;
+    });
+  }
+  if (tile.kind === "presence") {
+    const picker = document.createElement("select");
+    picker.innerHTML = '<option value="0">Keine Variable</option>';
+    for (const item of state.variables) {
+      const option = document.createElement("option");
+      option.value = String(item.id);
+      option.textContent = variablePickLabel(item);
+      picker.appendChild(option);
+    }
+    picker.value = String(tile.variableId || 0);
+    fields.variable = add("Variable", picker);
+    const mode = document.createElement("select");
+    mode.innerHTML = '<option value="home">Anwesenheit</option><option value="alarm">Alarm</option>';
+    mode.value = tile.presenceMode || "home";
+    fields.presenceMode = add("Modus", mode);
+    picker.addEventListener("change", () => {
+      const chosen = variableById(Number(picker.value));
+      if (chosen && !fields.title.value) fields.title.value = chosen.name;
+    });
+  }
   if (tile.kind === "system") {
     const hint = document.createElement("p");
     hint.className = "hint";
@@ -2548,8 +2969,37 @@ function openDetails(tile) {
       }
     }
     if (tile.kind === "nav") tile.targetPage = fields.target.value;
+    if (tile.kind === "scene") {
+      const chosen = variableById(Number(fields.variable.value));
+      tile.variableId = chosen ? chosen.id : 0;
+      tile.icon = fields.icon.value || "home";
+      if (chosen && chosen.action) {
+        const idRaw = (fields.actionId.value || "").trim();
+        tile.actionId = idRaw && /^[A-Za-z0-9_-]{1,40}$/.test(idRaw) ? idRaw : (tile.actionId || `a-${tile.tileId}`);
+        tile.actionKind = "switch";
+        tile.confirm = fields.confirm.checked;
+      } else {
+        delete tile.actionId;
+        delete tile.actionKind;
+        tile.confirm = false;
+      }
+    }
+    if (tile.kind === "weather") {
+      tile.variableId = Number(fields.variable.value) || 0;
+      const forecastId = Number(fields.forecast.value) || 0;
+      if (forecastId > 0) tile.forecastVariableId = forecastId;
+      else delete tile.forecastVariableId;
+      tile.unit = fields.unit.value || "°C";
+      tile.decimals = Number(fields.decimals.value) || 0;
+      tile.icon = fields.icon.value || "sun";
+    }
+    if (tile.kind === "presence") {
+      tile.variableId = Number(fields.variable.value) || 0;
+      tile.presenceMode = fields.presenceMode.value || "home";
+    }
     if (tile.kind === "label") {
       tile.text = fields.text.value;
+      tile.labelStyle = fields.labelStyle ? fields.labelStyle.value : "text";
       delete tile.size;
     }
     if (tile.kind === "display") {
@@ -2703,6 +3153,11 @@ function variableById(id) {
   return state.variables.find((item) => item.id === Number(id)) || null;
 }
 
+function variablePickLabel(variable) {
+  if (!variable) return "";
+  return `${variable.path ? variable.path + " / " : ""}${variable.name} (${variable.id})`;
+}
+
 function iconName(icon) {
   const found = ICONS.find((item) => item[0] === icon);
   return found ? found[1] : "";
@@ -2776,7 +3231,9 @@ function renderVariableTree() {
         if (tile && tile.kind === "weather" && variable.type === 3) {
           tile.forecastVariableId = variable.id;
           markDirty();
+          renderGrid();
           renderProperties();
+          setStatus("Prognose-Variable zugewiesen.");
           return;
         }
         if (tile && tile.kind === "value" && tileInteractionMode(tile) === "setpoint" && tile.variableId && tile.variableId !== variable.id && (variable.type === 1 || variable.type === 2)) {
@@ -2784,6 +3241,10 @@ function renderVariableTree() {
           markDirty();
           renderProperties();
           setStatus("Sollwert-Variable zugewiesen.");
+          return;
+        }
+        if (tile && tile.kind === "scene") {
+          assignVariable(tile, variable);
           return;
         }
         if (tile && (tile.kind === "value" || tile.kind === "display" || tile.kind === "chart" || tile.kind === "weather" || tile.kind === "presence")) {
@@ -2887,7 +3348,9 @@ function validateLayout(layout) {
           if (!variableArchived(id)) throw new Error(`Diagramm „${tile.title || tile.tileId}“: Variable ${id} ist nicht archiviert.`);
         }
       }
-      if (tile.kind === "scene" && !tile.actionId) throw new Error(`Szene „${tile.title || tile.tileId}“ braucht eine Aktion.`);
+      if (tile.kind === "scene" && (!tile.actionId || !tile.variableId)) {
+        throw new Error(`Szene „${tile.title || tile.tileId}“ braucht eine schaltbare Aktions-Variable.`);
+      }
       if (tile.kind === "weather" && !tile.variableId) throw new Error(`Wetter „${tile.title || tile.tileId}“ braucht eine Temperaturvariable.`);
       if (tile.kind === "presence" && !tile.variableId) throw new Error(`Anwesenheit „${tile.title || tile.tileId}“ braucht eine Variable.`);
       if (tile.kind === "value" && tile.control === "setpoint" && !tile.setpointVariableId) {
@@ -3012,7 +3475,6 @@ $("page-background").addEventListener("change", () => {
   if ($("page-background").value) page.backgroundId = $("page-background").value;
   else delete page.backgroundId;
   markDirty();
-  renderGrid();
 });
 $("layout-select").addEventListener("change", () => {
   const layout = state.catalog.layouts.find((item) => item.id === $("layout-select").value);
@@ -3315,6 +3777,41 @@ function scaleProbeViewport() {
   scaleDisplayScreen($("probe-viewport"), $("probe-stage"), $("probe-screen"), profile);
 }
 
+function applyLiveStateToProbeTile(element, tile, live) {
+  if (!element || !tile || !live) return;
+  applyTileStatus(element, live, tile);
+  const ohState = element.querySelector(".oh-card-state");
+  if (tile.kind === "presence") {
+    const active = live.presenceState === "active";
+    const stateLine = active ? (tile.presenceMode === "alarm" ? "ALARM" : "Da") : "Abwesend";
+    if (ohState) ohState.innerHTML = escapeHtml(stateLine);
+    const badge = element.querySelector(".presence-badge");
+    if (badge) {
+      badge.classList.toggle("on", active);
+      badge.classList.toggle("off", !active);
+    }
+  } else if (tile.kind === "weather") {
+    if (ohState && live.text != null && live.text !== "") ohState.innerHTML = escapeHtml(live.text);
+    const ohFoot = element.querySelector(".oh-card-foot");
+    if (ohFoot && live.forecast != null) ohFoot.textContent = live.forecast;
+  } else if (tile.kind === "scene") {
+    if (ohState) ohState.textContent = tile.actionId ? "Tippen" : "—";
+  } else if (live.text != null && live.text !== "") {
+    if (ohState) ohState.innerHTML = escapeHtml(live.text);
+    const valueEl = element.querySelector(".value");
+    if (valueEl) valueEl.textContent = live.text;
+    const fitEl = element.querySelector(".tile-fit-text");
+    if (fitEl) fitEl.textContent = live.text;
+  }
+  if (tile.kind === "energyflow" && live.flows) {
+    const kicker = element.querySelector(".kicker");
+    const kickerHtml = kicker ? kicker.outerHTML : "";
+    element.innerHTML = kickerHtml + buildEnergyFlowHtml(tile, live, "probe");
+    element.dataset.tileId = tile.tileId;
+  }
+  if (tile.kind === "chart") paintChartTileContent(element, tile, live);
+}
+
 function updateProbeValuesOnly() {
   if (!probe.snapshot || !probe.snapshot.state) return;
   const values = {};
@@ -3326,17 +3823,9 @@ function updateProbeValuesOnly() {
   for (const element of $("probe-grid").querySelectorAll(".tile")) {
     const tileId = element.dataset.tileId;
     if (!tileId || !values[tileId]) continue;
-    const live = values[tileId];
-    const valueEl = element.querySelector(".value");
-    if (valueEl && live.text) valueEl.textContent = live.text;
-    const tile = tilesById[tileId];
-    const fitEl = element.querySelector(".tile-fit-text");
-    if (fitEl && live.text && tile && tile.kind === "display") fitEl.textContent = live.text;
-    if (tile && tile.kind === "energyflow" && live.flows) {
-      element.innerHTML = buildEnergyFlowHtml(tile, live, "probe");
-    }
-    if (live.color) element.style.background = colorForTile(live.color);
+    applyLiveStateToProbeTile(element, tilesById[tileId], values[tileId]);
   }
+  probe.lastLive = new Date().toLocaleTimeString("de-DE");
   scheduleFitTileText($("probe-grid"));
 }
 
@@ -3515,7 +4004,20 @@ async function loadProbe(fullRender) {
   }
   const previous = probe.snapshot;
   probe.snapshot = await call("inspect", { id });
-  if (fullRender === false && previous && probe.snapshot.state && probe.snapshot.state.unchanged) {
+  const state = probe.snapshot.state || {};
+  if (state.unchanged && previous && previous.state && (previous.state.tiles || []).length) {
+    state.tiles = previous.state.tiles;
+    probe.snapshot.state = state;
+  }
+  const grid = $("probe-grid");
+  const hasTiles = grid.querySelectorAll(".tile").length > 0;
+  const layoutSame =
+    previous &&
+    previous.layout &&
+    probe.snapshot.layout &&
+    previous.layout.id === probe.snapshot.layout.id &&
+    (previous.layout.version || 0) === (probe.snapshot.layout.version || 0);
+  if (fullRender === false && (state.unchanged || (hasTiles && layoutSame))) {
     updateProbeValuesOnly();
     return;
   }
@@ -3556,14 +4058,18 @@ function probeTileFromLayout(tileId) {
   return null;
 }
 
-async function sendProbeAction(tile) {
+async function sendProbeAction(tile, options = {}) {
   const layoutTile = probeTileFromLayout(tile.tileId) || tile;
   if (!layoutTile.actionId) {
     setStatus("Kachel ist nicht schaltbar: In Details „Schaltbar“ aktivieren, Variable mit Aktion wählen, Entwurf speichern bzw. veröffentlichen.");
     return;
   }
   let value = "";
-  if (layoutTile.actionKind === "dim" || layoutTile.actionKind === "position") {
+  if (options.value != null && options.value !== "") {
+    value = String(options.value);
+  } else if (options.switchToggle) {
+    value = "";
+  } else if (layoutTile.actionKind === "dim" || layoutTile.actionKind === "position") {
     const entered = prompt("Wert", "50");
     if (entered === null) return;
     value = entered.trim();
