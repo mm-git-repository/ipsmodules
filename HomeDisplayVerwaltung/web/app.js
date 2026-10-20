@@ -20,10 +20,12 @@ const DISPLAY_PROFILES = {
   "firebeetle-epd-400x300": { label: "FireBeetle E-Ink 4,2\" (400×300)", width: 400, height: 300, defaultColumns: 3, defaultRows: 4, maxColumns: 3, maxRows: 4 },
   "firebeetle-epd-800x480": { label: "FireBeetle E-Ink 7,5\" (800×480)", width: 800, height: 480, defaultColumns: 4, defaultRows: 6, maxColumns: 4, maxRows: 6 }
 };
-const KIND_NAMES = { value: "Wert", display: "Nur Anzeige", energyflow: "Energiefluss", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", system: "Anzeigestatus" };
+const KIND_NAMES = { value: "Wert", display: "Nur Anzeige", chart: "Diagramm", energyflow: "Energiefluss", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", system: "Anzeigestatus", scene: "Szene", weather: "Wetter", presence: "Anwesenheit" };
+const CHART_PERIOD_LABELS = { "1h": "1 Stunde", "6h": "6 Stunden", "24h": "24 Stunden", "7d": "7 Tage" };
 const FLOW_SLOT_LABELS = {
   signed: {
-    grid: "Netz (±)",
+    gridImport: "Netz Bezug",
+    gridExport: "Netz Einspeisung",
     pv: "PV-Erzeugung",
     load: "Hausverbrauch",
     battery: "Batterie (±)",
@@ -64,7 +66,8 @@ function flowSlotMap(tile) {
     };
   }
   return {
-    grid: "gridVariableId",
+    gridImport: "gridImportVariableId",
+    gridExport: "gridExportVariableId",
     pv: "pvVariableId",
     load: "loadVariableId",
     battery: "batteryVariableId",
@@ -77,7 +80,7 @@ function flowConfigured(tile) {
   const mode = tile.flowMode || "signed";
   const need = mode === "split"
     ? ["gridImportVariableId", "gridExportVariableId", "pvVariableId", "batteryChargeVariableId", "batteryDischargeVariableId"]
-    : ["gridVariableId", "pvVariableId", "batteryVariableId"];
+    : ["gridImportVariableId", "gridExportVariableId", "pvVariableId", "batteryVariableId"];
   if (tile.homeOverride !== false) need.push("loadVariableId");
   return need.every((key) => tile[key]);
 }
@@ -98,9 +101,13 @@ function buildEnergyFlowHtml(tile, live, mode) {
     return `${editorKicker(mode, "Energiefluss")}<div class="energy-flow hint" style="padding:8px;font-size:12px">Alle Pflicht-Variablen zuweisen (Netz, PV, Batterie, ggf. Haus).</div>`;
   }
   const flows = (live && live.flows) || {};
+  const gridImport = flowNodeText(flows, "gridImport");
+  const gridExport = flowNodeText(flows, "gridExport");
+  const gridFallback = flowNodeText(flows, "grid");
   const labels = {
     pv: flowNodeText(flows, "pv"),
-    grid: flowNodeText(flows, "grid"),
+    gridImport: gridImport !== "—" ? gridImport : gridFallback,
+    gridExport: gridExport !== "—" ? gridExport : "—",
     load: flowNodeText(flows, "load"),
     battery: flowNodeText(flows, "battery")
   };
@@ -120,7 +127,7 @@ function buildEnergyFlowHtml(tile, live, mode) {
     path("M77 50 L59 50", "batteryToHome", "battery")
   ];
   const homeHint = flows.homeCalculated ? " (berechnet)" : "";
-  return `${editorKicker(mode, "Energiefluss")}<div class="energy-flow"><svg viewBox="0 0 100 72" class="flow-svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true">${paths.join("")}<circle cx="50" cy="52" r="9" fill="#1d3350" stroke="#5a7391"/><text class="flow-node" x="50" y="10" text-anchor="middle">PV</text><text class="flow-value" x="50" y="18" text-anchor="middle">${escapeHtml(labels.pv)}</text><text class="flow-node" x="11" y="55" text-anchor="start">Netz</text><text class="flow-value" x="11" y="63" text-anchor="start">${escapeHtml(labels.grid)}</text><text class="flow-node" x="50" y="55" text-anchor="middle">Haus${homeHint}</text><text class="flow-value" x="50" y="63" text-anchor="middle">${escapeHtml(labels.load)}</text><text class="flow-node" x="89" y="55" text-anchor="end">Akku</text><text class="flow-value" x="89" y="63" text-anchor="end">${escapeHtml(labels.battery)}</text>${soc ? `<text class="flow-value" x="89" y="48" text-anchor="end">${escapeHtml(soc)}</text>` : ""}</svg></div>`;
+  return `${editorKicker(mode, "Energiefluss")}<div class="energy-flow"><svg viewBox="0 0 100 78" class="flow-svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true">${paths.join("")}<circle cx="50" cy="52" r="9" fill="#1d3350" stroke="#5a7391"/><text class="flow-node" x="50" y="10" text-anchor="middle">PV</text><text class="flow-value" x="50" y="18" text-anchor="middle">${escapeHtml(labels.pv)}</text><text class="flow-node" x="11" y="52" text-anchor="start">Netz</text><text class="flow-value" x="11" y="60" text-anchor="start">↓ ${escapeHtml(labels.gridImport)}</text><text class="flow-value" x="11" y="68" text-anchor="start">↑ ${escapeHtml(labels.gridExport)}</text><text class="flow-node" x="50" y="55" text-anchor="middle">Haus${homeHint}</text><text class="flow-value" x="50" y="63" text-anchor="middle">${escapeHtml(labels.load)}</text><text class="flow-node" x="89" y="55" text-anchor="end">Akku</text><text class="flow-value" x="89" y="63" text-anchor="end">${escapeHtml(labels.battery)}</text>${soc ? `<text class="flow-value" x="89" y="48" text-anchor="end">${escapeHtml(soc)}</text>` : ""}</svg></div>`;
 }
 
 function fillFlowSlotSelect(tile) {
@@ -139,6 +146,7 @@ function fillFlowSlotSelect(tile) {
 
 function syncFlowPropertyPanels(tile) {
   const mode = (tile && tile.flowMode) || ($("p-flow-mode") && $("p-flow-mode").value) || "signed";
+  if ($("p-flow-grid-vars")) $("p-flow-grid-vars").classList.remove("hidden");
   if ($("p-flow-signed")) $("p-flow-signed").classList.toggle("hidden", mode === "split");
   if ($("p-flow-split")) $("p-flow-split").classList.toggle("hidden", mode !== "split");
   const homeOverride = tile ? tile.homeOverride !== false : ($("p-flow-home-override") && $("p-flow-home-override").checked);
@@ -166,53 +174,42 @@ function assignFlowVariable(tile, slot, variable, silent) {
 function scaledTileHtml(mainText, iconId, subText) {
   const icon = iconId ? `<div class="tile-fit-icon">${escapeHtml(iconName(iconId))}</div>` : "";
   const sub = subText ? `<div class="tile-fit-sub">${escapeHtml(subText)}</div>` : "";
-  return `<div class="tile-fit">${icon}<div class="tile-fit-text">${escapeHtml(mainText || "—")}</div>${sub}</div>`;
+  return `<div class="tile-scale tile-fit">${icon}<div class="tile-fit-text">${escapeHtml(mainText || "—")}</div>${sub}</div>`;
 }
 
-function fitTileFitBox(box) {
-  const textEl = box.querySelector(".tile-fit-text");
-  const iconEl = box.querySelector(".tile-fit-icon");
-  if (!textEl) return;
-  const maxW = box.clientWidth - 4;
-  const maxH = box.clientHeight - 4;
+function fitTileContentBox(box) {
+  if (!box) return;
+  const maxW = box.clientWidth - 2;
+  const maxH = box.clientHeight - 2;
   if (maxW <= 0 || maxH <= 0) return;
-  let iconH = 0;
-  if (iconEl && iconEl.textContent.trim()) {
-    let iLo = 8;
-    let iHi = Math.min(72, Math.floor(maxH * 0.45));
-    iconEl.style.fontSize = `${iLo}px`;
-    while (iLo < iHi) {
-      const mid = Math.ceil((iLo + iHi) / 2);
-      iconEl.style.fontSize = `${mid}px`;
-      if (iconEl.scrollWidth <= maxW && iconEl.scrollHeight <= maxH * 0.45) iLo = mid;
-      else iHi = mid - 1;
-    }
-    iconEl.style.fontSize = `${iLo}px`;
-    iconH = iconEl.offsetHeight + 4;
-  } else if (iconEl) {
-    iconEl.style.fontSize = "";
+  box.style.setProperty("--tile-scale", "1");
+  let lo = 0.35;
+  let hi = Math.min(8, maxH / 10, maxW / 12);
+  for (let i = 0; i < 14; i++) {
+    const mid = (lo + hi) / 2;
+    box.style.setProperty("--tile-scale", String(mid));
+    if (box.scrollWidth <= maxW && box.scrollHeight <= maxH) lo = mid;
+    else hi = mid;
   }
-  const textMaxH = maxH - iconH;
-  if (textMaxH <= 0) return;
-  let lo = 8;
-  let hi = Math.min(160, Math.floor(Math.min(maxW, textMaxH) * 0.95));
-  textEl.style.fontSize = `${lo}px`;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    textEl.style.fontSize = `${mid}px`;
-    if (textEl.scrollWidth <= maxW && textEl.scrollHeight <= textMaxH) lo = mid;
-    else hi = mid - 1;
-  }
-  textEl.style.fontSize = `${lo}px`;
+  box.style.setProperty("--tile-scale", String(lo));
 }
 
 function scheduleFitTileText(scope) {
   requestAnimationFrame(() => {
     const root = scope && scope.querySelectorAll ? scope : document.getElementById("grid");
     if (!root) return;
-    const nodes = root.querySelectorAll ? root.querySelectorAll(".tile-fit") : [];
-    for (const box of nodes) fitTileFitBox(box);
+    const nodes = root.querySelectorAll ? root.querySelectorAll(".tile-scale, .tile-fit") : [];
+    for (const box of nodes) fitTileContentBox(box);
   });
+}
+
+const tileFitObservers = new WeakMap();
+
+function observeTileFitRoot(root) {
+  if (!root || tileFitObservers.has(root)) return;
+  const observer = new ResizeObserver(() => scheduleFitTileText(root));
+  observer.observe(root);
+  tileFitObservers.set(root, observer);
 }
 
 function displayMainText(tile, live) {
@@ -223,8 +220,153 @@ function displayMainText(tile, live) {
   const sample = variable && (variable.type === 1 || variable.type === 2) ? "12,3" : "Ein";
   return tile.unit ? `${sample} ${tile.unit}` : sample;
 }
+
+function ohCardMarkup(label, stateHtml, bodyHtml, footHtml) {
+  const foot = footHtml ? `<div class="oh-card-foot">${footHtml}</div>` : "";
+  return `<div class="oh-card"><div class="oh-card-head"><span class="oh-card-label">${escapeHtml(label || "")}</span><span class="oh-card-state">${stateHtml}</span></div><div class="oh-card-body">${bodyHtml || ""}</div>${foot}</div>`;
+}
+
+function demoChartSeries(tile) {
+  const seed = (tile.tileId || "x").split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+  return Array.from({ length: 28 }, (_, i) => 10 + seed % 7 + Math.sin(i / 4) * 3 + i * 0.15);
+}
+
+function chartSeriesMinMax(series) {
+  if (!series || series.length < 1) return { min: 0, max: 1 };
+  let min = series[0];
+  let max = series[0];
+  for (const v of series) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  if (min === max) {
+    min -= 1;
+    max += 1;
+  }
+  return { min, max };
+}
+
+function chartSvgMarkup(series, style, min, max) {
+  if (!series || series.length < 2) return `<div class="chart-empty">Keine Verlaufsdaten</div>`;
+  const w = 100;
+  const h = 36;
+  const range = max - min || 1;
+  const points = series.map((v, i) => {
+    const x = (i / (series.length - 1)) * w;
+    const y = h - 2 - ((v - min) / range) * (h - 4);
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  const poly = points.join(" ");
+  const area = style === "area" ? `<polygon class="oh-chart-area" points="0,${h} ${poly} ${w},${h}"></polygon>` : "";
+  return `<svg class="oh-chart-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${area}<polyline class="oh-chart-line" points="${poly}"></polyline></svg>`;
+}
 const CONTROL_NAMES = { switch: "Schalter", dimSwitch: "Dimmschalter", slider: "Dimmbalken", combo: "Kombischalter", battery: "Batterie" };
+const INTERACTION_NAMES = { switch: "Schalter (Ein/Aus)", iconSwitch: "Icon-Schalter", dimSwitch: "Dimmschalter", slider: "Nur Dimmer", combo: "Kombi", battery: "Batterie", blinds: "Rolladen", setpoint: "Setpoint" };
+const INTERACTION_HINTS = {
+  switch: "Ein/Aus per Schalter an der Anzeige.",
+  iconSwitch: "Tipp schaltet um; das Symbol wechselt zwischen Ein und Aus.",
+  dimSwitch: "Schaltet den Dimmwert aus und stellt beim Einschalten den letzten Wert wieder her.",
+  slider: "Der Wert ändert sich nur, wenn der Griff gezogen wird. Tippen auf die Leiste bewirkt nichts.",
+  combo: "Schalter für Ein und Aus, Balken für den Dimmwert. Der Balken reagiert nur auf Ziehen am Griff.",
+  battery: "Ladestand grafisch, ohne Schaltaktion an der Anzeige.",
+  blinds: "Position 0–100 % oder Fahrt über schaltbare Variable (Aktionsart Position).",
+  setpoint: "Ist-Wert anzeigen, Sollwert mit +/- an der Anzeige ändern."
+};
 const DIM_CONTROLS = ["dimSwitch", "slider", "combo"];
+
+function tileInteractionMode(tile) {
+  if (!tile || tile.kind !== "value") return "switch";
+  if (tile.control === "battery") return "battery";
+  if (tile.control === "blinds") return "blinds";
+  if (tile.control === "setpoint") return "setpoint";
+  if (tile.control === "slider") return "slider";
+  if (tile.control === "combo") return "combo";
+  if (tile.control === "dimSwitch") return "dimSwitch";
+  if ((tile.iconMode || "static") === "toggle") return "iconSwitch";
+  return "switch";
+}
+
+function applyTileStatus(element, live, tile) {
+  const color = (live && live.color) || tile?.color || "neutral";
+  element.classList.remove("status-ok", "status-warn", "status-alarm", "status-neutral");
+  if (color === "ok") element.classList.add("status-ok");
+  else if (color === "warn") element.classList.add("status-warn");
+  else if (color === "alarm") element.classList.add("status-alarm");
+  else element.classList.add("status-neutral");
+  if (color !== "neutral" && color !== undefined) {
+    element.style.background = colorForTile(color);
+  }
+}
+
+function chartSeriesFromTile(tile, live) {
+  if (live && Array.isArray(live.seriesAll) && live.seriesAll.length) return live.seriesAll;
+  if (live && Array.isArray(live.series) && live.series.length >= 2) return [live.series];
+  return [demoChartSeries(tile)];
+}
+
+function chartSvgMulti(seriesList, style, min, max, yesterday) {
+  if (!seriesList || !seriesList.length) return `<div class="chart-empty">Keine Verlaufsdaten</div>`;
+  const w = 100;
+  const h = 36;
+  const range = max - min || 1;
+  const line = (series, className) => {
+    if (!series || series.length < 2) return "";
+    const points = series.map((v, i) => {
+      const x = (i / (series.length - 1)) * w;
+      const y = h - 2 - ((v - min) / range) * (h - 4);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    }).join(" ");
+    return `<polyline class="${className}" points="${points}"></polyline>`;
+  };
+  const primary = seriesList[0] || [];
+  let area = "";
+  if (style === "area" && primary.length >= 2) {
+    const pts = primary.map((v, i) => {
+      const x = (i / (primary.length - 1)) * w;
+      const y = h - 2 - ((v - min) / range) * (h - 4);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    }).join(" ");
+    area = `<polygon class="oh-chart-area" points="0,${h} ${pts} ${w},${h}"></polygon>`;
+  }
+  const extras = seriesList.slice(1).map((s) => line(s, "oh-chart-line oh-chart-line-alt")).join("");
+  const yesterdayLine = yesterday && yesterday.length >= 2 ? line(yesterday, "oh-chart-line oh-chart-yesterday") : "";
+  return `<svg class="oh-chart-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${area}${yesterdayLine}${line(primary, "oh-chart-line")}${extras}</svg>`;
+}
+
+function variableArchived(id) {
+  const v = variableById(id);
+  return v ? v.archived !== false : true;
+}
+
+function syncInteractionPropertyPanels() {
+  const interaction = $("p-interaction");
+  if (!interaction) return;
+  const tile = selectedTile();
+  if (!tile || tile.kind !== "value") return;
+  const mode = interaction.value;
+  $("p-icon-static")?.classList.toggle("hidden", mode === "iconSwitch" || mode === "battery");
+  $("p-icon-toggle")?.classList.toggle("hidden", mode !== "iconSwitch");
+  $("p-battery-wrap")?.classList.toggle("hidden", mode !== "battery");
+  const hintEl = $("p-control-hint");
+  if (hintEl) {
+    const hint = INTERACTION_HINTS[mode] || "";
+    hintEl.textContent = hint;
+    hintEl.classList.toggle("hidden", !hint);
+  }
+  const actionLabel = $("p-action")?.closest("label");
+  if (actionLabel) actionLabel.classList.toggle("hidden", mode === "battery");
+  if (DIM_CONTROLS.includes(mode)) {
+    if ($("p-actionkind")) $("p-actionkind").value = "dim";
+    const variable = variableById(tile.variableId);
+    if (variable && variable.action && $("p-action")) $("p-action").checked = true;
+  }
+  if (mode === "blinds" && $("p-actionkind")) {
+    $("p-actionkind").value = "position";
+    const variable = variableById(tile.variableId);
+    if (variable && variable.action && $("p-action")) $("p-action").checked = true;
+  }
+  $("p-setpoint-wrap")?.classList.toggle("hidden", mode !== "setpoint");
+}
 const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text"];
 const MEDIA_ROLES = {
   mediaId: "Medien-ID",
@@ -378,19 +520,34 @@ function profileLabel(profileId) {
   return meta ? meta.label : (profileId || "–");
 }
 
-function scaleDisplayScreen(viewportEl, screenEl, profile) {
+function scaleDisplayScreen(viewportEl, stageEl, screenEl, profile, retry = 0) {
   if (!viewportEl || !screenEl || !profile) return;
+  const stage = stageEl || screenEl;
+  const pad = 8;
+  const availW = viewportEl.clientWidth - pad;
+  const availH = viewportEl.clientHeight - pad;
+  if ((availW < 48 || availH < 48) && retry < 8) {
+    requestAnimationFrame(() => scaleDisplayScreen(viewportEl, stageEl, screenEl, profile, retry + 1));
+    return;
+  }
   screenEl.style.width = `${profile.width}px`;
   screenEl.style.height = `${profile.height}px`;
-  const scaleW = (viewportEl.clientWidth - 8) / profile.width;
-  const scaleH = viewportEl.clientHeight > 0 ? (viewportEl.clientHeight - 8) / profile.height : scaleW;
-  const scale = Math.min(1, scaleW, scaleH);
-  screenEl.style.transform = scale < 1 ? `scale(${scale})` : "";
-  screenEl.style.marginBottom = scale < 1 ? `${-(profile.height * (1 - scale))}px` : "";
+  const scale = Math.min(Math.max(availW, 1) / profile.width, Math.max(availH, 1) / profile.height, 1);
+  if (stage !== screenEl) {
+    stage.style.width = `${profile.width * scale}px`;
+    stage.style.height = `${profile.height * scale}px`;
+  }
+  screenEl.style.transform = `scale(${scale})`;
+  screenEl.style.marginBottom = "";
 }
 
 function scaleEditorViewport() {
-  scaleDisplayScreen($("editor-viewport"), $("editor-screen"), state.layout ? layoutProfile(state.layout) : null);
+  scaleDisplayScreen(
+    $("editor-viewport"),
+    $("editor-stage"),
+    $("editor-screen"),
+    state.layout ? layoutProfile(state.layout) : null
+  );
 }
 
 function probeSourceMode() {
@@ -426,8 +583,10 @@ function applyGridAspect() {
   const maxRow = profile.maxRows;
   $("columns").max = maxCol;
   $("rows").max = maxRow;
-  $("p-colspan").max = state.layout ? state.layout.columns : maxCol;
-  $("p-rowspan").max = state.layout ? state.layout.rows : maxRow;
+  const pColSpan = $("p-colspan");
+  const pRowSpan = $("p-rowspan");
+  if (pColSpan) pColSpan.max = state.layout ? state.layout.columns : maxCol;
+  if (pRowSpan) pRowSpan.max = state.layout ? state.layout.rows : maxRow;
   const meta = $("display-profile-meta");
   if (meta) meta.textContent = `${profile.label} · ${profile.width}×${profile.height} px`;
   scaleEditorViewport();
@@ -716,6 +875,7 @@ function renderGrid() {
     }
   }
   scheduleEditorTilePreviews();
+  observeTileFitRoot(grid);
   scheduleFitTileText(grid);
   scaleEditorViewport();
 }
@@ -866,39 +1026,88 @@ function buildTileElement(tile, context) {
   element.dataset.spanH = String(spanH);
   element.dataset.tileId = tile.tileId;
   Object.entries(tilePreviewStyle(tile)).forEach(([key, val]) => element.style.setProperty(key, val));
-  if (live && live.color) element.style.background = colorForTile(live.color);
+  if (tile.group) element.dataset.group = tile.group;
+  applyTileStatus(element, live, tile);
   element.draggable = mode === "edit";
   element.title = mode === "edit" ? `${KIND_NAMES[tile.kind]} – Doppelklick für Details` : "";
   if (tile.kind === "value") {
+    element.classList.add("oh-style");
     const variable = variableById(tile.variableId);
+    const interaction = tileInteractionMode(tile);
     const control = tile.control || "switch";
-    if (DIM_CONTROLS.includes(control)) element.classList.add("dim");
+    if (DIM_CONTROLS.includes(control) || control === "blinds") element.classList.add("dim");
     if (control === "battery") {
       element.classList.add("battery");
       const labelPos = tile.batteryLabel || "inside";
       if (labelPos !== "inside") element.classList.add(`label-${labelPos}`, "label-outside");
     }
+    if (control === "setpoint") element.classList.add("setpoint");
     const iconId = effectiveIcon(tile, live ? live.value : undefined, demoOn);
-    const kicker = CONTROL_NAMES[control] || `${iconName(iconId)}${tile.actionId ? " · schaltbar" : ""}`;
+    const kicker = INTERACTION_NAMES[interaction] || CONTROL_NAMES[control] || `${iconName(iconId)}${tile.actionId ? " · schaltbar" : ""}`;
     const body = controlMarkup(control, tile);
     const displayText = live && live.text ? live.text : (variable ? "12,3" : "—");
-    element.innerHTML = `${editorKicker(mode, kicker)}<div class="name"></div>${body || `<div class="value">${escapeHtml(displayText)}${tile.unit ? " " + escapeHtml(tile.unit) : ""}</div>`}`;
-    element.querySelector(".name").textContent = tile.title || (variable ? variable.name : "Wert");
+    const label = tile.title || (variable ? variable.name : "Wert");
+    const stateLine = escapeHtml(displayText) + (body ? "" : (tile.unit ? " " + escapeHtml(tile.unit) : ""));
+    const cardBody = body || (iconId ? `<div class="oh-card-icon">${escapeHtml(iconName(iconId))}</div>` : "");
+    element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, stateLine, cardBody)}</div>`;
     if (mode === "edit") bindControlPreview(element, tile);
   } else if (tile.kind === "nav") {
-    element.innerHTML = `${editorKicker(mode, `${tile.icon ? iconName(tile.icon) + " · " : ""}Seite`)}<div class="name"></div>`;
+    const navIcon = tile.icon ? `<div class="tile-fit-icon">${escapeHtml(iconName(tile.icon))}</div>` : "";
+    element.innerHTML = `${editorKicker(mode, `${tile.icon ? iconName(tile.icon) + " · " : ""}Seite`)}<div class="tile-scale">${navIcon}<div class="name"></div></div>`;
     element.querySelector(".name").textContent = tile.title || pageTitleIn(tile.targetPage);
   } else if (tile.kind === "label") {
-    element.innerHTML = scaledTileHtml(tile.text || "Text", "", "");
+    if ((tile.labelStyle || "text") === "section") {
+      element.classList.add("label-section");
+      element.innerHTML = `<div class="section-head">${escapeHtml(tile.text || "Abschnitt")}</div>`;
+    } else {
+      element.innerHTML = scaledTileHtml(tile.text || "Text", "", "");
+    }
   } else if (tile.kind === "display") {
-    element.innerHTML = scaledTileHtml(displayMainText(tile, live), tile.icon || "", "");
+    element.classList.add("oh-style");
+    const variable = variableById(tile.variableId);
+    const label = tile.title || (tile.displaySource === "text" ? "Text" : (variable ? variable.name : "Anzeige"));
+    const stateText = escapeHtml(displayMainText(tile, live));
+    const body = tile.icon ? `<div class="oh-card-icon">${escapeHtml(iconName(tile.icon))}</div>` : "";
+    element.innerHTML = `${editorKicker(mode, "Anzeige")}<div class="tile-scale">${ohCardMarkup(label, stateText, body)}</div>`;
+  } else if (tile.kind === "chart") {
+    element.classList.add("chart");
+    const variable = variableById(tile.variableId);
+    const label = tile.title || (variable ? variable.name : "Diagramm");
+    const stateText = live && live.text ? escapeHtml(live.text) : escapeHtml(tile.unit ? `12,3 ${tile.unit}` : "—");
+    const seriesList = chartSeriesFromTile(tile, live);
+    const flat = seriesList.flat();
+    const bounds = live && live.seriesMin != null && live.seriesMax != null
+      ? { min: live.seriesMin, max: live.seriesMax }
+      : chartSeriesMinMax(flat);
+    const style = tile.chartStyle || "area";
+    const yesterday = live && Array.isArray(live.seriesYesterday) ? live.seriesYesterday : [];
+    const chartHtml = chartSvgMulti(seriesList, style, bounds.min, bounds.max, yesterday);
+    const periodKey = tile.chartPeriod || "24h";
+    const periodLabel = CHART_PERIOD_LABELS[periodKey] || periodKey;
+    element.innerHTML = `${editorKicker(mode, `Diagramm · ${periodLabel}`)}<div class="tile-scale">${ohCardMarkup(label, stateText, chartHtml, escapeHtml(periodLabel))}</div>`;
   } else if (tile.kind === "energyflow") {
     element.classList.add("energyflow");
     element.innerHTML = buildEnergyFlowHtml(tile, live, mode);
+  } else if (tile.kind === "scene") {
+    element.classList.add("oh-style", "scene");
+    const label = tile.title || "Szene";
+    element.innerHTML = `${editorKicker(mode, "Szene")}<div class="tile-scale">${ohCardMarkup(label, tile.actionId ? "Tippen" : "—", `<div class="oh-card-icon">${escapeHtml(iconName(tile.icon || "home"))}</div>`)}</div>`;
+  } else if (tile.kind === "weather") {
+    element.classList.add("oh-style", "weather");
+    const label = tile.title || "Wetter";
+    const temp = live && live.text ? escapeHtml(live.text) : escapeHtml(tile.unit ? `12,3 ${tile.unit}` : "12,3 °C");
+    const forecast = live && live.forecast ? escapeHtml(live.forecast) : "leicht bewölkt";
+    element.innerHTML = `${editorKicker(mode, "Wetter")}<div class="tile-scale">${ohCardMarkup(label, temp, `<div class="oh-card-icon">${escapeHtml(iconName(tile.icon || "sun"))}</div>`, forecast)}</div>`;
+  } else if (tile.kind === "presence") {
+    element.classList.add("oh-style", "presence");
+    const label = tile.title || (tile.presenceMode === "alarm" ? "Alarm" : "Anwesenheit");
+    const active = live && live.presenceState === "active";
+    const stateLine = active ? (tile.presenceMode === "alarm" ? "ALARM" : "Da") : "Abwesend";
+    element.innerHTML = `${editorKicker(mode, tile.presenceMode === "alarm" ? "Alarm" : "Anwesenheit")}<div class="tile-scale">${ohCardMarkup(label, escapeHtml(stateLine), `<div class="presence-badge ${active ? "on" : "off"}"></div>`)}</div>`;
   } else if (tile.kind === "separator") {
     element.innerHTML = `<div class="line"></div>`;
   } else if (tile.kind === "system") {
-    element.innerHTML = `${editorKicker(mode, "Anzeigestatus")}<div class="name"></div><div class="text">Programm · WLAN · Laufzeit · Datenalter</div>`;
+    element.innerHTML = `${editorKicker(mode, "Anzeigestatus")}<div class="tile-scale"><div class="name"></div><div class="text">Programm · WLAN · Laufzeit · Datenalter</div></div>`;
     element.querySelector(".name").textContent = tile.title || "Anzeige";
   } else if (tile.kind === "image") {
     if ((tile.imageSource || "catalog") === "media") {
@@ -946,7 +1155,7 @@ function buildTileElement(tile, context) {
           ? (fromMedia ? `IPS-Medien: ${bound}` : "Snapshot über Bild-URL")
           : (fromMedia ? "Medien-Variable oder Medienobjekt wählen" : "Variable mit Bild-URL wählen");
       }
-      element.innerHTML = `${editorKicker(mode, fromMedia ? "Kamera · Medien" : "Kamera · Livebild")}<div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div>`;
+      element.innerHTML = `${editorKicker(mode, fromMedia ? "Kamera · Medien" : "Kamera · Livebild")}<div class="tile-scale"><div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div></div>`;
       element.querySelector(".name").textContent = tile.title || bound || "Kamera";
     }
   }
@@ -1016,6 +1225,12 @@ function controlMarkup(control, tile) {
     const pctInside = label === "inside" ? `<span class="battery-pct">72 %</span>` : "";
     const pctOutside = label !== "inside" ? `<span class="battery-pct">72 %</span>` : "";
     return `<div class="battery" style="padding:${pad}px">${pctOutside}<div class="battery-body"><div class="battery-fill" style="width:72%"></div></div><div class="battery-cap"></div>${pctInside}</div>`;
+  }
+  if (control === "blinds") {
+    return `<div class="ctl blinds"><button type="button" class="bl-btn">▲</button><div class="track"><div class="fill" style="width:40%"></div><div class="knob" style="left:40%"></div></div><button type="button" class="bl-btn">▼</button></div>`;
+  }
+  if (control === "setpoint") {
+    return `<div class="ctl setpoint"><button type="button" class="sp-btn">−</button><span class="sp-val">21,0 °C</span><button type="button" class="sp-btn">+</button></div>`;
   }
   return "";
 }
@@ -1101,7 +1316,7 @@ function bindDrop(target, col, row, existing) {
         assignVariable(existing, variable);
         return;
       }
-      if (existing && (existing.kind === "value" || existing.kind === "display")) {
+      if (existing && (existing.kind === "value" || existing.kind === "display" || existing.kind === "chart")) {
         assignVariable(existing, variable);
         return;
       }
@@ -1189,6 +1404,34 @@ function addTile(kind, col, row, variable, control) {
     tile.unit = "";
     tile.decimals = 0;
     if (variable) assignVariable(tile, variable, true);
+  } else if (kind === "chart") {
+    tile.colSpan = Math.min(2, state.layout.columns);
+    tile.rowSpan = Math.min(2, state.layout.rows);
+    tile.variableId = 0;
+    tile.chartPeriod = "24h";
+    tile.chartStyle = "area";
+    tile.unit = "";
+    tile.decimals = 1;
+    tile.icon = "temperature";
+    tile.title = tile.title || "Diagramm";
+    if (variable) assignVariable(tile, variable, true);
+  } else if (kind === "scene") {
+    tile.icon = "home";
+    tile.title = tile.title || "Szene";
+    tile.actionId = `a-${tile.tileId}`;
+  } else if (kind === "weather") {
+    tile.icon = "sun";
+    tile.unit = "°C";
+    tile.decimals = 1;
+    tile.title = tile.title || "Wetter";
+    tile.variableId = 0;
+    if (variable) assignVariable(tile, variable, true);
+  } else if (kind === "presence") {
+    tile.presenceMode = "home";
+    tile.title = tile.title || "Anwesenheit";
+    tile.variableId = 0;
+    tile.colSpan = Math.min(2, state.layout.columns);
+    if (variable) assignVariable(tile, variable, true);
   } else if (kind === "energyflow") {
     tile.colSpan = Math.min(2, state.layout.columns);
     tile.rowSpan = Math.min(2, state.layout.rows);
@@ -1197,7 +1440,6 @@ function addTile(kind, col, row, variable, control) {
     tile.unit = "W";
     tile.decimals = 0;
     tile.flowThreshold = 50;
-    tile.gridVariableId = 0;
     tile.pvVariableId = 0;
     tile.loadVariableId = 0;
     tile.batteryVariableId = 0;
@@ -1287,6 +1529,38 @@ function assignVariable(tile, variable, silent) {
   delete tile.mediaObjectId;
   if (tile.kind === "display") {
     tile.displaySource = "variable";
+    if (variable.unit) tile.unit = variable.unit;
+    if (variable.decimals != null) tile.decimals = variable.decimals;
+    delete tile.actionId;
+    delete tile.actionKind;
+    tile.confirm = false;
+    if (!tile.title) tile.title = variable.name;
+    tile.icon = tile.icon || guessIcon(variable);
+    if (!silent) {
+      markDirty();
+      renderGrid();
+      renderProperties();
+    }
+    return;
+  }
+  if (tile.kind === "weather" || tile.kind === "presence") {
+    tile.variableId = variable.id;
+    if (!tile.title) tile.title = variable.name;
+    if (variable.unit && tile.kind === "weather") tile.unit = variable.unit;
+    if (variable.decimals != null && tile.kind === "weather") tile.decimals = variable.decimals;
+    delete tile.actionId;
+    if (!silent) {
+      markDirty();
+      renderGrid();
+      renderProperties();
+    }
+    return;
+  }
+  if (tile.kind === "chart") {
+    if (variable.type !== 1 && variable.type !== 2) {
+      setStatus("Diagramm: bitte eine Ganzzahl- oder Dezimalvariable wählen.");
+      return;
+    }
     if (variable.unit) tile.unit = variable.unit;
     if (variable.decimals != null) tile.decimals = variable.decimals;
     delete tile.actionId;
@@ -1409,24 +1683,27 @@ function renderProperties() {
   }
   $("p-kind").value = KIND_NAMES[tile.kind];
   $("p-title").value = tile.title || "";
+  if ($("p-group")) $("p-group").value = tile.group || "";
   $("p-col").value = tile.col + 1;
   $("p-row").value = tile.row + 1;
   $("p-colspan").value = tile.colSpan || 1;
   $("p-rowspan").value = tile.rowSpan || 1;
   $("p-colspan").max = state.layout.columns;
   $("p-rowspan").max = state.layout.rows;
-  const iconMode = tile.iconMode || "static";
-  if ($("p-iconmode")) {
-    $("p-iconmode").value = iconMode;
-    $("p-icon-static").classList.toggle("hidden", iconMode === "toggle");
-    $("p-icon-toggle").classList.toggle("hidden", iconMode !== "toggle");
+  if (tile.kind === "nav") {
+    fillIconSelect($("p-icon"), true);
+    $("p-icon").value = tile.icon || "";
   }
-  fillIconSelect($("p-icon"), tile.kind === "nav");
-  fillIconSelect($("p-iconon"));
-  fillIconSelect($("p-iconoff"));
-  $("p-icon").value = tile.icon || "";
-  if ($("p-iconon")) $("p-iconon").value = tile.iconOn || "lightOn";
-  if ($("p-iconoff")) $("p-iconoff").value = tile.iconOff || "lightOff";
+  if (tile.kind === "value") {
+    fillIconSelect($("p-value-icon"), false);
+    $("p-value-icon").value = tile.icon || "";
+    fillIconSelect($("p-iconon"));
+    fillIconSelect($("p-iconoff"));
+    if ($("p-iconon")) $("p-iconon").value = tile.iconOn || "lightOn";
+    if ($("p-iconoff")) $("p-iconoff").value = tile.iconOff || "lightOff";
+    if ($("p-interaction")) $("p-interaction").value = tileInteractionMode(tile);
+    syncInteractionPropertyPanels();
+  }
   const variable = variableById(tile.variableId);
   const mediaObj = tile.mediaObjectId ? variableById(tile.mediaObjectId) : null;
   if (tile.kind === "camera" || tile.kind === "value") {
@@ -1438,19 +1715,11 @@ function renderProperties() {
   }
   $("p-unit").value = tile.unit || "";
   $("p-decimals").value = tile.decimals || 0;
-  $("p-control").value = tile.control || "switch";
-  const hints = {
-    dimSwitch: "Schaltet den Dimmwert aus und stellt beim Einschalten den letzten Wert wieder her.",
-    slider: "Der Wert ändert sich nur, wenn der Griff gezogen wird. Tippen auf die Leiste bewirkt nichts.",
-    combo: "Schalter für Ein und Aus, Balken für den Dimmwert. Der Balken reagiert nur auf Ziehen am Griff."
-  };
-  $("p-control-hint").textContent = hints[tile.control] || "";
-  $("p-control-hint").classList.toggle("hidden", !hints[tile.control]);
-  $("p-battery-wrap").classList.toggle("hidden", tile.control !== "battery");
   if ($("p-batterypad")) $("p-batterypad").value = tile.batteryPad != null ? tile.batteryPad : 8;
   if ($("p-batterylabel")) $("p-batterylabel").value = tile.batteryLabel || "inside";
   $("p-action").checked = Boolean(tile.actionId);
-  $("p-action").disabled = !(variable && variable.action);
+  const valueInteraction = tile.kind === "value" ? tileInteractionMode(tile) : null;
+  $("p-action").disabled = valueInteraction === "battery" || !(variable && variable.action);
   $("p-confirm").checked = Boolean(tile.confirm);
   $("p-actionkind").value = tile.actionKind || (DIM_CONTROLS.includes(tile.control) ? "dim" : (variable ? variable.actionKind || "switch" : "switch"));
   fillTargetSelect($("p-target"));
@@ -1473,14 +1742,55 @@ function renderProperties() {
     fillIconSelect($("p-display-icon"), false);
     $("p-display-icon").value = tile.icon || "";
   }
+  if (tile.kind === "chart") {
+    if ($("p-chart-period")) $("p-chart-period").value = tile.chartPeriod || "24h";
+    if ($("p-chart-style")) $("p-chart-style").value = tile.chartStyle || "area";
+    if ($("p-chart-unit")) $("p-chart-unit").value = tile.unit || "";
+    if ($("p-chart-decimals")) $("p-chart-decimals").value = tile.decimals ?? 1;
+    if ($("p-chart-y-mode")) $("p-chart-y-mode").value = tile.chartYMode || "auto";
+    if ($("p-chart-y-min")) $("p-chart-y-min").value = tile.chartYMin ?? "";
+    if ($("p-chart-y-max")) $("p-chart-y-max").value = tile.chartYMax ?? "";
+    if ($("p-chart-yesterday")) $("p-chart-yesterday").checked = Boolean(tile.chartCompareYesterday);
+    if ($("p-chart-refresh")) $("p-chart-refresh").value = tile.chartRefreshSec ?? 0;
+    if ($("p-chart-bitmap")) $("p-chart-bitmap").checked = tile.chartBitmap !== false;
+    if ($("p-chart-extra-ids")) {
+      const extra = (tile.chartSeries || []).slice(1).map((r) => r.variableId).filter(Boolean);
+      $("p-chart-extra-ids").value = extra.join(", ");
+    }
+    $("p-chart-y-fixed")?.classList.toggle("hidden", ($("p-chart-y-mode")?.value || "auto") !== "fixed");
+    const hint = $("p-chart-archive-hint");
+    if (hint) {
+      const ids = [tile.variableId, ...(tile.chartSeries || []).map((r) => r.variableId)].filter(Boolean);
+      const bad = ids.some((id) => !variableArchived(id));
+      hint.classList.toggle("hidden", !bad || ids.length === 0);
+    }
+  }
+  if (tile.kind === "label" && $("p-label-style")) $("p-label-style").value = tile.labelStyle || "text";
+  if (tile.kind === "scene") {
+    if ($("p-scene-action")) $("p-scene-action").checked = Boolean(tile.actionId);
+    if ($("p-scene-confirm")) $("p-scene-confirm").checked = Boolean(tile.confirm);
+  }
+  if (tile.kind === "weather") {
+    fillIconSelect($("p-weather-icon"), false);
+    if ($("p-weather-icon")) $("p-weather-icon").value = tile.icon || "sun";
+    const fv = variableById(tile.forecastVariableId);
+    if ($("p-weather-forecast")) {
+      $("p-weather-forecast").value = fv ? `${fv.path ? fv.path + " / " : ""}${fv.name} (${fv.id})` : "";
+    }
+  }
+  if (tile.kind === "presence" && $("p-presence-mode")) $("p-presence-mode").value = tile.presenceMode || "home";
+  if (tile.kind === "value" && tile.control === "setpoint") {
+    const sp = variableById(tile.setpointVariableId);
+    if ($("p-setpoint-var")) $("p-setpoint-var").value = sp ? `${sp.path ? sp.path + " / " : ""}${sp.name} (${sp.id})` : "";
+    if ($("p-setpoint-step")) $("p-setpoint-step").value = tile.setpointStep ?? 0.5;
+  }
   if (tile.kind === "energyflow") {
     if ($("p-flow-mode")) $("p-flow-mode").value = tile.flowMode || "signed";
     if ($("p-flow-home-override")) $("p-flow-home-override").checked = tile.homeOverride !== false;
     syncFlowPropertyPanels(tile);
-    if ($("p-flow-grid")) $("p-flow-grid").value = flowVarLabel(tile.gridVariableId);
-    if ($("p-flow-battery")) $("p-flow-battery").value = flowVarLabel(tile.batteryVariableId);
     if ($("p-flow-grid-import")) $("p-flow-grid-import").value = flowVarLabel(tile.gridImportVariableId);
     if ($("p-flow-grid-export")) $("p-flow-grid-export").value = flowVarLabel(tile.gridExportVariableId);
+    if ($("p-flow-battery")) $("p-flow-battery").value = flowVarLabel(tile.batteryVariableId);
     if ($("p-flow-battery-charge")) $("p-flow-battery-charge").value = flowVarLabel(tile.batteryChargeVariableId);
     if ($("p-flow-battery-discharge")) $("p-flow-battery-discharge").value = flowVarLabel(tile.batteryDischargeVariableId);
     if ($("p-flow-pv")) $("p-flow-pv").value = flowVarLabel(tile.pvVariableId);
@@ -1531,6 +1841,9 @@ function applyProperties() {
   const tile = selectedTile();
   if (!tile) return;
   tile.title = $("p-title").value;
+  const group = ($("p-group") && $("p-group").value.trim()) || "";
+  if (group) tile.group = group;
+  else delete tile.group;
   const col = Math.max(0, Number($("p-col").value) - 1);
   const row = Math.max(0, Number($("p-row").value) - 1);
   const colSpan = Math.max(1, Number($("p-colspan").value) || 1);
@@ -1543,27 +1856,45 @@ function applyProperties() {
   } else {
     setStatus("Position oder Größe passt nicht ins Raster.");
   }
-  if (tile.kind === "value" || tile.kind === "nav") {
-    if (tile.kind === "value" && $("p-iconmode") && $("p-iconmode").value === "toggle") {
-      tile.iconMode = "toggle";
-      tile.iconOn = $("p-iconon").value;
-      tile.iconOff = $("p-iconoff").value;
-    } else {
-      delete tile.iconMode;
-      delete tile.iconOn;
-      delete tile.iconOff;
-      tile.icon = $("p-icon").value;
-    }
-  }
   if (tile.kind === "nav") tile.icon = $("p-icon").value;
   if (tile.kind === "value") {
     tile.unit = $("p-unit").value;
     tile.decimals = Number($("p-decimals").value) || 0;
     const variable = variableById(tile.variableId);
-    const control = $("p-control").value || "switch";
-    tile.control = control === "switch" ? undefined : control;
-    if (control === "switch") delete tile.control;
-    if (control === "battery") {
+    const mode = ($("p-interaction") && $("p-interaction").value) || tileInteractionMode(tile);
+    delete tile.iconMode;
+    delete tile.iconOn;
+    delete tile.iconOff;
+    delete tile.control;
+    delete tile.batteryPad;
+    delete tile.batteryLabel;
+    if (mode === "iconSwitch") {
+      tile.iconMode = "toggle";
+      tile.iconOn = $("p-iconon").value;
+      tile.iconOff = $("p-iconoff").value;
+      delete tile.icon;
+    } else if (mode !== "battery") {
+      const iconVal = $("p-value-icon") ? $("p-value-icon").value : "";
+      if (iconVal) tile.icon = iconVal;
+      else delete tile.icon;
+    }
+    if (mode === "dimSwitch") tile.control = "dimSwitch";
+    else if (mode === "slider") tile.control = "slider";
+    else if (mode === "combo") tile.control = "combo";
+    else if (mode === "blinds") {
+      tile.control = "blinds";
+      tile.actionKind = "position";
+      tile.valueMin = tile.valueMin ?? 0;
+      tile.valueMax = tile.valueMax ?? 100;
+    } else if (mode === "setpoint") {
+      tile.control = "setpoint";
+      tile.actionKind = "dim";
+      tile.setpointStep = Number($("p-setpoint-step")?.value) || 0.5;
+      const spLabel = $("p-setpoint-var")?.value || "";
+      const spMatch = spLabel.match(/\((\d+)\)\s*$/);
+      tile.setpointVariableId = spMatch ? Number(spMatch[1]) : (tile.setpointVariableId || 0);
+    } else if (mode === "battery") {
+      tile.control = "battery";
       tile.valueMin = tile.valueMin ?? 0;
       tile.valueMax = tile.valueMax ?? 100;
       if (!tile.unit) tile.unit = "%";
@@ -1572,19 +1903,19 @@ function applyProperties() {
       delete tile.actionId;
       delete tile.actionKind;
       tile.confirm = false;
-    } else if (DIM_CONTROLS.includes(control)) {
+    } else if (DIM_CONTROLS.includes(mode)) {
       tile.actionKind = "dim";
       tile.valueMin = tile.valueMin ?? 0;
       tile.valueMax = tile.valueMax ?? 100;
       if (!tile.unit) tile.unit = "%";
     }
-    if ($("p-action").checked && variable && variable.action) {
+    if (mode !== "battery" && $("p-action").checked && variable && variable.action) {
       tile.actionId = tile.actionId || `a-${tile.tileId}`;
-      tile.actionKind = DIM_CONTROLS.includes(control) ? "dim" : $("p-actionkind").value;
+      tile.actionKind = mode === "blinds" ? "position" : (DIM_CONTROLS.includes(mode) || mode === "setpoint" ? "dim" : $("p-actionkind").value);
       tile.confirm = $("p-confirm").checked;
-    } else {
+    } else if (mode !== "battery") {
       delete tile.actionId;
-      if (!DIM_CONTROLS.includes(control)) delete tile.actionKind;
+      if (!DIM_CONTROLS.includes(mode)) delete tile.actionKind;
       tile.confirm = false;
     }
   }
@@ -1592,6 +1923,47 @@ function applyProperties() {
   if (tile.kind === "label") {
     tile.text = $("p-text").value;
     delete tile.size;
+  }
+  if (tile.kind === "chart") {
+    tile.chartPeriod = $("p-chart-period") ? $("p-chart-period").value : "24h";
+    tile.chartStyle = $("p-chart-style") ? $("p-chart-style").value : "area";
+    tile.unit = $("p-chart-unit") ? $("p-chart-unit").value : "";
+    tile.decimals = $("p-chart-decimals") ? Number($("p-chart-decimals").value) || 0 : 0;
+    tile.chartYMode = $("p-chart-y-mode") ? $("p-chart-y-mode").value : "auto";
+    if (tile.chartYMode === "fixed") {
+      tile.chartYMin = Number($("p-chart-y-min").value);
+      tile.chartYMax = Number($("p-chart-y-max").value);
+    } else {
+      delete tile.chartYMin;
+      delete tile.chartYMax;
+    }
+    tile.chartCompareYesterday = Boolean($("p-chart-yesterday")?.checked);
+    tile.chartRefreshSec = Number($("p-chart-refresh")?.value) || 0;
+    tile.chartBitmap = $("p-chart-bitmap") ? $("p-chart-bitmap").checked : true;
+    const extraRaw = ($("p-chart-extra-ids")?.value || "").split(/[,;\s]+/).map((s) => Number(s.trim())).filter((n) => n > 0);
+    const series = [{ variableId: tile.variableId || 0, label: "" }];
+    for (const id of extraRaw) series.push({ variableId: id, label: "" });
+    tile.chartSeries = series.filter((r) => r.variableId > 0);
+    if (tile.chartSeries.length <= 1 && tile.variableId) delete tile.chartSeries;
+  }
+  if (tile.kind === "label") {
+    tile.labelStyle = $("p-label-style") ? $("p-label-style").value : "text";
+  }
+  if (tile.kind === "scene") {
+    if ($("p-scene-action")?.checked) {
+      tile.actionId = tile.actionId || `a-${tile.tileId}`;
+      tile.confirm = Boolean($("p-scene-confirm")?.checked);
+    } else {
+      delete tile.actionId;
+      tile.confirm = false;
+    }
+    tile.icon = tile.icon || "home";
+  }
+  if (tile.kind === "weather") {
+    tile.icon = $("p-weather-icon") ? $("p-weather-icon").value : "sun";
+  }
+  if (tile.kind === "presence") {
+    tile.presenceMode = $("p-presence-mode") ? $("p-presence-mode").value : "home";
   }
   if (tile.kind === "display") {
     const source = $("p-displaysource") ? $("p-displaysource").value : "variable";
@@ -1644,16 +2016,20 @@ function applyProperties() {
   renderProperties();
 }
 
-$("p-control").addEventListener("change", () => {
-  if (DIM_CONTROLS.includes($("p-control").value)) {
-    $("p-actionkind").value = "dim";
-    const tile = selectedTile();
-    const variable = tile ? variableById(tile.variableId) : null;
-    if (variable && variable.action) $("p-action").checked = true;
-  }
-  applyProperties();
-});
-for (const id of ["p-title", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-iconmode", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode"]) {
+const pInteraction = $("p-interaction");
+if (pInteraction) {
+  pInteraction.addEventListener("change", () => {
+    syncInteractionPropertyPanels();
+    applyProperties();
+  });
+}
+if ($("p-chart-y-mode")) {
+  $("p-chart-y-mode").addEventListener("change", () => {
+    $("p-chart-y-fixed")?.classList.toggle("hidden", $("p-chart-y-mode").value !== "fixed");
+    applyProperties();
+  });
+}
+for (const id of ["p-title", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-scene-action", "p-scene-confirm", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
@@ -1667,13 +2043,6 @@ if ($("p-displaysource")) {
     const source = $("p-displaysource").value;
     $("p-display-variable").classList.toggle("hidden", source !== "variable");
     $("p-display-text").classList.toggle("hidden", source !== "text");
-  });
-}
-if ($("p-iconmode")) {
-  $("p-iconmode").addEventListener("change", () => {
-    $("p-icon-static").classList.toggle("hidden", $("p-iconmode").value === "toggle");
-    $("p-icon-toggle").classList.toggle("hidden", $("p-iconmode").value !== "toggle");
-    applyProperties();
   });
 }
 if ($("p-camerasource")) {
@@ -1703,20 +2072,23 @@ for (const id of ["resize-1x1", "resize-2x1", "resize-1x2", "resize-2x2", "resiz
     if (id === "resize-full-width") resizeTilePreset(state.layout.columns, tile.rowSpan || 1);
   });
 }
-$("display-profile").addEventListener("change", () => {
-  if (!state.layout) return;
-  state.layout.displayProfile = $("display-profile").value;
-  applyGridAspect();
-  markDirty();
-  if ($("probe-dialog").open && probeSourceMode() === "draft") {
-    loadProbe(true).catch((error) => setStatus(error.message));
-  }
-});
-$("p-details").addEventListener("click", () => {
+const displayProfileSelect = $("display-profile");
+if (displayProfileSelect) {
+  displayProfileSelect.addEventListener("change", () => {
+    if (!state.layout) return;
+    state.layout.displayProfile = displayProfileSelect.value;
+    applyGridAspect();
+    markDirty();
+    if ($("probe-dialog").open && probeSourceMode() === "draft") {
+      loadProbe(true).catch((error) => setStatus(error.message));
+    }
+  });
+}
+bindClick("p-details", () => {
   const tile = selectedTile();
   if (tile) openDetails(tile);
 });
-$("p-delete").addEventListener("click", deleteSelected);
+bindClick("p-delete", deleteSelected);
 
 /* ---------- Detaildialog ---------- */
 
@@ -1749,7 +2121,7 @@ function allFlowVariableKeys() {
 
 function appendEnergyFlowDetails(body, tile, fields, add, check, number, text) {
   const modeSelect = document.createElement("select");
-  modeSelect.innerHTML = '<option value="signed">Vorzeichen (±)</option><option value="split">Getrennt (Bezug / Einspeisung)</option>';
+  modeSelect.innerHTML = '<option value="signed">Batterie eine Variable (±)</option><option value="split">Batterie getrennt (Laden / Entladen)</option>';
   modeSelect.value = tile.flowMode || "signed";
   fields.flowMode = add("Berechnungsmodus", modeSelect);
   fields.homeOverride = add("Hausverbrauch aus Variable (sonst berechnet)", check(tile.homeOverride !== false));
@@ -1759,7 +2131,10 @@ function appendEnergyFlowDetails(body, tile, fields, add, check, number, text) {
   const splitSec = document.createElement("div");
   splitSec.className = "flow-section hidden";
   splitSec.dataset.flowSection = "split";
-  body.append(signedSec, splitSec);
+  const gridSec = document.createElement("div");
+  gridSec.className = "flow-section";
+  gridSec.dataset.flowSection = "grid";
+  body.append(gridSec, signedSec, splitSec);
   const relocate = (slot, parent, label, variableId) => {
     const picker = detailsVariableSelect(variableId, flowVariableFilter);
     fields[`flowSlot_${slot}`] = picker;
@@ -1768,7 +2143,9 @@ function appendEnergyFlowDetails(body, tile, fields, add, check, number, text) {
     wrap.appendChild(picker);
     parent.appendChild(wrap);
   };
-  const sharedSlots = new Set(["load", "pv", "soc"]);
+  relocate("gridImport", gridSec, "Netz Bezug", tile.gridImportVariableId);
+  relocate("gridExport", gridSec, "Netz Einspeisung", tile.gridExportVariableId);
+  const sharedSlots = new Set(["load", "pv", "soc", "gridImport", "gridExport"]);
   for (const [slot, label] of Object.entries(FLOW_SLOT_LABELS.signed)) {
     if (sharedSlots.has(slot)) continue;
     const prop = flowSlotMap({ flowMode: "signed" })[slot];
@@ -1789,7 +2166,7 @@ function appendEnergyFlowDetails(body, tile, fields, add, check, number, text) {
   body.appendChild(loadWrap);
   const socHint = document.createElement("p");
   socHint.className = "hint";
-  socHint.textContent = "Pflicht: Netz, PV und Batterie (je nach Modus). SOC optional. Kachel 2×2 empfohlen.";
+  socHint.textContent = "Pflicht: Netz Bezug, Netz Einspeisung, PV und Batterie (je nach Modus). SOC optional. Kachel 2×2 empfohlen.";
   body.appendChild(socHint);
   const unitRow = document.createElement("div");
   unitRow.className = "row";
@@ -1870,10 +2247,10 @@ function openDetails(tile) {
     fields.variable = add("Variable", picker);
     fields.unit = add("Einheit", text(tile.unit));
     fields.decimals = add("Nachkommastellen", number(tile.decimals || 0, 0, 3));
-    const control = document.createElement("select");
-    control.innerHTML = '<option value="switch">Schalter</option><option value="dimSwitch">Dimmschalter</option><option value="slider">Dimmbalken</option><option value="combo">Kombischalter</option><option value="battery">Batterie (Ladestand)</option>';
-    control.value = tile.control || "switch";
-    fields.control = add("Bedienung", control);
+    const interactionSel = document.createElement("select");
+    interactionSel.innerHTML = '<option value="switch">Schalter (Ein/Aus)</option><option value="iconSwitch">Icon-Schalter</option><option value="dimSwitch">Dimmschalter</option><option value="slider">Nur Dimmer</option><option value="combo">Kombi</option><option value="battery">Batterie (Ladestand)</option>';
+    interactionSel.value = tileInteractionMode(tile);
+    fields.interaction = add("Schalter / Bedienung", interactionSel);
     fields.action = add("Schaltbar", check(tile.actionId));
     fields.action.disabled = !(variable && variable.action);
     fields.confirm = add("Bestätigung an der Anzeige", check(tile.confirm));
@@ -1888,12 +2265,8 @@ function openDetails(tile) {
     color.innerHTML = '<option value="neutral">Neutral</option><option value="ok">Grün</option><option value="warn">Gelb</option><option value="alarm">Rot</option>';
     color.value = tile.color || "neutral";
     fields.color = add("Farbe über dem Schwellwert", color);
-    const iconModeSel = document.createElement("select");
-    iconModeSel.innerHTML = '<option value="static">Festes Symbol</option><option value="toggle">Ein/Aus-Symbol</option>';
-    iconModeSel.value = tile.iconMode || "static";
-    fields.iconMode = add("Symbolmodus", iconModeSel);
     const staticIconWrap = document.createElement("label");
-    staticIconWrap.textContent = "Symbol ";
+    staticIconWrap.textContent = "Symbol (optional) ";
     fields.icon = document.createElement("select");
     fillIconSelect(fields.icon, false);
     fields.icon.value = tile.icon || "";
@@ -1933,20 +2306,24 @@ function openDetails(tile) {
     batteryWrap.append(padWrap, labelWrap);
     body.appendChild(batteryWrap);
     const syncValueDetails = () => {
-      const toggle = iconModeSel.value === "toggle";
-      staticIconWrap.classList.toggle("hidden", toggle);
+      const mode = interactionSel.value;
+      const toggle = mode === "iconSwitch";
+      staticIconWrap.classList.toggle("hidden", toggle || mode === "battery");
       toggleIconWrap.classList.toggle("hidden", !toggle);
-      batteryWrap.classList.toggle("hidden", control.value !== "battery");
-      if (DIM_CONTROLS.includes(control.value)) fields.actionKind.value = "dim";
+      batteryWrap.classList.toggle("hidden", mode !== "battery");
+      const chosenVar = variableById(Number(picker.value));
+      fields.action.disabled = mode === "battery" || !(chosenVar && chosenVar.action);
+      if (mode === "battery") fields.action.checked = false;
+      if (DIM_CONTROLS.includes(mode)) fields.actionKind.value = "dim";
     };
-    iconModeSel.addEventListener("change", syncValueDetails);
-    control.addEventListener("change", syncValueDetails);
+    interactionSel.addEventListener("change", syncValueDetails);
     syncValueDetails();
     picker.addEventListener("change", () => {
       const chosen = variableById(Number(picker.value));
       fields.action.disabled = !(chosen && chosen.action);
       if (!fields.action.disabled) fields.actionKind.value = chosen.actionKind || "switch";
       if (!fields.title.value && chosen) fields.title.value = chosen.name;
+      syncValueDetails();
     });
   }
   if (tile.kind === "nav") {
@@ -1984,6 +2361,37 @@ function openDetails(tile) {
     fields.icon = add("Symbol", document.createElement("select"));
     fillIconSelect(fields.icon, false);
     fields.icon.value = tile.icon || "";
+  }
+  if (tile.kind === "chart") {
+    const picker = document.createElement("select");
+    picker.innerHTML = '<option value="0">Keine Variable</option>';
+    for (const item of state.variables) {
+      if (item.type !== 1 && item.type !== 2) continue;
+      const option = document.createElement("option");
+      option.value = String(item.id);
+      option.textContent = `${item.path ? item.path + " / " : ""}${item.name} (${item.id})`;
+      picker.appendChild(option);
+    }
+    picker.value = String(tile.variableId || 0);
+    fields.variable = add("Variable", picker);
+    const period = document.createElement("select");
+    period.innerHTML = '<option value="1h">1 Stunde</option><option value="6h">6 Stunden</option><option value="24h">24 Stunden</option><option value="7d">7 Tage</option>';
+    period.value = tile.chartPeriod || "24h";
+    fields.chartPeriod = add("Zeitraum", period);
+    const style = document.createElement("select");
+    style.innerHTML = '<option value="area">Fläche</option><option value="line">Linie</option>';
+    style.value = tile.chartStyle || "area";
+    fields.chartStyle = add("Darstellung", style);
+    fields.unit = add("Einheit", text(tile.unit));
+    fields.decimals = add("Nachkommastellen", number(tile.decimals ?? 1, 0, 3));
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "Karte im openHAB-Stil: aktueller Wert oben rechts, Verlauf darunter. Variable muss im Archiv protokolliert sein.";
+    body.appendChild(hint);
+    picker.addEventListener("change", () => {
+      const chosen = variableById(Number(picker.value));
+      if (!fields.title.value && chosen) fields.title.value = chosen.name;
+    });
   }
   if (tile.kind === "image") {
     const imgSource = document.createElement("select");
@@ -2089,22 +2497,24 @@ function openDetails(tile) {
       tile.variableId = chosen ? chosen.id : 0;
       tile.unit = fields.unit.value;
       tile.decimals = Number(fields.decimals.value) || 0;
-      const control = fields.control.value || "switch";
-      if (control === "switch") delete tile.control;
-      else tile.control = control;
-      if (DIM_CONTROLS.includes(control)) fields.actionKind.value = "dim";
-      if (fields.iconMode && fields.iconMode.value === "toggle") {
+      const mode = fields.interaction.value || "switch";
+      delete tile.control;
+      delete tile.iconMode;
+      delete tile.iconOn;
+      delete tile.iconOff;
+      delete tile.icon;
+      if (mode === "iconSwitch") {
         tile.iconMode = "toggle";
         tile.iconOn = fields.iconOn.value;
         tile.iconOff = fields.iconOff.value;
-        delete tile.icon;
-      } else if (fields.icon) {
-        delete tile.iconMode;
-        delete tile.iconOn;
-        delete tile.iconOff;
+      } else if (mode !== "battery" && fields.icon) {
         tile.icon = fields.icon.value;
       }
-      if (control === "battery") {
+      if (mode === "dimSwitch") tile.control = "dimSwitch";
+      else if (mode === "slider") tile.control = "slider";
+      else if (mode === "combo") tile.control = "combo";
+      else if (mode === "battery") {
+        tile.control = "battery";
         tile.valueMin = Number(fields.valueMin.value);
         tile.valueMax = Number(fields.valueMax.value);
         tile.batteryPad = Number(fields.batteryPad.value) || 8;
@@ -2114,7 +2524,7 @@ function openDetails(tile) {
         tile.confirm = false;
       } else if (fields.action.checked && chosen && chosen.action) {
         tile.actionId = tile.actionId || `a-${tile.tileId}`;
-        tile.actionKind = DIM_CONTROLS.includes(control) ? "dim" : fields.actionKind.value;
+        tile.actionKind = DIM_CONTROLS.includes(mode) ? "dim" : fields.actionKind.value;
         tile.confirm = fields.confirm.checked;
         tile.valueMin = Number(fields.valueMin.value);
         tile.valueMax = Number(fields.valueMax.value);
@@ -2122,7 +2532,7 @@ function openDetails(tile) {
         delete tile.batteryLabel;
       } else {
         delete tile.actionId;
-        if (!DIM_CONTROLS.includes(control)) delete tile.actionKind;
+        if (!DIM_CONTROLS.includes(mode)) delete tile.actionKind;
         delete tile.valueMin;
         delete tile.valueMax;
         delete tile.batteryPad;
@@ -2156,6 +2566,13 @@ function openDetails(tile) {
         tile.decimals = Number(fields.decimals.value) || 0;
         delete tile.text;
       }
+    }
+    if (tile.kind === "chart") {
+      tile.variableId = Number(fields.variable.value) || 0;
+      tile.chartPeriod = fields.chartPeriod.value || "24h";
+      tile.chartStyle = fields.chartStyle.value || "area";
+      tile.unit = fields.unit.value;
+      tile.decimals = Number(fields.decimals.value) || 0;
     }
     if (tile.kind === "image") {
       const source = fields.imageSource.value || "catalog";
@@ -2356,7 +2773,20 @@ function renderVariableTree() {
           assignCameraMedia(tile, variable);
           return;
         }
-        if (tile && (tile.kind === "value" || tile.kind === "display")) {
+        if (tile && tile.kind === "weather" && variable.type === 3) {
+          tile.forecastVariableId = variable.id;
+          markDirty();
+          renderProperties();
+          return;
+        }
+        if (tile && tile.kind === "value" && tileInteractionMode(tile) === "setpoint" && tile.variableId && tile.variableId !== variable.id && (variable.type === 1 || variable.type === 2)) {
+          tile.setpointVariableId = variable.id;
+          markDirty();
+          renderProperties();
+          setStatus("Sollwert-Variable zugewiesen.");
+          return;
+        }
+        if (tile && (tile.kind === "value" || tile.kind === "display" || tile.kind === "chart" || tile.kind === "weather" || tile.kind === "presence")) {
           assignVariable(tile, variable);
           return;
         }
@@ -2448,6 +2878,24 @@ function validateLayout(layout) {
         if (src === "text" && !(tile.text || "").trim()) throw new Error(`Die Anzeigekachel „${tile.title || tile.tileId}“ braucht Text.`);
         if (src === "variable" && !tile.variableId) throw new Error(`Die Anzeigekachel „${tile.title || tile.tileId}“ braucht eine Variable.`);
       }
+      if (tile.kind === "chart" && !tile.variableId) {
+        throw new Error(`Die Diagrammkachel „${tile.title || tile.tileId}“ braucht eine Variable (Archiv-Protokollierung).`);
+      }
+      if (tile.kind === "chart") {
+        const ids = [tile.variableId, ...(tile.chartSeries || []).map((r) => r.variableId)].filter(Boolean);
+        for (const id of ids) {
+          if (!variableArchived(id)) throw new Error(`Diagramm „${tile.title || tile.tileId}“: Variable ${id} ist nicht archiviert.`);
+        }
+      }
+      if (tile.kind === "scene" && !tile.actionId) throw new Error(`Szene „${tile.title || tile.tileId}“ braucht eine Aktion.`);
+      if (tile.kind === "weather" && !tile.variableId) throw new Error(`Wetter „${tile.title || tile.tileId}“ braucht eine Temperaturvariable.`);
+      if (tile.kind === "presence" && !tile.variableId) throw new Error(`Anwesenheit „${tile.title || tile.tileId}“ braucht eine Variable.`);
+      if (tile.kind === "value" && tile.control === "setpoint" && !tile.setpointVariableId) {
+        throw new Error(`Setpoint „${tile.title || tile.tileId}“ braucht eine Sollwert-Variable (zweiter Klick im Baum).`);
+      }
+      if (tile.kind === "value" && tile.control === "blinds" && !tile.actionId) {
+        throw new Error(`Rolladen „${tile.title || tile.tileId}“ braucht eine schaltbare Variable.`);
+      }
       if (tile.kind === "energyflow" && !flowConfigured(tile)) {
         throw new Error(`Energiefluss „${tile.title || tile.tileId}“: alle Pflicht-Variablen zuweisen (siehe Eigenschaften).`);
       }
@@ -2464,7 +2912,11 @@ function validateLayout(layout) {
 }
 
 async function store(publish) {
-  if (!state.layout) return;
+  if (!state.layout) {
+    setStatus("Keine Ansicht geladen.");
+    return;
+  }
+  setStatus(publish ? "Veröffentliche …" : "Speichere …");
   try {
     state.layout.columns = Number($("columns").value) || 2;
     state.layout.rows = Number($("rows").value) || 4;
@@ -2485,23 +2937,34 @@ async function store(publish) {
       }
     }
     const result = await call(publish ? "publish" : "save", { layout: state.layout });
-    if (!result.ok) throw new Error(result.error || "Speichern fehlgeschlagen");
+    if (result && result.ok === false) throw new Error(result.error || "Speichern fehlgeschlagen");
     const previousId = state.layout.id;
     const previousName = state.layout.name;
     state.catalog = await call("catalog");
-    const saved = state.catalog.layouts.find((item) => previousId ? item.id === previousId : item.name === previousName);
+    const saved = state.catalog.layouts.find((item) => (previousId ? item.id === previousId : item.name === previousName));
+    state.dirty = false;
     if (saved) selectLayout(saved);
+    else updateTitle();
     renderLayoutSelect();
     setStatus(publish ? "Ansicht veröffentlicht. Die Anzeigen übernehmen sie beim nächsten Abruf." : "Entwurf gespeichert.");
   } catch (error) {
-    setStatus(error.message);
+    setStatus(error.message || "Speichern fehlgeschlagen.");
   }
 }
 
-$("save").addEventListener("click", () => store(false));
-$("publish").addEventListener("click", () => store(true));
-$("tb-save").addEventListener("click", () => store(false));
-$("tb-publish").addEventListener("click", () => store(true));
+function bindClick(id, handler) {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener("click", (event) => {
+    event.preventDefault();
+    handler(event);
+  });
+}
+
+bindClick("save", () => store(false));
+bindClick("publish", () => store(true));
+bindClick("tb-save", () => store(false));
+bindClick("tb-publish", () => store(true));
 $("new-layout").addEventListener("click", () => newLayout(prompt("Name der neuen Ansicht", "Neue Ansicht") || "Neue Ansicht"));
 $("template-layout").addEventListener("click", () => {
   fillProfileSelect($("t-display-profile"), state.layout ? state.layout.displayProfile : defaultProfileId());
@@ -2561,7 +3024,9 @@ $("layout-select").addEventListener("change", () => {
   selectLayout(layout);
 });
 for (const id of ["columns", "rows", "show-tabs"]) {
-  $(id).addEventListener("change", () => {
+  const field = $(id);
+  if (!field) continue;
+  field.addEventListener("change", () => {
     if (!state.layout) return;
     const columns = Math.min(4, Math.max(1, Number($("columns").value) || 2));
     const rows = Math.min(6, Math.max(1, Number($("rows").value) || 4));
@@ -2847,7 +3312,7 @@ let probe = { page: "", snapshot: null, panels: [], probeImageUrls: {}, probeIma
 
 function scaleProbeViewport() {
   const profile = probe.snapshot && probe.snapshot.layout ? layoutProfile(probe.snapshot.layout) : DISPLAY_PROFILES[defaultProfileId()];
-  scaleDisplayScreen($("probe-viewport"), $("probe-screen"), profile);
+  scaleDisplayScreen($("probe-viewport"), $("probe-stage"), $("probe-screen"), profile);
 }
 
 function updateProbeValuesOnly() {
@@ -3001,8 +3466,9 @@ function renderProbe() {
     element.dataset.tileId = tile.tileId;
     grid.appendChild(element);
   }
-  scaleProbeViewport();
+  observeTileFitRoot(grid);
   scheduleFitTileText(grid);
+  scaleProbeViewport();
   probe.lastLive = new Date().toLocaleTimeString("de-DE");
 }
 
@@ -3142,6 +3608,10 @@ async function openProbe() {
     return;
   }
   $("probe-dialog").showModal();
+  requestAnimationFrame(() => {
+    scaleProbeViewport();
+    scheduleFitTileText($("probe-grid"));
+  });
   startProbeTimer();
 }
 
@@ -3176,6 +3646,23 @@ $("probe-refresh").addEventListener("click", () => loadProbe(true).catch((error)
 $("open-probe").addEventListener("click", openProbe);
 
 /* ---------- Start ---------- */
+
+function installEditorDragGuards() {
+  const arm = () => document.body.classList.add("editor-dragging");
+  const disarm = () => document.body.classList.remove("editor-dragging");
+  document.addEventListener("dragstart", arm, true);
+  document.addEventListener("dragend", disarm, true);
+  document.addEventListener("drop", disarm, true);
+  document.addEventListener("mouseup", disarm, true);
+  document.addEventListener("selectstart", (event) => {
+    if (!document.body.classList.contains("editor-dragging")) return;
+    const target = event.target;
+    if (target && target.closest && target.closest("button, input, textarea, select, label")) return;
+    event.preventDefault();
+  });
+}
+
+installEditorDragGuards();
 
 async function start() {
   try {

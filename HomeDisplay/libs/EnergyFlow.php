@@ -13,9 +13,13 @@ final class HomeDisplayEnergyFlow
     /** @param array<string, mixed> $tile @return list<string> */
     public static function variablePropertyKeys(array $tile): array
     {
-        $keys = self::mode($tile) === 'split'
-            ? ['gridImportVariableId', 'gridExportVariableId', 'pvVariableId', 'batteryChargeVariableId', 'batteryDischargeVariableId']
-            : ['gridVariableId', 'pvVariableId', 'batteryVariableId'];
+        $keys = ['gridImportVariableId', 'gridExportVariableId', 'pvVariableId'];
+        if (self::mode($tile) === 'split') {
+            $keys[] = 'batteryChargeVariableId';
+            $keys[] = 'batteryDischargeVariableId';
+        } else {
+            $keys[] = 'batteryVariableId';
+        }
         if (self::homeOverride($tile)) {
             $keys[] = 'loadVariableId';
         }
@@ -49,17 +53,13 @@ final class HomeDisplayEnergyFlow
         $tol = max(0.0, (float) ($tile['flowThreshold'] ?? 15));
         $homeOverride = self::homeOverride($tile);
 
+        $gridIn = max(0.0, (float) ($readings['gridImport'] ?? 0));
+        $gridOut = max(0.0, (float) ($readings['gridExport'] ?? 0));
+        $pv = max(0.0, (float) ($readings['pv'] ?? 0));
         if (self::mode($tile) === 'split') {
-            $gridIn = max(0.0, (float) ($readings['gridImport'] ?? 0));
-            $gridOut = max(0.0, (float) ($readings['gridExport'] ?? 0));
-            $pv = max(0.0, (float) ($readings['pv'] ?? 0));
             $batIn = max(0.0, (float) ($readings['batteryCharge'] ?? 0));
             $batOut = max(0.0, (float) ($readings['batteryDischarge'] ?? 0));
         } else {
-            $gridSigned = (float) ($readings['grid'] ?? 0);
-            $gridIn = max(0.0, $gridSigned);
-            $gridOut = max(0.0, -$gridSigned);
-            $pv = max(0.0, (float) ($readings['pv'] ?? 0));
             $batSigned = (float) ($readings['battery'] ?? 0);
             $batIn = max(0.0, $batSigned);
             $batOut = max(0.0, -$batSigned);
@@ -107,6 +107,8 @@ final class HomeDisplayEnergyFlow
         $batSigned = $batIn - $batOut;
 
         $nodes = [
+            'gridImport' => self::node($gridIn, $decimals, $unit),
+            'gridExport' => self::node($gridOut, $decimals, $unit),
             'grid' => self::node($gridSigned, $decimals, $unit),
             'pv' => self::node($pv, $decimals, $unit),
             'load' => self::node($home, $decimals, $unit),
@@ -115,6 +117,8 @@ final class HomeDisplayEnergyFlow
 
         $soc = $readings['soc'] ?? null;
         $result = [
+            'gridImport' => $nodes['gridImport'],
+            'gridExport' => $nodes['gridExport'],
             'grid' => $nodes['grid'],
             'pv' => $nodes['pv'],
             'load' => $nodes['load'],

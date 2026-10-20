@@ -260,6 +260,7 @@ class HomeDisplay extends IPSModuleStrict
                 'mediaRole' => $mediaRole,
                 'action' => (int) ($variable['VariableAction'] ?? 0) > 0 || (int) ($variable['VariableCustomAction'] ?? 0) > 0,
                 'actionKind' => $this->actionKind($variable),
+                'archived' => HomeDisplayChart::variableLogged($variableId),
             ];
             if (count($rows) >= 5000) {
                 break;
@@ -519,6 +520,10 @@ class HomeDisplay extends IPSModuleStrict
             }
             if ($method === 'GET' && preg_match('#^/v1/camera/([A-Za-z0-9_-]{1,40})$#', $route, $match) === 1) {
                 $this->sendCameraSnapshot($device, $match[1]);
+                return;
+            }
+            if ($method === 'GET' && preg_match('#^/v1/chart/([A-Za-z0-9_-]{1,40})$#', $route, $match) === 1) {
+                $this->sendChartSnapshot($device, $match[1]);
                 return;
             }
             if ($method === 'GET' && preg_match('#^/v1/media/([A-Za-z0-9_-]{1,40})$#', $route, $match) === 1) {
@@ -988,6 +993,26 @@ class HomeDisplay extends IPSModuleStrict
                     $tiles[] = $this->energyFlowStateTile($tile, $tileId, $pending);
                     continue;
                 }
+                if ($kind === 'chart') {
+                    $tiles[] = $this->chartStateTile($tile, $tileId, $instanceId);
+                    continue;
+                }
+                if ($kind === 'scene') {
+                    $tiles[] = [
+                        'tileId' => $tileId,
+                        'quality' => trim((string) ($tile['actionId'] ?? '')) !== '' ? 'ok' : 'empty',
+                        'pending' => isset($pending[$tileId]),
+                    ];
+                    continue;
+                }
+                if ($kind === 'weather') {
+                    $tiles[] = $this->weatherStateTile($tile, $tileId);
+                    continue;
+                }
+                if ($kind === 'presence') {
+                    $tiles[] = $this->presenceStateTile($tile, $tileId);
+                    continue;
+                }
                 if ($kind !== 'value' && $kind !== 'display') {
                     continue;
                 }
@@ -1030,6 +1055,185 @@ class HomeDisplay extends IPSModuleStrict
             'now' => time(),
             'tiles' => $tiles,
         ];
+    }
+
+    /** @var array<string, array{at: int, payload: array<string, mixed>}> */
+    private array $chartStateCache = [];
+
+    /** @param array<string, mixed> $tile @return array<string, mixed> */
+    private function chartStateTile(array $tile, string $tileId, int $instanceId): array
+    {
+        $refresh = max(0, (int) ($tile['chartRefreshSec'] ?? 0));
+        if ($refresh > 0) {
+            $cacheKey = $instanceId . ':' . $tileId;
+            $cached = $this->chartStateCache[$cacheKey] ?? null;
+            if (is_array($cached) && (time() - (int) $cached['at']) < $refresh && is_array($cached['payload'])) {
+                return $cached['payload'];
+            }
+        }
+        $period = HomeDisplayChart::normalizePeriod((string) ($tile['chartPeriod'] ?? '24h'));
+        $defs = HomeDisplayChart::seriesDefinitions($tile);
+        $primaryId = $defs !== [] ? (int) $defs[0]['variableId'] : (int) ($tile['variableId'] ?? 0);
+        $text = '—';
+        $quality = 'empty';
+        $value = null;
+        $seriesList = [];
+        foreach ($defs as $def) {
+            $variableId = (int) $def['variableId'];
+            if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
+                continue;
+            }
+            $points = HomeDisplayChart::series($variableId, $period);
+            if ($points !== []) {
+                $seriesList[] = $points;
+            }
+        }
+        $series = $seriesList !== [] ? $seriesList[0] : [];
+        if ($primaryId > 0 && IPS_VariableExists($primaryId)) {
+            $text = $this->formatVariable($primaryId, $tile);
+            $raw = GetValue($primaryId);
+            if (is_bool($raw) || is_int($raw) || is_float($raw)) {
+                $value = $raw;
+            } elseif (is_string($raw) && is_numeric($raw)) {
+                $value = str_contains($raw, '.') ? (float) $raw : (int) $raw;
+            }
+            $quality = ($series !== [] && count($series) >= 2) || $value !== null ? 'ok' : 'empty';
+        }
+        [$min, $max] = HomeDisplayChart::yBounds($tile, $seriesList);
+        $yesterday = [];
+        if (!empty($tile['chartCompareYesterday']) && $primaryId > 0) {
+            $yesterday = HomeDisplayChart::seriesYesterday($primaryId, $period);
+        }
+        $payload = [
+            'tileId' => $tileId,
+            'text' => $text,
+            'value' => $value,
+            'quality' => $quality,
+            'series' => $series,
+            'seriesAll' => $seriesList,
+            'seriesYesterday' => $yesterday,
+            'seriesMin' => $min,
+            'seriesMax' => $max,
+            'chartSeq' => (int) sprintf('%u', crc32(json_encode($seriesList) . '|' . $text)),
+        ];
+        if ($refresh > 0) {
+            $this->chartStateCache[$instanceId . ':' . $tileId] = ['at' => time(), 'payload' => $payload];
+        }
+
+        return $payload;
+    }
+
+    /** @param array<string, mixed> $tile @return array<string, mixed> */
+    private function weatherStateTile(array $tile, string $tileId): array
+    {
+        $variableId = (int) ($tile['variableId'] ?? 0);
+        $text = '—';
+        $forecast = '';
+        $quality = 'empty';
+        if ($variableId > 0 && IPS_VariableExists($variableId)) {
+            $text = $this->formatVariable($variableId, $tile);
+            $quality = 'ok';
+        }
+        $forecastId = (int) ($tile['forecastVariableId'] ?? 0);
+        if ($forecastId > 0 && IPS_VariableExists($forecastId)) {
+            $raw = GetValue($forecastId);
+            if (is_string($raw)) {
+                $forecast = $raw;
+            } elseif (is_scalar($raw)) {
+                $forecast = (string) $raw;
+            }
+        }
+
+        return [
+            'tileId' => $tileId,
+            'text' => $text,
+            'forecast' => $forecast,
+            'quality' => $quality,
+        ];
+    }
+
+    /** @param array<string, mixed> $tile @return array<string, mixed> */
+    private function presenceStateTile(array $tile, string $tileId): array
+    {
+        $variableId = (int) ($tile['variableId'] ?? 0);
+        $mode = (string) ($tile['presenceMode'] ?? 'home');
+        $text = '—';
+        $state = 'unknown';
+        $quality = 'empty';
+        if ($variableId > 0 && IPS_VariableExists($variableId)) {
+            $raw = GetValue($variableId);
+            $text = $this->formatVariable($variableId, $tile);
+            $quality = 'ok';
+            if (is_bool($raw)) {
+                $state = $raw ? 'active' : 'inactive';
+            } elseif (is_numeric($raw)) {
+                $state = ((float) $raw) > 0 ? 'active' : 'inactive';
+            } else {
+                $state = trim((string) $raw) !== '' ? 'active' : 'inactive';
+            }
+        }
+
+        return [
+            'tileId' => $tileId,
+            'text' => $text,
+            'presenceState' => $state,
+            'presenceMode' => $mode,
+            'quality' => $quality,
+        ];
+    }
+
+    /** @param array{id: int, token: string} $device */
+    private function sendChartSnapshot(array $device, string $tileId): void
+    {
+        $layout = $this->activeLayout($device['id']);
+        $tile = $this->findTileInLayout(is_array($layout) ? $layout : [], $tileId);
+        if ($tile === null || (string) ($tile['kind'] ?? '') !== 'chart') {
+            http_response_code(404);
+            $this->json(['error' => 'chart']);
+            return;
+        }
+        $state = $this->chartStateTile($tile, $tileId, $device['id']);
+        $seriesList = is_array($state['seriesAll'] ?? null) ? $state['seriesAll'] : [];
+        if ($seriesList === [] && is_array($state['series'] ?? null)) {
+            $seriesList = [$state['series']];
+        }
+        $yesterday = is_array($state['seriesYesterday'] ?? null) ? $state['seriesYesterday'] : [];
+        $w = max(80, (int) ($_GET['w'] ?? 320));
+        $h = max(60, (int) ($_GET['h'] ?? 180));
+        $png = HomeDisplayChartRender::png(
+            $w,
+            $h,
+            $seriesList,
+            $yesterday,
+            (float) ($state['seriesMin'] ?? 0),
+            (float) ($state['seriesMax'] ?? 1),
+            HomeDisplayChart::normalizeStyle((string) ($tile['chartStyle'] ?? 'area'))
+        );
+        if ($png === '') {
+            http_response_code(503);
+            $this->json(['error' => 'render']);
+            return;
+        }
+        header('Content-Type: image/png');
+        header('Cache-Control: no-cache');
+        echo $png;
+    }
+
+    /** @param array<string, mixed> $layout @return array<string, mixed>|null */
+    private function findTileInLayout(array $layout, string $tileId): ?array
+    {
+        foreach ($layout['pages'] ?? [] as $page) {
+            if (!is_array($page)) {
+                continue;
+            }
+            foreach ($page['tiles'] ?? [] as $tile) {
+                if (is_array($tile) && (string) ($tile['tileId'] ?? '') === $tileId) {
+                    return $tile;
+                }
+            }
+        }
+
+        return null;
     }
 
     /** @param array<string, mixed> $tile @param array<string, mixed> $pending @return array<string, mixed> */
@@ -1079,26 +1283,28 @@ class HomeDisplay extends IPSModuleStrict
             }
             return null;
         };
+        $gridImport = $read((int) ($tile['gridImportVariableId'] ?? 0));
+        $gridExport = $read((int) ($tile['gridExportVariableId'] ?? 0));
+        if ($gridImport === null && $gridExport === null) {
+            $gridSigned = $read((int) ($tile['gridVariableId'] ?? 0));
+            if ($gridSigned !== null) {
+                $gridImport = max(0.0, $gridSigned);
+                $gridExport = max(0.0, -$gridSigned);
+            }
+        }
+        $out = [
+            'gridImport' => $gridImport,
+            'gridExport' => $gridExport,
+            'pv' => $read((int) ($tile['pvVariableId'] ?? 0)),
+            'load' => HomeDisplayEnergyFlow::homeOverride($tile)
+                ? $read((int) ($tile['loadVariableId'] ?? 0))
+                : null,
+        ];
         if (HomeDisplayEnergyFlow::mode($tile) === 'split') {
-            $out = [
-                'gridImport' => $read((int) ($tile['gridImportVariableId'] ?? 0)),
-                'gridExport' => $read((int) ($tile['gridExportVariableId'] ?? 0)),
-                'pv' => $read((int) ($tile['pvVariableId'] ?? 0)),
-                'batteryCharge' => $read((int) ($tile['batteryChargeVariableId'] ?? 0)),
-                'batteryDischarge' => $read((int) ($tile['batteryDischargeVariableId'] ?? 0)),
-                'load' => HomeDisplayEnergyFlow::homeOverride($tile)
-                    ? $read((int) ($tile['loadVariableId'] ?? 0))
-                    : null,
-            ];
+            $out['batteryCharge'] = $read((int) ($tile['batteryChargeVariableId'] ?? 0));
+            $out['batteryDischarge'] = $read((int) ($tile['batteryDischargeVariableId'] ?? 0));
         } else {
-            $out = [
-                'grid' => $read((int) ($tile['gridVariableId'] ?? 0)),
-                'pv' => $read((int) ($tile['pvVariableId'] ?? 0)),
-                'battery' => $read((int) ($tile['batteryVariableId'] ?? 0)),
-                'load' => HomeDisplayEnergyFlow::homeOverride($tile)
-                    ? $read((int) ($tile['loadVariableId'] ?? 0))
-                    : null,
-            ];
+            $out['battery'] = $read((int) ($tile['batteryVariableId'] ?? 0));
         }
         $socId = (int) ($tile['batterySocVariableId'] ?? 0);
         if ($socId > 0) {

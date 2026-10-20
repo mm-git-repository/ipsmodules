@@ -83,6 +83,10 @@
             <div class="palette-item" draggable="true" data-kind="value" data-control="battery">Batterie</div>
             <div class="palette-item" draggable="true" data-kind="nav">Seitenwechsler</div>
             <div class="palette-item" draggable="true" data-kind="display">Nur Anzeige</div>
+            <div class="palette-item" draggable="true" data-kind="chart">Diagramm</div>
+            <div class="palette-item" draggable="true" data-kind="scene">Szene</div>
+            <div class="palette-item" draggable="true" data-kind="weather">Wetter</div>
+            <div class="palette-item" draggable="true" data-kind="presence">Anwesenheit</div>
             <div class="palette-item" draggable="true" data-kind="energyflow">Energiefluss</div>
             <div class="palette-item" draggable="true" data-kind="label">Text</div>
             <div class="palette-item" draggable="true" data-kind="image">Bild</div>
@@ -111,8 +115,10 @@
       </div>
       <div id="grid-wrap">
         <div id="editor-viewport">
-          <div id="editor-screen">
-            <div id="grid"></div>
+          <div id="editor-stage">
+            <div id="editor-screen">
+              <div id="grid"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -124,6 +130,9 @@
       <form id="prop-form" class="hidden">
         <label>Art <input id="p-kind" readonly></label>
         <label>Titel <input id="p-title"></label>
+        <label>Gruppe (Frame)
+          <input id="p-group" placeholder="z. B. Wohnzimmer" maxlength="40">
+        </label>
         <div class="row">
           <label>Spalte <input id="p-col" type="number" min="1"></label>
           <label>Zeile <input id="p-row" type="number" min="1"></label>
@@ -132,16 +141,103 @@
           <label>Breite <input id="p-colspan" type="number" min="1" max="4" value="1"></label>
           <label>Höhe <input id="p-rowspan" type="number" min="1" max="6" value="1"></label>
         </div>
-        <div data-for="value nav">
-          <label>Symbolmodus
-            <select id="p-iconmode">
-              <option value="static">Fest</option>
-              <option value="toggle">Wechsel (Ein–Aus)</option>
+        <div data-for="nav">
+          <label>Symbol
+            <select id="p-icon"></select>
+          </label>
+        </div>
+        <div data-for="value camera chart">
+          <label>Variable <input id="p-variable" readonly placeholder="Aus dem Variablenbaum wählen"></label>
+        </div>
+        <div data-for="chart">
+          <label>Zeitraum
+            <select id="p-chart-period">
+              <option value="1h">1 Stunde</option>
+              <option value="6h">6 Stunden</option>
+              <option value="24h" selected>24 Stunden</option>
+              <option value="7d">7 Tage</option>
             </select>
           </label>
+          <label>Darstellung
+            <select id="p-chart-style">
+              <option value="area">Fläche</option>
+              <option value="line">Linie</option>
+            </select>
+          </label>
+          <div class="row">
+            <label>Einheit <input id="p-chart-unit"></label>
+            <label>Nachkommastellen <input id="p-chart-decimals" type="number" min="0" max="3" value="1"></label>
+          </div>
+          <label>Y-Achse
+            <select id="p-chart-y-mode">
+              <option value="auto">Automatisch</option>
+              <option value="fixed">Fest (Min/Max)</option>
+            </select>
+          </label>
+          <div class="row" id="p-chart-y-fixed">
+            <label>Min <input id="p-chart-y-min" type="number" step="any"></label>
+            <label>Max <input id="p-chart-y-max" type="number" step="any"></label>
+          </div>
+          <label><input id="p-chart-yesterday" type="checkbox"> Gestern vergleichen</label>
+          <label>Aktualisierung (Sek., 0 = wie Live)
+            <input id="p-chart-refresh" type="number" min="0" max="86400" value="0">
+          </label>
+          <label><input id="p-chart-bitmap" type="checkbox" checked> Als Bitmap an E-Ink</label>
+          <label>Weitere Reihen (Variablen-IDs, kommagetrennt)
+            <input id="p-chart-extra-ids" placeholder="z. B. 12345, 12346">
+          </label>
+          <p id="p-chart-archive-hint" class="hint hidden">Variable ist nicht archiviert – Diagramm bleibt leer.</p>
+          <p class="hint">openHAB-Karte: Ist-Wert oben rechts, Verlauf darunter. Mindestens 2×2 Felder.</p>
+        </div>
+        <div data-for="label">
+          <label>Stil
+            <select id="p-label-style">
+              <option value="text">Text</option>
+              <option value="section">Abschnitt (Frame)</option>
+            </select>
+          </label>
+        </div>
+        <div data-for="scene">
+          <label><input id="p-scene-action" type="checkbox"> Schaltbar (Aktion)</label>
+          <label><input id="p-scene-confirm" type="checkbox"> Bestätigung</label>
+          <p class="hint">Szene löst eine freigegebene IPS-Aktion aus (openHAB-Rule).</p>
+        </div>
+        <div data-for="weather">
+          <label>Prognose-Variable <input id="p-weather-forecast" readonly placeholder="Textvariable"></label>
+          <label>Symbol <select id="p-weather-icon"></select></label>
+        </div>
+        <div data-for="presence">
+          <label>Modus
+            <select id="p-presence-mode">
+              <option value="home">Anwesenheit</option>
+              <option value="alarm">Alarm</option>
+            </select>
+          </label>
+        </div>
+        <div data-for="value">
+          <div class="row">
+            <label>Einheit <input id="p-unit"></label>
+            <label>Nachkommastellen <input id="p-decimals" type="number" min="0" max="3" value="0"></label>
+          </div>
+          <label>Schalter / Bedienung
+            <select id="p-interaction">
+              <option value="switch">Schalter (Ein/Aus)</option>
+              <option value="iconSwitch">Icon-Schalter</option>
+              <option value="dimSwitch">Dimmschalter</option>
+              <option value="slider">Nur Dimmer</option>
+              <option value="combo">Kombi</option>
+              <option value="battery">Batterie (Ladestand)</option>
+              <option value="blinds">Rolladen</option>
+              <option value="setpoint">Setpoint (Heizung)</option>
+            </select>
+          </label>
+          <div id="p-setpoint-wrap" class="hidden">
+            <label>Sollwert-Variable <input id="p-setpoint-var" readonly placeholder="Aus dem Baum wählen"></label>
+            <label>Schritt <input id="p-setpoint-step" type="number" step="0.1" value="0.5"></label>
+          </div>
           <div id="p-icon-static">
-            <label>Symbol
-              <select id="p-icon"></select>
+            <label>Symbol (optional)
+              <select id="p-value-icon"></select>
             </label>
           </div>
           <div id="p-icon-toggle" class="hidden">
@@ -152,24 +248,6 @@
               <select id="p-iconoff"></select>
             </label>
           </div>
-        </div>
-        <div data-for="value camera">
-          <label>Variable <input id="p-variable" readonly placeholder="Aus dem Variablenbaum wählen"></label>
-        </div>
-        <div data-for="value">
-          <div class="row">
-            <label>Einheit <input id="p-unit"></label>
-            <label>Nachkommastellen <input id="p-decimals" type="number" min="0" max="3" value="0"></label>
-          </div>
-          <label>Bedienung
-            <select id="p-control">
-              <option value="switch">Schalter</option>
-              <option value="dimSwitch">Dimmschalter</option>
-              <option value="slider">Dimmbalken</option>
-              <option value="combo">Kombischalter</option>
-              <option value="battery">Batterie (Ladestand)</option>
-            </select>
-          </label>
           <div data-for="value" id="p-battery-wrap" class="hidden">
             <label>Ränder (px) <input id="p-batterypad" type="number" min="0" max="48" value="8"></label>
             <label>Prozent-Anzeige
@@ -223,23 +301,24 @@
           <p class="hint">Nur Anzeige – ohne Schalten. Wert und Symbol füllen die Kachel.</p>
         </div>
         <div data-for="energyflow">
-          <label>Modus
+          <label>Modus (Batterie)
             <select id="p-flow-mode">
-              <option value="signed">Eine Variable je Kreis (Vorzeichen)</option>
-              <option value="split">Getrennt (Bezug/Einspeisung, Laden/Entladen)</option>
+              <option value="signed">Batterie eine Variable (±)</option>
+              <option value="split">Batterie getrennt (Laden / Entladen)</option>
             </select>
           </label>
-          <p class="hint">Orientierung: Power Flow Card Plus. Netz + = Bezug, − = Einspeisung. Batterie + = Laden, − = Entladen. PV nur Erzeugung (≥ 0).</p>
+          <p class="hint">Netz immer zwei Variablen: Bezug (≥ 0) und Einspeisung (≥ 0). PV nur Erzeugung. Modus betrifft nur die Batterie (Power Flow Card Plus).</p>
           <label>Zuweisen für
             <select id="p-flow-slot"></select>
           </label>
+          <div id="p-flow-grid-vars">
+            <label>Netz Bezug <input id="p-flow-grid-import" readonly placeholder="Pflicht"></label>
+            <label>Netz Einspeisung <input id="p-flow-grid-export" readonly placeholder="Pflicht"></label>
+          </div>
           <div id="p-flow-signed">
-            <label>Netz (±) <input id="p-flow-grid" readonly placeholder="Pflicht"></label>
             <label>Batterie (±) <input id="p-flow-battery" readonly placeholder="Pflicht"></label>
           </div>
           <div id="p-flow-split" class="hidden">
-            <label>Netz Bezug <input id="p-flow-grid-import" readonly placeholder="Pflicht"></label>
-            <label>Netz Einspeisung <input id="p-flow-grid-export" readonly placeholder="Pflicht"></label>
             <label>Batterie Laden <input id="p-flow-battery-charge" readonly placeholder="Pflicht"></label>
             <label>Batterie Entladen <input id="p-flow-battery-discharge" readonly placeholder="Pflicht"></label>
           </div>
@@ -364,7 +443,7 @@
   </dialog>
 
   <dialog id="probe-dialog">
-    <form method="dialog">
+    <form method="dialog" class="probe-form">
       <h3>Prüfen</h3>
       <p class="hint">Live-Vorschau im gewählten Display-Profil (Auflösung wie Waveshare oder FireBeetle E-Ink). Aktionen werden in IP-Symcon wirklich ausgeführt.</p>
       <fieldset class="probe-source">
@@ -377,9 +456,11 @@
       <label class="small"><input id="probe-live" type="checkbox" checked> Live (Intervall aus Anzeige-Konfiguration)</label>
       <div id="probe-pages" class="probe-pages"></div>
       <div id="probe-viewport">
-        <div id="probe-screen">
-          <div id="probe-tabs" class="hidden"></div>
-          <div id="probe-grid"></div>
+        <div id="probe-stage">
+          <div id="probe-screen">
+            <div id="probe-tabs" class="hidden"></div>
+            <div id="probe-grid"></div>
+          </div>
         </div>
       </div>
       <div class="row right">

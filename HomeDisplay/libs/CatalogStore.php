@@ -9,6 +9,8 @@ declare(strict_types=1);
 require_once __DIR__ . '/Media.php';
 require_once __DIR__ . '/EnergyFlow.php';
 require_once __DIR__ . '/PanelSchema.php';
+require_once __DIR__ . '/Chart.php';
+require_once __DIR__ . '/ChartRender.php';
 
 final class HomeDisplayCatalogStore
 {

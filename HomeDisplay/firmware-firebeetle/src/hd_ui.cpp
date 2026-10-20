@@ -17,6 +17,14 @@
 static int currentPage = 0;
 static unsigned long lastButtonMs = 0;
 static bool lastButton = true;
+static String lastStateDigest;
+
+static uint32_t hashString(const char *text) {
+  uint32_t hash = 5381;
+  if (!text) return hash;
+  while (*text) hash = ((hash << 5) + hash) + static_cast<uint8_t>(*text++);
+  return hash;
+}
 
 static String readFile(const char *path) {
   if (!LittleFS.exists(path)) return "";
@@ -65,6 +73,43 @@ static void drawFitTile(Adafruit_GFX *gfx, int16_t x, int16_t y, int16_t w, int1
   gfx->setTextSize(mainSize);
   gfx->setCursor(x + (w - tw) / 2, cy);
   gfx->print(mainText);
+}
+
+static void drawChartTile(Adafruit_GFX *gfx, JsonObject tile, JsonObjectConst st, int16_t x, int16_t y, int16_t w, int16_t h) {
+  gfx->drawRect(x, y, w, h, GxEPD_BLACK);
+  const char *title = tile["title"] | "Chart";
+  const char *stateText = st["text"] | "—";
+  gfx->setTextSize(1);
+  gfx->setTextColor(GxEPD_BLACK);
+  gfx->setCursor(x + 3, y + 9);
+  gfx->print(title);
+  int16_t tw = static_cast<int16_t>(strlen(stateText)) * 6;
+  gfx->setCursor(x + w - tw - 3, y + 9);
+  gfx->print(stateText);
+  gfx->drawFastHLine(x + 2, y + 12, w - 4, GxEPD_BLACK);
+  JsonArrayConst series = st["series"].as<JsonArrayConst>();
+  if (series.isNull() || series.size() < 2) return;
+  float minV = st["seriesMin"] | series[0].as<float>();
+  float maxV = st["seriesMax"] | series[0].as<float>();
+  if (maxV <= minV) {
+    maxV = minV + 1.0f;
+  }
+  int16_t chartY = y + 14;
+  int16_t chartH = h - 18;
+  int16_t chartX = x + 3;
+  int16_t chartW = w - 6;
+  if (chartH < 4 || chartW < 4) return;
+  size_t n = series.size();
+  int16_t px = chartX;
+  int16_t py = chartY + chartH;
+  for (size_t i = 0; i < n; i++) {
+    float v = series[i].as<float>();
+    int16_t nx = chartX + static_cast<int16_t>((chartW * static_cast<int32_t>(i)) / static_cast<int32_t>(n - 1));
+    int16_t ny = chartY + chartH - static_cast<int16_t>(((v - minV) / (maxV - minV)) * chartH);
+    if (i > 0) gfx->drawLine(px, py, nx, ny, GxEPD_BLACK);
+    px = nx;
+    py = ny;
+  }
 }
 
 static void drawBattery(Adafruit_GFX *gfx, int16_t x, int16_t y, int16_t w, int16_t h, float pct) {
@@ -251,6 +296,16 @@ static void drawPage(Adafruit_GFX *gfx) {
       drawFitTile(gfx, x, y, w, h, "", mainText);
     } else if (strcmp(kind, "energyflow") == 0) {
       drawEnergyFlowTile(gfx, tile, st, x, y, w, h);
+    } else if (strcmp(kind, "chart") == 0) {
+      drawChartTile(gfx, tile, st, x, y, w, h);
+    } else if (strcmp(kind, "scene") == 0) {
+      drawFitTile(gfx, x, y, w, h, "Szene", tile["title"] | "Scene");
+    } else if (strcmp(kind, "weather") == 0) {
+      const char *mainText = st["text"] | "—";
+      drawFitTile(gfx, x, y, w, h, "Wetter", mainText);
+    } else if (strcmp(kind, "presence") == 0) {
+      const char *mainText = st["text"] | "—";
+      drawFitTile(gfx, x, y, w, h, "Status", mainText);
     } else if (strcmp(kind, "nav") == 0) {
       gfx->drawRect(x, y, w, h, GxEPD_BLACK);
       gfx->setCursor(x + 4, y + h / 2);
@@ -278,6 +333,14 @@ void hdUiBegin() {
 
 void hdUiRefreshFromDisk() {
   String layoutJson = readFile("/layout.json");
+  String stateJson = readFile("/state.json");
+  if (stateJson.length()) {
+    uint32_t crc = hashString(stateJson.c_str());
+    char digest[12];
+    snprintf(digest, sizeof(digest), "%08lx", static_cast<unsigned long>(crc));
+    if (lastStateDigest == digest) return;
+    lastStateDigest = digest;
+  }
   if (layoutJson.length()) {
     JsonDocument layoutDoc;
     if (deserializeJson(layoutDoc, layoutJson) == DeserializationError::Ok) {

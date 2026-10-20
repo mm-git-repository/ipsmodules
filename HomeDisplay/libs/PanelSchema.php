@@ -57,12 +57,14 @@ final class HomeDisplayPanelSchema
     ];
 
     /** system: Diagnosekachel, die das Panel selbst mit Firmware, WLAN, Laufzeit und Datenalter füllt. */
-    public const KINDS = ['value', 'display', 'energyflow', 'nav', 'label', 'image', 'camera', 'separator', 'system'];
+    public const KINDS = ['value', 'display', 'chart', 'energyflow', 'nav', 'label', 'image', 'camera', 'separator', 'system', 'scene', 'weather', 'presence'];
+
+    public const LABEL_STYLES = ['text', 'section'];
 
     public const ACTIONS = ['switch', 'dim', 'position'];
 
     /** switch: Tippen. dimSwitch: Ein/Aus eines Dimmwerts. slider: nur Ziehen. combo: Schalter und Balken. battery: Ladestand grafisch. */
-    public const CONTROLS = ['switch', 'dimSwitch', 'slider', 'combo', 'battery'];
+    public const CONTROLS = ['switch', 'dimSwitch', 'slider', 'combo', 'battery', 'blinds', 'setpoint'];
 
     public const COLORS = ['neutral', 'ok', 'warn', 'alarm'];
 
@@ -127,6 +129,10 @@ final class HomeDisplayPanelSchema
                     throw new InvalidArgumentException('Ungültige Kachel.');
                 }
                 self::rejectForeignKeys($tile);
+                $group = trim((string) ($tile['group'] ?? ''));
+                if ($group !== '' && mb_strlen($group) > 40) {
+                    throw new InvalidArgumentException('Gruppenname ist zu lang (max. 40 Zeichen).');
+                }
                 $tileId = (string) ($tile['tileId'] ?? '');
                 if ($tileId === '' || isset($seen[$tileId]) || !preg_match('/^[A-Za-z0-9_-]{1,40}$/', $tileId)) {
                     throw new InvalidArgumentException('Jede Kachel braucht eine eigene tileId.');
@@ -203,11 +209,62 @@ final class HomeDisplayPanelSchema
                     'colSpan' => max(1, (int) ($tile['colSpan'] ?? 1)),
                     'rowSpan' => max(1, (int) ($tile['rowSpan'] ?? 1)),
                 ];
+                $group = trim((string) ($tile['group'] ?? ''));
+                if ($group !== '') {
+                    $public['group'] = mb_substr($group, 0, 40);
+                }
                 if ($kind === 'nav') {
                     $public['targetPage'] = (string) ($tile['targetPage'] ?? 'start');
                 }
                 if ($kind === 'label') {
                     $public['text'] = (string) ($tile['text'] ?? '');
+                    $labelStyle = (string) ($tile['labelStyle'] ?? 'text');
+                    $public['labelStyle'] = in_array($labelStyle, self::LABEL_STYLES, true) ? $labelStyle : 'text';
+                }
+                if ($kind === 'chart') {
+                    $public['chartPeriod'] = HomeDisplayChart::normalizePeriod((string) ($tile['chartPeriod'] ?? '24h'));
+                    $public['chartStyle'] = HomeDisplayChart::normalizeStyle((string) ($tile['chartStyle'] ?? 'area'));
+                    $public['chartYMode'] = HomeDisplayChart::normalizeYMode((string) ($tile['chartYMode'] ?? 'auto'));
+                    if ($public['chartYMode'] === 'fixed') {
+                        $public['chartYMin'] = (float) ($tile['chartYMin'] ?? 0);
+                        $public['chartYMax'] = (float) ($tile['chartYMax'] ?? 100);
+                    }
+                    $public['chartCompareYesterday'] = !empty($tile['chartCompareYesterday']);
+                    $refresh = (int) ($tile['chartRefreshSec'] ?? 0);
+                    if ($refresh > 0) {
+                        $public['chartRefreshSec'] = max(60, min(86400, $refresh));
+                    }
+                    $public['chartBitmap'] = !array_key_exists('chartBitmap', $tile) || (bool) $tile['chartBitmap'];
+                    $public['chartFile'] = self::chartFileName((string) $tile['tileId']);
+                    $public['unit'] = (string) ($tile['unit'] ?? '');
+                    $public['decimals'] = max(0, min(3, (int) ($tile['decimals'] ?? 0)));
+                    $defs = HomeDisplayChart::seriesDefinitions($tile);
+                    if ($defs !== []) {
+                        $public['chartSeries'] = $defs;
+                    }
+                    $icon = (string) ($tile['icon'] ?? '');
+                    if ($icon !== '' && in_array($icon, self::ICONS, true)) {
+                        $public['icon'] = $icon;
+                    }
+                }
+                if ($kind === 'scene') {
+                    $actionId = trim((string) ($tile['actionId'] ?? ''));
+                    if ($actionId !== '') {
+                        $public['actionId'] = $actionId;
+                        $public['confirm'] = (bool) ($tile['confirm'] ?? false);
+                    }
+                }
+                if ($kind === 'weather') {
+                    $public['unit'] = (string) ($tile['unit'] ?? '°C');
+                    $public['decimals'] = max(0, min(3, (int) ($tile['decimals'] ?? 1)));
+                    if (isset($tile['forecastVariableId'])) {
+                        $public['forecastVariableId'] = (int) $tile['forecastVariableId'];
+                    }
+                }
+                if ($kind === 'presence') {
+                    $public['presenceMode'] = in_array((string) ($tile['presenceMode'] ?? 'home'), ['home', 'alarm'], true)
+                        ? (string) ($tile['presenceMode'] ?? 'home')
+                        : 'home';
                 }
                 if ($kind === 'display') {
                     $source = (string) ($tile['displaySource'] ?? 'variable');
@@ -285,6 +342,14 @@ final class HomeDisplayPanelSchema
                         $public['batteryPad'] = max(0, min(48, (int) ($tile['batteryPad'] ?? 8)));
                         $label = (string) ($tile['batteryLabel'] ?? 'inside');
                         $public['batteryLabel'] = in_array($label, self::BATTERY_LABELS, true) ? $label : 'inside';
+                    }
+                    if (in_array($control, ['dimSwitch', 'slider', 'combo', 'blinds'], true)) {
+                        $public['valueMin'] = (float) ($tile['valueMin'] ?? 0);
+                        $public['valueMax'] = (float) ($tile['valueMax'] ?? 100);
+                    }
+                    if ($control === 'setpoint' && isset($tile['setpointVariableId'])) {
+                        $public['setpointVariableId'] = (int) $tile['setpointVariableId'];
+                        $public['setpointStep'] = (float) ($tile['setpointStep'] ?? 0.5);
                     }
                     $iconMode = (string) ($tile['iconMode'] ?? 'static');
                     if ($iconMode === 'toggle') {
@@ -635,6 +700,23 @@ final class HomeDisplayPanelSchema
                     throw new InvalidArgumentException('Dimmbedienung ohne freigegebene Aktion.');
                 }
             }
+            if ($control === 'blinds') {
+                if ((string) ($tile['actionKind'] ?? 'position') !== 'position') {
+                    throw new InvalidArgumentException('Rolladen brauchen die Aktionsart Position.');
+                }
+                if ($publish && trim((string) ($tile['actionId'] ?? '')) === '') {
+                    throw new InvalidArgumentException('Rolladen ohne freigegebene Aktion.');
+                }
+            }
+            if ($control === 'setpoint') {
+                $setpointId = (int) ($tile['setpointVariableId'] ?? 0);
+                if ($publish && ($setpointId <= 0 || !IPS_VariableExists($setpointId))) {
+                    throw new InvalidArgumentException('Setpoint ohne Sollwert-Variable.');
+                }
+                if ($publish && trim((string) ($tile['actionId'] ?? '')) === '') {
+                    throw new InvalidArgumentException('Setpoint ohne schaltbare Sollwert-Aktion.');
+                }
+            }
             self::validateAction($tile, $publish);
             return;
         }
@@ -653,6 +735,10 @@ final class HomeDisplayPanelSchema
             if (trim((string) ($tile['text'] ?? '')) === '') {
                 throw new InvalidArgumentException('Textkachel ohne Text.');
             }
+            $labelStyle = (string) ($tile['labelStyle'] ?? 'text');
+            if (!in_array($labelStyle, self::LABEL_STYLES, true)) {
+                throw new InvalidArgumentException('Unbekannter Textstil.');
+            }
             if (isset($tile['size']) && !in_array((string) $tile['size'], self::SIZES, true)) {
                 throw new InvalidArgumentException('Unbekannte Textgröße.');
             }
@@ -669,9 +755,13 @@ final class HomeDisplayPanelSchema
                 throw new InvalidArgumentException('Fluss-Schwellwert liegt zwischen 0 und 50000.');
             }
             if ($publish) {
-                $required = $mode === 'split'
-                    ? ['gridImportVariableId', 'gridExportVariableId', 'pvVariableId', 'batteryChargeVariableId', 'batteryDischargeVariableId']
-                    : ['gridVariableId', 'pvVariableId', 'batteryVariableId'];
+                $required = ['gridImportVariableId', 'gridExportVariableId', 'pvVariableId'];
+                if ($mode === 'split') {
+                    $required[] = 'batteryChargeVariableId';
+                    $required[] = 'batteryDischargeVariableId';
+                } else {
+                    $required[] = 'batteryVariableId';
+                }
                 if (HomeDisplayEnergyFlow::homeOverride($tile)) {
                     $required[] = 'loadVariableId';
                 }
@@ -685,6 +775,56 @@ final class HomeDisplayPanelSchema
                 if ($soc > 0 && !IPS_VariableExists($soc)) {
                     throw new InvalidArgumentException('Energiefluss: SOC-Variable existiert nicht.');
                 }
+            }
+            return;
+        }
+        if ($kind === 'chart') {
+            $decimals = (int) ($tile['decimals'] ?? 0);
+            if ($decimals < 0 || $decimals > 3) {
+                throw new InvalidArgumentException('Nachkommastellen liegen zwischen 0 und 3.');
+            }
+            HomeDisplayChart::normalizePeriod((string) ($tile['chartPeriod'] ?? '24h'));
+            HomeDisplayChart::normalizeStyle((string) ($tile['chartStyle'] ?? 'area'));
+            HomeDisplayChart::normalizeYMode((string) ($tile['chartYMode'] ?? 'auto'));
+            $icon = (string) ($tile['icon'] ?? '');
+            if ($icon !== '' && !in_array($icon, self::ICONS, true)) {
+                throw new InvalidArgumentException('Unbekanntes Symbol: ' . $icon);
+            }
+            $defs = HomeDisplayChart::seriesDefinitions($tile);
+            if ($publish && $defs === []) {
+                throw new InvalidArgumentException('Diagrammkachel ohne Variable.');
+            }
+            foreach ($defs as $def) {
+                $vid = (int) $def['variableId'];
+                if ($publish && !IPS_VariableExists($vid)) {
+                    throw new InvalidArgumentException('Diagrammkachel: Variable existiert nicht.');
+                }
+                if ($publish && !HomeDisplayChart::variableLogged($vid)) {
+                    throw new InvalidArgumentException('Diagrammkachel: Variable „' . $vid . '“ ist nicht archiviert.');
+                }
+            }
+            return;
+        }
+        if ($kind === 'scene') {
+            if ($publish && trim((string) ($tile['actionId'] ?? '')) === '') {
+                throw new InvalidArgumentException('Szenenkachel ohne freigegebene Aktion.');
+            }
+            self::validateAction($tile, $publish);
+            return;
+        }
+        if ($kind === 'weather') {
+            if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) $tile['variableId']))) {
+                throw new InvalidArgumentException('Wetterkachel ohne Temperaturvariable.');
+            }
+            $forecast = (int) ($tile['forecastVariableId'] ?? 0);
+            if ($publish && $forecast > 0 && !IPS_VariableExists($forecast)) {
+                throw new InvalidArgumentException('Wetterkachel: Prognose-Variable existiert nicht.');
+            }
+            return;
+        }
+        if ($kind === 'presence') {
+            if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) $tile['variableId']))) {
+                throw new InvalidArgumentException('Anwesenheitskachel ohne Variable.');
             }
             return;
         }
@@ -781,6 +921,16 @@ final class HomeDisplayPanelSchema
             $safe = 'media';
         }
         return 'media_' . substr($safe, 0, 28) . '.jpg';
+    }
+
+    public static function chartFileName(string $tileId): string
+    {
+        $safe = preg_replace('/[^A-Za-z0-9_-]/', '', $tileId) ?? '';
+        if ($safe === '') {
+            $safe = 'chart';
+        }
+
+        return 'chart_' . substr($safe, 0, 28) . '.png';
     }
 
     /** @param array<string, mixed> $tile */
