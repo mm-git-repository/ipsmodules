@@ -1,1 +1,23 @@
+.cursor/agent-transcripts/
+.cursor/agent-tools/
+.cursor/mcps/
+
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
 .env
+*.user
+.DS_Store
+Thumbs.db
+
+# Nested clone — not part of MM-Modules library (duplicate module/library IDs confuse Symcon)
+mm/
+
+mm/PIXOOEnergyViewer/_preview_b64.txt
+mm/tools/schedule_baseline.json
+mm/tools/__pycache__/
+.env
+GARDENA_*
+

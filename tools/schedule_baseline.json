@@ -1,0 +1,66 @@
+{
+  "device_id": "3034F8319C02BF800000B6C6",
+  "rules": [
+    {
+      "slot": "0",
+      "actuator": 0,
+      "start_offset_seconds": 14400,
+      "end_offset_seconds": 18000,
+      "repetition_value": 127,
+      "repetition_type": 1,
+      "start_hm": "04:00",
+      "end_hm": "05:00",
+      "raw_keys": [
+        "actuator",
+        "end_offset_from",
+        "end_offset_seconds",
+        "pre_offset",
+        "repetition_type",
+        "repetition_value",
+        "start_offset_from",
+        "start_offset_seconds"
+      ]
+    },
+    {
+      "slot": "1",
+      "actuator": 1,
+      "start_offset_seconds": 18000,
+      "end_offset_seconds": 21600,
+      "repetition_value": 127,
+      "repetition_type": 1,
+      "start_hm": "05:00",
+      "end_hm": "06:00",
+      "raw_keys": [
+        "actuator",
+        "end_offset_from",
+        "end_offset_seconds",
+        "pre_offset",
+        "repetition_type",
+        "repetition_value",
+        "start_offset_from",
+        "start_offset_seconds"
+      ]
+    },
+    {
+      "slot": "2",
+      "actuator": 0,
+      "start_offset_seconds": 21600,
+      "end_offset_seconds": 23400,
+      "repetition_value": 31,
+      "repetition_type": 1,
+      "start_hm": "06:00",
+      "end_hm": "06:30",
+      "raw_keys": [
+        "actuator",
+        "end_offset_from",
+        "end_offset_seconds",
+        "pre_offset",
+        "repetition_type",
+        "repetition_value",
+        "start_offset_from",
+        "start_offset_seconds"
+      ]
+    }
+  ],
+  "saved_at": 1785155468.7542243
+}
