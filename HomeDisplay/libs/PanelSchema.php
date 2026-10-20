@@ -240,12 +240,22 @@ final class HomeDisplayPanelSchema
                     $public['cameraFile'] = self::cameraFileName((string) $tile['tileId']);
                 }
                 if ($kind === 'energyflow') {
-                    foreach (['gridVariableId', 'pvVariableId', 'loadVariableId', 'batteryVariableId'] as $flowKey) {
-                        $public[$flowKey] = (int) ($tile[$flowKey] ?? 0);
+                    $mode = (string) ($tile['flowMode'] ?? 'signed');
+                    $public['flowMode'] = in_array($mode, HomeDisplayEnergyFlow::MODES, true) ? $mode : 'signed';
+                    $public['homeOverride'] = !array_key_exists('homeOverride', $tile) || (bool) $tile['homeOverride'];
+                    foreach ([
+                        'gridVariableId', 'pvVariableId', 'loadVariableId', 'batteryVariableId',
+                        'gridImportVariableId', 'gridExportVariableId', 'batteryChargeVariableId', 'batteryDischargeVariableId',
+                        'batterySocVariableId',
+                    ] as $flowKey) {
+                        if (isset($tile[$flowKey])) {
+                            $public[$flowKey] = (int) $tile[$flowKey];
+                        }
                     }
                     $public['unit'] = (string) ($tile['unit'] ?? 'W');
                     $public['decimals'] = max(0, min(3, (int) ($tile['decimals'] ?? 0)));
                     $public['flowThreshold'] = max(0, (float) ($tile['flowThreshold'] ?? 15));
+                    $public['socDecimals'] = max(0, min(1, (int) ($tile['socDecimals'] ?? 0)));
                 }
                 if ($kind === 'value') {
                     $actionId = trim((string) ($tile['actionId'] ?? ''));
@@ -649,6 +659,7 @@ final class HomeDisplayPanelSchema
             return;
         }
         if ($kind === 'energyflow') {
+            $mode = HomeDisplayEnergyFlow::mode($tile);
             $decimals = (int) ($tile['decimals'] ?? 0);
             if ($decimals < 0 || $decimals > 3) {
                 throw new InvalidArgumentException('Nachkommastellen liegen zwischen 0 und 3.');
@@ -658,18 +669,21 @@ final class HomeDisplayPanelSchema
                 throw new InvalidArgumentException('Fluss-Schwellwert liegt zwischen 0 und 50000.');
             }
             if ($publish) {
-                $any = false;
-                foreach (['gridVariableId', 'pvVariableId', 'loadVariableId', 'batteryVariableId'] as $flowKey) {
+                $required = $mode === 'split'
+                    ? ['gridImportVariableId', 'gridExportVariableId', 'pvVariableId', 'batteryChargeVariableId', 'batteryDischargeVariableId']
+                    : ['gridVariableId', 'pvVariableId', 'batteryVariableId'];
+                if (HomeDisplayEnergyFlow::homeOverride($tile)) {
+                    $required[] = 'loadVariableId';
+                }
+                foreach ($required as $flowKey) {
                     $vid = (int) ($tile[$flowKey] ?? 0);
-                    if ($vid > 0) {
-                        if (!IPS_VariableExists($vid)) {
-                            throw new InvalidArgumentException('Energiefluss: Variable existiert nicht (' . $flowKey . ').');
-                        }
-                        $any = true;
+                    if ($vid <= 0 || !IPS_VariableExists($vid)) {
+                        throw new InvalidArgumentException('Energiefluss: Pflicht-Variable fehlt oder existiert nicht (' . $flowKey . ').');
                     }
                 }
-                if (!$any) {
-                    throw new InvalidArgumentException('Energiefluss-Kachel braucht mindestens eine Variable.');
+                $soc = (int) ($tile['batterySocVariableId'] ?? 0);
+                if ($soc > 0 && !IPS_VariableExists($soc)) {
+                    throw new InvalidArgumentException('Energiefluss: SOC-Variable existiert nicht.');
                 }
             }
             return;

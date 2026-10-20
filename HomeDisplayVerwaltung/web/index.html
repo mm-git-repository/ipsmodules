@@ -214,24 +214,36 @@
           <p class="hint">Nur Anzeige – ohne Schalten. Wert und Symbol füllen die Kachel.</p>
         </div>
         <div data-for="energyflow">
-          <label>Zuweisen für
-            <select id="p-flow-slot">
-              <option value="grid">Netz (+ Bezug / − Einspeisung)</option>
-              <option value="pv">PV-Erzeugung</option>
-              <option value="load">Hausverbrauch</option>
-              <option value="battery">Batterie (+ Laden / − Entladen)</option>
+          <label>Modus
+            <select id="p-flow-mode">
+              <option value="signed">Eine Variable je Kreis (Vorzeichen)</option>
+              <option value="split">Getrennt (Bezug/Einspeisung, Laden/Entladen)</option>
             </select>
           </label>
-          <label>Netz <input id="p-flow-grid" readonly placeholder="Variable aus dem Baum"></label>
-          <label>PV <input id="p-flow-pv" readonly placeholder="Optional"></label>
-          <label>Verbrauch <input id="p-flow-load" readonly placeholder="Optional"></label>
-          <label>Batterie <input id="p-flow-battery" readonly placeholder="Optional"></label>
+          <p class="hint">Orientierung: Power Flow Card Plus. Netz + = Bezug, − = Einspeisung. Batterie + = Laden, − = Entladen. PV nur Erzeugung (≥ 0).</p>
+          <label>Zuweisen für
+            <select id="p-flow-slot"></select>
+          </label>
+          <div id="p-flow-signed">
+            <label>Netz (±) <input id="p-flow-grid" readonly placeholder="Pflicht"></label>
+            <label>Batterie (±) <input id="p-flow-battery" readonly placeholder="Pflicht"></label>
+          </div>
+          <div id="p-flow-split" class="hidden">
+            <label>Netz Bezug <input id="p-flow-grid-import" readonly placeholder="Pflicht"></label>
+            <label>Netz Einspeisung <input id="p-flow-grid-export" readonly placeholder="Pflicht"></label>
+            <label>Batterie Laden <input id="p-flow-battery-charge" readonly placeholder="Pflicht"></label>
+            <label>Batterie Entladen <input id="p-flow-battery-discharge" readonly placeholder="Pflicht"></label>
+          </div>
+          <label>PV-Erzeugung <input id="p-flow-pv" readonly placeholder="Pflicht"></label>
+          <label><input id="p-flow-home-override" type="checkbox" checked> Hausverbrauch aus Variable (sonst berechnet)</label>
+          <label id="p-flow-load-wrap">Hausverbrauch <input id="p-flow-load" readonly placeholder="Pflicht wenn oben aktiv"></label>
+          <label>SOC (optional) <input id="p-flow-soc" readonly placeholder="Ladestand %"></label>
           <div class="row">
             <label>Einheit <input id="p-flow-unit" value="W"></label>
             <label>Nachkommastellen <input id="p-flow-decimals" type="number" min="0" max="3" value="0"></label>
           </div>
           <label>Animation ab (W) <input id="p-flow-threshold" type="number" min="0" value="50"></label>
-          <p class="hint">Kachel am besten 2×2. Pfeile animieren bei Leistung über dem Schwellwert. Im Baum Variable wählen, dann hier Slot wählen und Variable anklicken.</p>
+          <p class="hint">Alle Pflicht-Variablen zuweisen: Slot wählen, Variable im Baum anklicken. Kachel 2×2 empfohlen.</p>
         </div>
         <div data-for="image">
           <label>Bildquelle

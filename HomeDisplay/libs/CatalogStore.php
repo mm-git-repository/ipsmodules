@@ -7,6 +7,7 @@ declare(strict_types=1);
  * Liegt außerhalb der Instanzen, damit jede Panel-Instanz daraus wählen kann.
  */
 require_once __DIR__ . '/Media.php';
+require_once __DIR__ . '/EnergyFlow.php';
 require_once __DIR__ . '/PanelSchema.php';
 
 final class HomeDisplayCatalogStore

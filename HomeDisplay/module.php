@@ -11,7 +11,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 28;
+    private const MODULE_BUILD = 29;
 
     private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
@@ -987,42 +987,18 @@ class HomeDisplay extends IPSModuleStrict
     {
         $unit = trim((string) ($tile['unit'] ?? 'W'));
         $decimals = max(0, min(3, (int) ($tile['decimals'] ?? 0)));
-        $map = [
-            'grid' => 'gridVariableId',
-            'pv' => 'pvVariableId',
-            'load' => 'loadVariableId',
-            'battery' => 'batteryVariableId',
-        ];
-        $flows = [];
-        $quality = 'empty';
-        foreach ($map as $key => $prop) {
-            $variableId = (int) ($tile[$prop] ?? 0);
-            $w = null;
-            $text = '—';
-            if ($variableId > 0 && IPS_VariableExists($variableId)) {
-                $raw = GetValue($variableId);
-                if (is_int($raw) || is_float($raw)) {
-                    $w = (float) $raw;
-                    $text = number_format($w, $decimals, ',', '');
-                    if ($unit !== '') {
-                        $text .= ' ' . $unit;
-                    }
-                    $quality = 'ok';
-                } elseif (is_bool($raw)) {
-                    $w = $raw ? 1.0 : 0.0;
-                    $text = $raw ? 'Ein' : 'Aus';
-                    $quality = 'ok';
-                } else {
-                    $text = trim((string) $raw);
-                    if ($text === '') {
-                        $text = '—';
-                    } else {
-                        $quality = 'ok';
-                    }
-                }
+        $readings = $this->energyFlowReadings($tile);
+        $hasNumeric = false;
+        foreach ($readings as $value) {
+            if ($value !== null) {
+                $hasNumeric = true;
+                break;
             }
-            $flows[$key] = ['w' => $w, 'text' => $text];
         }
+        $quality = $hasNumeric ? 'ok' : 'empty';
+        $flows = $hasNumeric
+            ? HomeDisplayEnergyFlow::compute($tile, $readings, $decimals, $unit)
+            : [];
         if (isset($pending[$tileId])) {
             $quality = 'pending';
         }
@@ -1032,6 +1008,53 @@ class HomeDisplay extends IPSModuleStrict
             'flows' => $flows,
             'pending' => isset($pending[$tileId]),
         ];
+    }
+
+    /** @param array<string, mixed> $tile @return array<string, float|null> */
+    private function energyFlowReadings(array $tile): array
+    {
+        $read = function (int $variableId): ?float {
+            if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
+                return null;
+            }
+            $raw = GetValue($variableId);
+            if (is_int($raw) || is_float($raw)) {
+                return (float) $raw;
+            }
+            if (is_bool($raw)) {
+                return $raw ? 1.0 : 0.0;
+            }
+            if (is_string($raw) && is_numeric(trim($raw))) {
+                return (float) trim($raw);
+            }
+            return null;
+        };
+        if (HomeDisplayEnergyFlow::mode($tile) === 'split') {
+            $out = [
+                'gridImport' => $read((int) ($tile['gridImportVariableId'] ?? 0)),
+                'gridExport' => $read((int) ($tile['gridExportVariableId'] ?? 0)),
+                'pv' => $read((int) ($tile['pvVariableId'] ?? 0)),
+                'batteryCharge' => $read((int) ($tile['batteryChargeVariableId'] ?? 0)),
+                'batteryDischarge' => $read((int) ($tile['batteryDischargeVariableId'] ?? 0)),
+                'load' => HomeDisplayEnergyFlow::homeOverride($tile)
+                    ? $read((int) ($tile['loadVariableId'] ?? 0))
+                    : null,
+            ];
+        } else {
+            $out = [
+                'grid' => $read((int) ($tile['gridVariableId'] ?? 0)),
+                'pv' => $read((int) ($tile['pvVariableId'] ?? 0)),
+                'battery' => $read((int) ($tile['batteryVariableId'] ?? 0)),
+                'load' => HomeDisplayEnergyFlow::homeOverride($tile)
+                    ? $read((int) ($tile['loadVariableId'] ?? 0))
+                    : null,
+            ];
+        }
+        $socId = (int) ($tile['batterySocVariableId'] ?? 0);
+        if ($socId > 0) {
+            $out['soc'] = $read($socId);
+        }
+        return $out;
     }
 
     /** @param array<string, mixed> $tile */
@@ -1805,8 +1828,8 @@ class HomeDisplay extends IPSModuleStrict
             foreach ($page['tiles'] ?? [] as $tile) {
                 $kind = (string) ($tile['kind'] ?? 'value');
                 if ($kind === 'energyflow') {
-                    foreach (['gridVariableId', 'pvVariableId', 'loadVariableId', 'batteryVariableId'] as $flowKey) {
-                        $variableId = (int) ($tile[$flowKey] ?? 0);
+                    foreach (HomeDisplayEnergyFlow::variablePropertyKeys($tile) as $prop) {
+                        $variableId = (int) ($tile[$prop] ?? 0);
                         if ($variableId > 0 && IPS_VariableExists($variableId)) {
                             $this->RegisterMessage($variableId, 10603);
                         }

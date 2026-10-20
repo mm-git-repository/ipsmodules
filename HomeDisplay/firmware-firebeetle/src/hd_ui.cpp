@@ -100,6 +100,16 @@ static void drawFlowLine(Adafruit_GFX *gfx, int16_t x1, int16_t y1, int16_t x2, 
   }
 }
 
+static bool flowLineActive(JsonObjectConst st, const char *lineId, bool fallback) {
+  JsonObjectConst flows = st["flows"];
+  if (flows.isNull()) return fallback;
+  JsonObjectConst lines = flows["lines"];
+  if (lines.isNull()) return fallback;
+  JsonObjectConst line = lines[lineId];
+  if (line.isNull()) return fallback;
+  return line["active"] | false;
+}
+
 static void drawEnergyFlowTile(Adafruit_GFX *gfx, JsonObject tile, JsonObjectConst st, int16_t x, int16_t y, int16_t w, int16_t h) {
   gfx->drawRect(x, y, w, h, GxEPD_BLACK);
   float threshold = tile["flowThreshold"] | 15.0f;
@@ -111,11 +121,12 @@ static void drawEnergyFlowTile(Adafruit_GFX *gfx, JsonObject tile, JsonObjectCon
   int16_t topY = y + 10;
   int16_t leftX = x + 8;
   int16_t rightX = x + w - 8;
-  drawFlowLine(gfx, cx, topY + 6, cx, cy - 10, pv > threshold);
-  drawFlowLine(gfx, leftX + 6, cy, cx - 12, cy, grid > threshold);
-  drawFlowLine(gfx, cx - 12, cy, leftX + 6, cy, grid < -threshold);
-  drawFlowLine(gfx, cx + 12, cy, rightX - 6, cy, battery > threshold);
-  drawFlowLine(gfx, rightX - 6, cy, cx + 12, cy, battery < -threshold);
+  bool hasLines = !st.isNull() && !st["flows"]["lines"].isNull();
+  drawFlowLine(gfx, cx, topY + 6, cx, cy - 10, hasLines ? flowLineActive(st, "solarToHome", false) : pv > threshold);
+  drawFlowLine(gfx, leftX + 6, cy, cx - 12, cy, hasLines ? flowLineActive(st, "gridToHome", false) : grid > threshold);
+  drawFlowLine(gfx, cx - 12, cy, leftX + 6, cy, hasLines ? flowLineActive(st, "homeToGrid", false) : grid < -threshold);
+  drawFlowLine(gfx, cx + 12, cy, rightX - 6, cy, hasLines ? flowLineActive(st, "homeToBattery", false) : battery > threshold);
+  drawFlowLine(gfx, rightX - 6, cy, cx + 12, cy, hasLines ? flowLineActive(st, "batteryToHome", false) : battery < -threshold);
   gfx->fillCircle(cx, cy, 4, GxEPD_BLACK);
   gfx->setTextSize(1);
   gfx->setTextColor(GxEPD_BLACK);
