@@ -615,14 +615,9 @@ final class HomeDisplayPanelSchema
             $source = (string) ($tile['imageSource'] ?? 'catalog');
             if ($source === 'media') {
                 $variableId = (int) ($tile['variableId'] ?? 0);
-                if ($publish) {
-                    if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
-                        throw new InvalidArgumentException('Bildkachel ohne Medien-Variable.');
-                    }
-                    $variable = IPS_GetVariable($variableId);
-                    if ((int) ($variable['VariableType'] ?? -1) !== 6) {
-                        throw new InvalidArgumentException('Die Variable ist kein Medien-Typ.');
-                    }
+                $mediaObjectId = (int) ($tile['mediaObjectId'] ?? 0);
+                if ($publish && !HomeDisplayMedia::publishableMediaBinding($variableId, $mediaObjectId)) {
+                    throw new InvalidArgumentException('Bildkachel ohne Medien-Variable oder Medienobjekt (Bild).');
                 }
                 return;
             }
@@ -641,19 +636,23 @@ final class HomeDisplayPanelSchema
                 throw new InvalidArgumentException('Ungültige Kameraquelle.');
             }
             $variableId = (int) ($tile['variableId'] ?? 0);
-            if ($publish && ($variableId <= 0 || !IPS_VariableExists($variableId))) {
+            $mediaObjectId = (int) ($tile['mediaObjectId'] ?? 0);
+            if ($publish && $variableId <= 0 && $mediaObjectId <= 0) {
                 throw new InvalidArgumentException($source === 'media'
-                    ? 'Kamerakachel ohne Medien-Variable.'
+                    ? 'Kamerakachel ohne Medien-Variable oder Medienobjekt.'
                     : 'Kamerakachel ohne Variable für die Bildadresse.');
             }
-            if ($publish && $variableId > 0 && IPS_VariableExists($variableId)) {
-                $variable = IPS_GetVariable($variableId);
-                $type = (int) ($variable['VariableType'] ?? -1);
-                if ($source === 'media' && $type !== 6) {
-                    throw new InvalidArgumentException('Die Kameraquelle Medien erwartet eine Medien-Variable.');
+            if ($publish && $variableId > 0 && !IPS_VariableExists($variableId)) {
+                throw new InvalidArgumentException('Kamerakachel: Variable existiert nicht.');
+            }
+            if ($publish) {
+                $hasMedia = HomeDisplayMedia::resolveImageMediaId($tile) > 0;
+                $url = HomeDisplayMedia::cameraImageUrl($tile);
+                if ($source === 'media' && !$hasMedia) {
+                    throw new InvalidArgumentException('Kameraquelle Medien: Integer-Variable mit Bild-Media-ID oder Medienobjekt wählen.');
                 }
-                if ($source === 'url' && $type === 6) {
-                    throw new InvalidArgumentException('Für Medien-Variablen die Kameraquelle „Medien“ wählen.');
+                if ($source === 'url' && !$hasMedia && $url === '' && $mediaObjectId <= 0) {
+                    throw new InvalidArgumentException('Kameraquelle URL: Textvariable mit http(s)-Bildadresse wählen.');
                 }
             }
         }

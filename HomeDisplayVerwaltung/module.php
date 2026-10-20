@@ -458,7 +458,14 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             if (!function_exists('HDISP_ProbeTileImage')) {
                 return ['ok' => false, 'error' => 'HomeDisplay ist nicht geladen.'];
             }
-            return ['ok' => true, 'result' => $this->decodeCall(HDISP_ProbeTileImage($id, (string) ($body['tileId'] ?? '')))];
+            $tileJson = '';
+            if (isset($body['tile']) && is_array($body['tile'])) {
+                $encoded = json_encode($body['tile'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                if (is_string($encoded)) {
+                    $tileJson = $encoded;
+                }
+            }
+            return ['ok' => true, 'result' => $this->decodeCall(HDISP_ProbeTileImage($id, (string) ($body['tileId'] ?? ''), $tileJson))];
         }
         if ($method === 'images') {
             return ['ok' => true, 'result' => $this->decodeCall(HDISP_ListImages($panel))];

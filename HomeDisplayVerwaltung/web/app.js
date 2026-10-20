@@ -21,11 +21,53 @@ const DISPLAY_PROFILES = {
 const KIND_NAMES = { value: "Wert", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", system: "Anzeigestatus" };
 const CONTROL_NAMES = { switch: "Schalter", dimSwitch: "Dimmschalter", slider: "Dimmbalken", combo: "Kombischalter", battery: "Batterie" };
 const DIM_CONTROLS = ["dimSwitch", "slider", "combo"];
-const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text", "", "", "Medien"];
-const MEDIA_TYPE = 6;
+const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text"];
+const MEDIA_ROLES = {
+  mediaId: "Medien-ID",
+  imageUrl: "Bild-URL",
+  mediaObject: "Medienobjekt"
+};
 
-function isMediaVariable(variable) {
-  return variable && Number(variable.type) === MEDIA_TYPE;
+function isMediaObject(item) {
+  return Boolean(item && item.objectKind === "media");
+}
+
+function isMediaPick(item) {
+  return Boolean(item && (item.mediaRole === "mediaId" || item.mediaRole === "mediaObject" || isMediaObject(item)));
+}
+
+function isImageUrlRef(item) {
+  return Boolean(item && item.mediaRole === "imageUrl");
+}
+
+function variableTypeLabel(variable) {
+  if (isMediaObject(variable)) return MEDIA_ROLES.mediaObject;
+  if (variable.mediaRole && MEDIA_ROLES[variable.mediaRole]) return MEDIA_ROLES[variable.mediaRole];
+  return TYPE_NAMES[Number(variable.type)] || "";
+}
+
+function bindMediaToTile(tile, item, kind) {
+  if (kind === "image") {
+    tile.imageSource = "media";
+    delete tile.imageId;
+  }
+  if (kind === "camera") {
+    tile.cameraSource = isMediaPick(item) ? "media" : "url";
+  }
+  if (isMediaObject(item)) {
+    tile.mediaObjectId = item.mediaId || item.id;
+    delete tile.variableId;
+  } else {
+    tile.variableId = item.id;
+    delete tile.mediaObjectId;
+  }
+}
+
+function tileNeedsLivePreview(tile) {
+  if (!tile) return false;
+  if (tile.kind === "camera" && (tile.variableId || tile.mediaObjectId)) return true;
+  if (tile.kind === "image" && (tile.imageSource || "catalog") === "media" && (tile.variableId || tile.mediaObjectId)) return true;
+  return false;
 }
 
 const state = {
@@ -40,7 +82,11 @@ const state = {
   variableTreeOpen: {},
   variableTreeScroll: 0,
   editorIconDemo: {},
-  panelProfiles: {}
+  panelProfiles: {},
+  previewPanelId: 0,
+  tilePreviewUrls: {},
+  previewTimer: null,
+  previewFetchToken: 0
 };
 
 const $ = (id) => document.getElementById(id);
@@ -355,11 +401,15 @@ function renderGrid() {
       bindDrop(cell, col, row);
       cell.addEventListener("click", () => {
         if (state.pickedVariable) {
-          if (isMediaVariable(state.pickedVariable)) {
+          if (isMediaPick(state.pickedVariable)) {
             const tile = selectedTile();
             if (tile && tile.kind === "camera") assignCameraMedia(tile, state.pickedVariable);
             else if (tile && tile.kind === "image") assignMediaVariable(tile, state.pickedVariable);
             else addTile("image", col, row, state.pickedVariable);
+          } else if (isImageUrlRef(state.pickedVariable)) {
+            const tile = selectedTile();
+            if (tile && tile.kind === "camera") assignVariable(tile, state.pickedVariable);
+            else addTile("camera", col, row, state.pickedVariable);
           } else addTile("value", col, row, state.pickedVariable);
           return;
         }
@@ -368,6 +418,58 @@ function renderGrid() {
         renderProperties();
       });
       grid.appendChild(cell);
+    }
+  }
+  scheduleEditorTilePreviews();
+}
+
+function scheduleEditorTilePreviews() {
+  if (state.previewTimer) clearTimeout(state.previewTimer);
+  state.previewTimer = setTimeout(() => {
+    refreshEditorTilePreviews().catch(() => {});
+  }, 350);
+}
+
+async function refreshEditorTilePreviews() {
+  if (!state.previewPanelId || !state.layout) return;
+  const page = currentPage();
+  if (!page) return;
+  const targets = page.tiles.filter(tileNeedsLivePreview);
+  const token = ++state.previewFetchToken;
+  let changed = false;
+  for (const tile of targets) {
+    try {
+      const result = await call("probeImage", { id: state.previewPanelId, tileId: tile.tileId, tile });
+      if (token !== state.previewFetchToken) return;
+      if (result.ok && result.data) {
+        const url = `data:${result.mime || "image/jpeg"};base64,${result.data}`;
+        if (state.tilePreviewUrls[tile.tileId] !== url) {
+          state.tilePreviewUrls[tile.tileId] = url;
+          changed = true;
+        }
+      } else if (state.tilePreviewUrls[tile.tileId]) {
+        delete state.tilePreviewUrls[tile.tileId];
+        changed = true;
+      }
+    } catch (error) {
+      if (state.tilePreviewUrls[tile.tileId]) {
+        delete state.tilePreviewUrls[tile.tileId];
+        changed = true;
+      }
+    }
+  }
+  if (changed && token === state.previewFetchToken) {
+    const grid = $("grid");
+    if (!grid) return;
+    for (const tile of targets) {
+      const element = grid.querySelector(`.tile[data-tile-id="${tile.tileId}"]`);
+      if (!element || !state.tilePreviewUrls[tile.tileId]) continue;
+      const url = state.tilePreviewUrls[tile.tileId];
+      if (tile.kind === "image") {
+        element.innerHTML = `<img src="${url}" alt="">`;
+      } else if (tile.kind === "camera") {
+        element.innerHTML = `<div class="kicker">Kamera</div><img src="${url}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1">`;
+      }
     }
   }
 }
@@ -474,6 +576,7 @@ function buildTileElement(tile, context) {
   element.style.gridRow = `${tile.row + 1} / span ${spanH}`;
   element.dataset.spanW = String(spanW);
   element.dataset.spanH = String(spanH);
+  element.dataset.tileId = tile.tileId;
   Object.entries(tilePreviewStyle(tile)).forEach(([key, val]) => element.style.setProperty(key, val));
   if (live && live.color) element.style.background = colorForTile(live.color);
   element.draggable = mode === "edit";
@@ -519,7 +622,7 @@ function buildTileElement(tile, context) {
   } else if (tile.kind === "camera") {
     element.classList.add("camera");
     const variable = variableById(tile.variableId);
-    const fromMedia = (tile.cameraSource || "url") === "media";
+    const fromMedia = Boolean(tile.mediaObjectId) || (tile.cameraSource || "url") === "media" || isMediaPick(variable);
     if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
       element.innerHTML = `<div class="kicker">Kamera</div><img src="${context.probeImageUrls[tile.tileId]}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1">`;
     } else {
@@ -578,7 +681,7 @@ function buildTileElement(tile, context) {
 }
 
 function renderTile(tile) {
-  return buildTileElement(tile, { mode: "edit" });
+  return buildTileElement(tile, { mode: "edit", probeImageUrls: state.tilePreviewUrls });
 }
 
 function controlMarkup(control, tile) {
@@ -664,20 +767,28 @@ function bindDrop(target, col, row, existing) {
     }
     if (variableId) {
       const variable = variableById(variableId);
-      if (existing && existing.kind === "image" && isMediaVariable(variable)) {
+      if (existing && existing.kind === "image" && isMediaPick(variable)) {
         assignMediaVariable(existing, variable);
         return;
       }
-      if (existing && existing.kind === "camera" && isMediaVariable(variable)) {
+      if (existing && existing.kind === "camera" && isMediaPick(variable)) {
         assignCameraMedia(existing, variable);
         return;
       }
-      if (existing && (existing.kind === "value" || existing.kind === "camera")) {
+      if (existing && existing.kind === "camera" && (isImageUrlRef(variable) || !isMediaPick(variable))) {
         assignVariable(existing, variable);
         return;
       }
-      if (!existing && isMediaVariable(variable)) {
+      if (existing && existing.kind === "value") {
+        assignVariable(existing, variable);
+        return;
+      }
+      if (!existing && isMediaPick(variable)) {
         addTile("image", col, row, variable);
+        return;
+      }
+      if (!existing && isImageUrlRef(variable)) {
+        addTile("camera", col, row, variable);
         return;
       }
       if (!existing) addTile("value", col, row, variable);
@@ -757,9 +868,8 @@ function addTile(kind, col, row, variable, control) {
       tile.rowSpan = 1;
     }
   } else if (kind === "image") {
-    if (isMediaVariable(variable)) {
-      tile.imageSource = "media";
-      tile.variableId = variable.id;
+    if (isMediaPick(variable)) {
+      bindMediaToTile(tile, variable, "image");
       tile.title = tile.title || variable.name;
     } else {
       tile.imageSource = "catalog";
@@ -776,7 +886,7 @@ function addTile(kind, col, row, variable, control) {
       tile.rowSpan = 1;
     }
     if (variable) {
-      if (isMediaVariable(variable)) assignCameraMedia(tile, variable, true);
+      if (isMediaPick(variable)) assignCameraMedia(tile, variable, true);
       else assignVariable(tile, variable, true);
     }
   }
@@ -794,26 +904,23 @@ function addTile(kind, col, row, variable, control) {
   if (kind === "image" && tile.imageSource !== "media" && !tile.imageId) openImages();
 }
 
-function assignCameraMedia(tile, variable, silent) {
-  if (!variable || !isMediaVariable(variable)) return;
-  tile.cameraSource = "media";
-  tile.variableId = variable.id;
-  if (!tile.title) tile.title = variable.name;
+function assignCameraMedia(tile, item, silent) {
+  if (!isMediaPick(item)) return;
+  bindMediaToTile(tile, item, "camera");
+  if (!tile.title) tile.title = item.name;
   if (!silent) {
     markDirty();
     renderGrid();
     renderProperties();
     renderVariableTree();
-    setStatus(`Kamera-Kachel mit Medien-Variable „${variable.name}“ verknüpft.`);
+    setStatus(`Kamera-Kachel mit „${item.name}“ verknüpft (IPS-Medien).`);
   }
 }
 
-function assignMediaVariable(tile, variable, silent) {
-  if (!variable || !isMediaVariable(variable)) return;
-  tile.imageSource = "media";
-  tile.variableId = variable.id;
-  if (!tile.title) tile.title = variable.name;
-  delete tile.imageId;
+function assignMediaVariable(tile, item, silent) {
+  if (!isMediaPick(item)) return;
+  bindMediaToTile(tile, item, "image");
+  if (!tile.title) tile.title = item.name;
   if (!silent) {
     markDirty();
     renderGrid();
@@ -824,8 +931,9 @@ function assignMediaVariable(tile, variable, silent) {
 function assignVariable(tile, variable, silent) {
   if (!variable) return;
   tile.variableId = variable.id;
+  delete tile.mediaObjectId;
   if (tile.kind === "camera") {
-    if (isMediaVariable(variable)) {
+    if (isMediaPick(variable)) {
       assignCameraMedia(tile, variable, silent);
       return;
     }
@@ -951,7 +1059,14 @@ function renderProperties() {
   if ($("p-iconon")) $("p-iconon").value = tile.iconOn || "lightOn";
   if ($("p-iconoff")) $("p-iconoff").value = tile.iconOff || "lightOff";
   const variable = variableById(tile.variableId);
-  $("p-variable").value = variable ? `${variable.path ? variable.path + " / " : ""}${variable.name} (${variable.id})` : "";
+  const mediaObj = tile.mediaObjectId ? variableById(tile.mediaObjectId) : null;
+  if (tile.kind === "camera" || tile.kind === "value") {
+    $("p-variable").value = mediaObj
+      ? `${mediaObj.path ? mediaObj.path + " / " : ""}${mediaObj.name} (Medien ${mediaObj.id})`
+      : (variable ? `${variable.path ? variable.path + " / " : ""}${variable.name} (${variable.id})` : "");
+  } else {
+    $("p-variable").value = variable ? `${variable.path ? variable.path + " / " : ""}${variable.name} (${variable.id})` : "";
+  }
   $("p-unit").value = tile.unit || "";
   $("p-decimals").value = tile.decimals || 0;
   $("p-control").value = tile.control || "switch";
@@ -984,7 +1099,7 @@ function renderProperties() {
   const image = state.images.find((item) => item.id === tile.imageId);
   $("p-image-preview").src = image ? `images/${image.id}.${image.ext}` : "";
   $("p-image-preview").classList.toggle("hidden", !image || imgSource === "media");
-  const mediaVar = variableById(tile.variableId);
+  const mediaVar = tile.mediaObjectId ? variableById(tile.mediaObjectId) : variableById(tile.variableId);
   if ($("p-image-variable")) {
     $("p-image-variable").value = imgSource === "media" && mediaVar
       ? `${mediaVar.path ? mediaVar.path + " / " : ""}${mediaVar.name} (${mediaVar.id})`
@@ -998,8 +1113,9 @@ function renderProperties() {
   }
   if (tile.kind === "camera" && $("p-variable")) {
     const camVar = variableById(tile.variableId);
-    const wrongMedia = camSource === "media" && camVar && !isMediaVariable(camVar);
-    const wrongUrl = camSource === "url" && camVar && isMediaVariable(camVar);
+    const hasMedia = Boolean(tile.mediaObjectId) || isMediaPick(camVar);
+    const wrongMedia = camSource === "media" && !hasMedia;
+    const wrongUrl = camSource === "url" && hasMedia && !isImageUrlRef(camVar);
     $("p-variable").placeholder = camSource === "media"
       ? "Medien-Variable aus dem Baum wählen"
       : "Textvariable mit Bild-URL";
@@ -1090,8 +1206,13 @@ function applyProperties() {
     const source = $("p-camerasource").value || "url";
     tile.cameraSource = source;
     const camVar = variableById(tile.variableId);
-    if (source === "media" && camVar && !isMediaVariable(camVar)) tile.variableId = 0;
-    if (source === "url" && camVar && isMediaVariable(camVar)) tile.variableId = 0;
+    if (source === "media" && !tile.mediaObjectId && (!camVar || !isMediaPick(camVar))) {
+      tile.variableId = 0;
+    }
+    if (source === "url" && (tile.mediaObjectId || isMediaPick(camVar))) {
+      tile.variableId = isImageUrlRef(camVar) ? tile.variableId : 0;
+      delete tile.mediaObjectId;
+    }
   }
   markDirty();
   renderGrid();
@@ -1274,13 +1395,17 @@ function openDetails(tile) {
       const wantMedia = source.value === "media";
       picker.innerHTML = '<option value="0">Keine Variable</option>';
       for (const item of state.variables) {
-        if (wantMedia ? !isMediaVariable(item) : isMediaVariable(item)) continue;
+        if (wantMedia) {
+          if (!isMediaPick(item)) continue;
+        } else if (isMediaObject(item) || (isMediaPick(item) && !isImageUrlRef(item))) {
+          continue;
+        }
         const option = document.createElement("option");
         option.value = String(item.id);
         option.textContent = `${item.path ? item.path + " / " : ""}${item.name} (${item.id})`;
         picker.appendChild(option);
       }
-      picker.value = String(tile.variableId || 0);
+      picker.value = String(tile.mediaObjectId || tile.variableId || 0);
     };
     refreshPicker();
     source.addEventListener("change", refreshPicker);
@@ -1348,7 +1473,11 @@ function openDetails(tile) {
     if (tile.kind === "camera") {
       tile.cameraSource = fields.cameraSource ? fields.cameraSource.value : "url";
       const chosen = variableById(Number(fields.variable.value));
-      tile.variableId = chosen ? chosen.id : 0;
+      if (!chosen || Number(fields.variable.value) === 0) {
+        tile.variableId = 0;
+        delete tile.mediaObjectId;
+      } else if (tile.cameraSource === "media") assignCameraMedia(tile, chosen, true);
+      else assignVariable(tile, chosen, true);
     }
     markDirty();
     renderGrid();
@@ -1462,8 +1591,8 @@ function renderVariableTree() {
   const onlyActions = $("only-actions").checked;
   const groups = new Map();
   for (const variable of state.variables) {
-    if (onlyActions && !variable.action && !isMediaVariable(variable)) continue;
-    if (!isMediaVariable(variable) && Number(variable.type) > 3) continue;
+    if (onlyActions && !variable.action && !isMediaPick(variable) && !isImageUrlRef(variable)) continue;
+    if (!isMediaObject(variable) && !variable.mediaRole && Number(variable.type) > 3) continue;
     if (needle && !`${variable.name} ${variable.path} ${variable.id}`.toLowerCase().includes(needle)) continue;
     const key = variable.path || "Ohne Kategorie";
     if (!groups.has(key)) groups.set(key, []);
@@ -1488,8 +1617,8 @@ function renderVariableTree() {
       row.className = "variable" + (state.pickedVariable && state.pickedVariable.id === variable.id ? " selected" : "");
       row.draggable = true;
       row.title = `${variable.path ? variable.path + " / " : ""}${variable.name}\nID ${variable.id}${variable.profile ? "\nProfil " + variable.profile : ""}`;
-      const mediaBadge = isMediaVariable(variable) ? ' <span class="badge badge-media">Medien</span>' : "";
-      row.innerHTML = `<span></span><span class="meta">${TYPE_NAMES[variable.type] || ""}${mediaBadge}${variable.action ? ' <span class="badge">schaltbar</span>' : ""}</span>`;
+      const mediaBadge = isMediaPick(variable) ? ' <span class="badge badge-media">Medien</span>' : (isImageUrlRef(variable) ? ' <span class="badge badge-media">Bild-URL</span>' : "");
+      row.innerHTML = `<span></span><span class="meta">${escapeHtml(variableTypeLabel(variable))}${mediaBadge}${variable.action ? ' <span class="badge">schaltbar</span>' : ""}</span>`;
       row.firstChild.textContent = variable.name;
       row.addEventListener("dragstart", (event) => {
         event.dataTransfer.setData("text/homedisplay-variable", String(variable.id));
@@ -1497,11 +1626,11 @@ function renderVariableTree() {
       });
       row.addEventListener("click", () => {
         const tile = selectedTile();
-        if (tile && tile.kind === "image" && isMediaVariable(variable)) {
+        if (tile && tile.kind === "image" && isMediaPick(variable)) {
           assignMediaVariable(tile, variable);
           return;
         }
-        if (tile && tile.kind === "camera" && isMediaVariable(variable)) {
+        if (tile && tile.kind === "camera" && isMediaPick(variable)) {
           assignCameraMedia(tile, variable);
           return;
         }
@@ -1509,14 +1638,16 @@ function renderVariableTree() {
           assignVariable(tile, variable);
           return;
         }
-        if (tile && tile.kind === "camera" && !isMediaVariable(variable)) {
+        if (tile && tile.kind === "camera" && (isImageUrlRef(variable) || !isMediaPick(variable))) {
           assignVariable(tile, variable);
           return;
         }
         state.pickedVariable = state.pickedVariable && state.pickedVariable.id === variable.id ? null : variable;
         let hint;
-        if (isMediaVariable(variable)) {
-          hint = `„${variable.name}“ gewählt – Bild- oder Kamera-Kachel (Quelle Medien) oder freie Zelle.`;
+        if (isMediaPick(variable)) {
+          hint = `„${variable.name}“ gewählt – Bild-/Kamera-Kachel (Medien) oder freie Zelle (legt Bild-Kachel an).`;
+        } else if (isImageUrlRef(variable)) {
+          hint = `„${variable.name}“ gewählt – Kamera-Kachel oder freie Zelle (legt Kamera an).`;
         } else {
           hint = `„${variable.name}“ gewählt – freie Zelle anklicken, um eine Wertkachel anzulegen.`;
         }
@@ -1524,12 +1655,13 @@ function renderVariableTree() {
         renderVariableTree();
       });
       row.addEventListener("dblclick", () => {
-        const cell = freeCell(variable.type === MEDIA_TYPE ? 1 : 1, 1);
+        const cell = freeCell(1, 1);
         if (!cell) {
           setStatus("Auf dieser Seite ist keine Zelle frei.");
           return;
         }
-        if (isMediaVariable(variable)) addTile("image", cell.col, cell.row, variable);
+        if (isMediaPick(variable)) addTile("image", cell.col, cell.row, variable);
+        else if (isImageUrlRef(variable)) addTile("camera", cell.col, cell.row, variable);
         else addTile("value", cell.col, cell.row, variable);
       });
       details.appendChild(row);
@@ -1567,15 +1699,15 @@ function validateLayout(layout) {
       if (seen.has(tile.tileId)) throw new Error("Doppelte Kachelkennung.");
       seen.add(tile.tileId);
       if (tile.kind === "value" && tile.control === "battery" && !tile.variableId) throw new Error(`Die Batteriekachel „${tile.title || tile.tileId}“ braucht eine Variable.`);
-      if (tile.kind === "camera" && !tile.variableId) {
-        const src = tile.cameraSource || "url";
-        throw new Error(`Die Kamerakachel „${tile.title || tile.tileId}“ braucht ${src === "media" ? "eine Medien-Variable" : "eine Variable mit Bild-URL"}.`);
+      if (tile.kind === "camera" && !tile.variableId && !tile.mediaObjectId) {
+        throw new Error(`Die Kamerakachel „${tile.title || tile.tileId}“ braucht eine Variable oder ein Medienobjekt.`);
       }
-      if (tile.kind === "camera" && tile.variableId) {
-        const camVar = variableById(tile.variableId);
+      if (tile.kind === "camera" && (tile.variableId || tile.mediaObjectId)) {
+        const camVar = tile.variableId ? variableById(tile.variableId) : null;
         const src = tile.cameraSource || "url";
-        if (src === "media" && camVar && !isMediaVariable(camVar)) throw new Error(`Die Kamerakachel „${tile.title || tile.tileId}“ erwartet eine Medien-Variable.`);
-        if (src === "url" && camVar && isMediaVariable(camVar)) throw new Error(`Die Kamerakachel „${tile.title || tile.tileId}“ erwartet eine Textvariable mit Bild-URL (oder Quelle auf Medien stellen).`);
+        const hasMedia = Boolean(tile.mediaObjectId) || isMediaPick(camVar);
+        if (src === "media" && !hasMedia) throw new Error(`Die Kamerakachel „${tile.title || tile.tileId}“ erwartet Medien (Integer mit Media-ID oder Medienobjekt).`);
+        if (src === "url" && hasMedia && !isImageUrlRef(camVar)) throw new Error(`Die Kamerakachel „${tile.title || tile.tileId}“: Quelle „Medien“ wählen oder Bild-URL-Variable zuweisen.`);
       }
       if (tile.kind === "value" && DIM_CONTROLS.includes(tile.control) && !tile.actionId) throw new Error(`„${tile.title || tile.tileId}“ braucht eine schaltbare Dimmvariable.`);
       if (tile.kind === "value" && tile.actionId) {
@@ -1586,7 +1718,7 @@ function validateLayout(layout) {
       if (tile.kind === "label" && !(tile.text || "").trim()) throw new Error("Eine Textkachel ist leer.");
       if (tile.kind === "image") {
         if ((tile.imageSource || "catalog") === "media") {
-          if (!tile.variableId) throw new Error("Eine Bildkachel (Medien) braucht eine Medien-Variable.");
+          if (!tile.variableId && !tile.mediaObjectId) throw new Error("Eine Bildkachel (Medien) braucht eine Medien-Variable oder ein Medienobjekt.");
         } else if (!tile.imageId) throw new Error("Eine Bildkachel hat kein Bild.");
       }
     }
@@ -1939,7 +2071,7 @@ async function loadProbeImages(layout, panelId) {
     for (const tile of page.tiles || []) {
       if (tile.kind === "camera" || (tile.kind === "image" && tile.imageSource === "media")) {
         try {
-          const result = await call("probeImage", { id: panelId, tileId: tile.tileId });
+          const result = await call("probeImage", { id: panelId, tileId: tile.tileId, tile });
           if (result.ok && result.data) {
             probe.probeImageUrls[tile.tileId] = `data:${result.mime || "image/jpeg"};base64,${result.data}`;
           }
@@ -2114,11 +2246,14 @@ $("open-probe").addEventListener("click", openProbe);
 
 async function start() {
   try {
+    const settings = await call("settings");
+    state.previewPanelId = settings.panels && settings.panels[0] ? settings.panels[0].id : 0;
     state.catalog = await call("catalog");
     const variables = await call("variables");
     state.variables = (variables.variables || []).filter((variable) => {
+      if (isMediaObject(variable) || variable.mediaRole) return true;
       const type = Number(variable.type);
-      return type >= 0 && (type <= 3 || type === MEDIA_TYPE);
+      return type >= 0 && type <= 3;
     });
     fillProfileSelect($("display-profile"), defaultProfileId());
     await loadImages();

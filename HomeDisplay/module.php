@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/libs/CatalogStore.php';
+require_once __DIR__ . '/libs/Media.php';
 require_once __DIR__ . '/libs/PanelActionGuard.php';
 
 class HomeDisplay extends IPSModuleStrict
@@ -10,7 +11,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 17;
+    private const MODULE_BUILD = 18;
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
@@ -204,13 +205,20 @@ class HomeDisplay extends IPSModuleStrict
             if ($profile === '') {
                 $profile = (string) ($variable['VariableProfile'] ?? '');
             }
+            $variableId = (int) $id;
+            $type = (int) ($variable['VariableType'] ?? -1);
+            $mediaRole = '';
+            if ($type === 1 || $type === 3) {
+                $mediaRole = HomeDisplayMedia::variableMediaRole($variableId);
+            }
             $rows[] = [
-                'id' => (int) $id,
+                'id' => $variableId,
                 'name' => (string) ($object['ObjectName'] ?? ''),
                 'path' => $this->objectPath((int) ($object['ParentID'] ?? 0), $names),
                 'category' => $this->categoryName((int) ($object['ParentID'] ?? 0)),
                 'profile' => $profile,
-                'type' => (int) ($variable['VariableType'] ?? -1),
+                'type' => $type,
+                'mediaRole' => $mediaRole,
                 'action' => (int) ($variable['VariableAction'] ?? 0) > 0 || (int) ($variable['VariableCustomAction'] ?? 0) > 0,
                 'actionKind' => $this->actionKind($variable),
             ];
@@ -222,7 +230,56 @@ class HomeDisplay extends IPSModuleStrict
             $byPath = strcasecmp($left['path'], $right['path']);
             return $byPath !== 0 ? $byPath : strcasecmp($left['name'], $right['name']);
         });
+        foreach ($this->listImageMediaObjects($names) as $mediaRow) {
+            $rows[] = $mediaRow;
+        }
+        usort($rows, static function ($left, $right) {
+            $leftKind = (string) ($left['objectKind'] ?? '');
+            $rightKind = (string) ($right['objectKind'] ?? '');
+            if ($leftKind !== $rightKind) {
+                return $leftKind === 'media' ? 1 : -1;
+            }
+            $byPath = strcasecmp((string) ($left['path'] ?? ''), (string) ($right['path'] ?? ''));
+            return $byPath !== 0 ? $byPath : strcasecmp((string) ($left['name'] ?? ''), (string) ($right['name'] ?? ''));
+        });
         return $this->encode(['variables' => $rows]);
+    }
+
+    /** @param array<int, string> $names @return list<array<string, mixed>> */
+    private function listImageMediaObjects(array &$names): array
+    {
+        if (!function_exists('IPS_GetMediaListByType')) {
+            return [];
+        }
+        $rows = [];
+        foreach (IPS_GetMediaListByType(1) as $mediaId) {
+            $mediaId = (int) $mediaId;
+            if ($mediaId <= 0 || !HomeDisplayMedia::isImageMediaId($mediaId)) {
+                continue;
+            }
+            if (!IPS_ObjectExists($mediaId)) {
+                continue;
+            }
+            $object = IPS_GetObject($mediaId);
+            $parentId = (int) ($object['ParentID'] ?? 0);
+            $rows[] = [
+                'objectKind' => 'media',
+                'mediaId' => $mediaId,
+                'id' => $mediaId,
+                'name' => IPS_GetName($mediaId),
+                'path' => $this->objectPath($parentId, $names),
+                'category' => $this->categoryName($parentId),
+                'profile' => 'Medienobjekt (Bild)',
+                'type' => 1,
+                'mediaRole' => HomeDisplayMedia::ROLE_MEDIA_OBJECT,
+                'action' => false,
+                'actionKind' => '',
+            ];
+            if (count($rows) >= 800) {
+                break;
+            }
+        }
+        return $rows;
     }
 
     public function ListImages(): string
@@ -833,25 +890,15 @@ class HomeDisplay extends IPSModuleStrict
                 $kind = (string) ($tile['kind'] ?? 'value');
                 $tileId = (string) ($tile['tileId']);
                 if ($kind === 'camera') {
-                    $variableId = (int) ($tile['variableId'] ?? 0);
                     $seq = 0;
                     $quality = 'empty';
-                    $cameraSource = (string) ($tile['cameraSource'] ?? 'url');
-                    if ($variableId > 0 && IPS_VariableExists($variableId)) {
+                    $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
+                    $url = $mediaId > 0 ? '' : HomeDisplayMedia::cameraImageUrl($tile);
+                    if ($mediaId > 0 || $url !== '') {
                         $interval = max(10, (int) IPS_GetProperty($device['id'], 'StateIntervalSec'));
-                        if ($cameraSource === 'media') {
-                            $mediaId = (int) GetValue($variableId);
-                            if ($mediaId > 0) {
-                                $seq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32((string) $mediaId));
-                                $quality = 'ok';
-                            }
-                        } else {
-                            $url = trim((string) GetValue($variableId));
-                            if ($url !== '') {
-                                $seq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32($url));
-                                $quality = 'ok';
-                            }
-                        }
+                        $stamp = $mediaId > 0 ? (string) $mediaId : $url;
+                        $seq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32($stamp));
+                        $quality = 'ok';
                     }
                     $tiles[] = [
                         'tileId' => $tileId,
@@ -861,16 +908,13 @@ class HomeDisplay extends IPSModuleStrict
                     continue;
                 }
                 if ($kind === 'image' && (string) ($tile['imageSource'] ?? 'catalog') === 'media') {
-                    $variableId = (int) ($tile['variableId'] ?? 0);
                     $seq = 0;
                     $quality = 'empty';
-                    if ($variableId > 0 && IPS_VariableExists($variableId)) {
-                        $mediaId = (int) GetValue($variableId);
-                        if ($mediaId > 0) {
-                            $interval = max(10, (int) IPS_GetProperty($device['id'], 'StateIntervalSec'));
-                            $seq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32((string) $mediaId));
-                            $quality = 'ok';
-                        }
+                    $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
+                    if ($mediaId > 0) {
+                        $interval = max(10, (int) IPS_GetProperty($device['id'], 'StateIntervalSec'));
+                        $seq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32((string) $mediaId));
+                        $quality = 'ok';
                     }
                     $tiles[] = [
                         'tileId' => $tileId,
@@ -1130,47 +1174,60 @@ class HomeDisplay extends IPSModuleStrict
         return $this->encode(HomeDisplayPanelSchema::dashboardLayout($Name !== '' ? $Name : 'Übersicht', $DisplayProfile));
     }
 
-    /** Bildbytes für Live-Vorschau (Kamera-URL oder IPS-Medien). @return array<string, mixed> */
-    public function ProbeTileImage(string $TileId): string
+    /** Bildbytes für Live-Vorschau (Editor-Entwurf oder veröffentlichte Ansicht). */
+    public function ProbeTileImage(string $TileId, string $TileJson = ''): string
     {
-        $layout = $this->activeLayout($this->InstanceID);
-        if ($layout === null) {
-            return $this->encode(['ok' => false, 'error' => 'layout']);
-        }
-        foreach ($layout['pages'] ?? [] as $page) {
-            if (!is_array($page)) {
-                continue;
-            }
-            foreach ($page['tiles'] ?? [] as $tile) {
-                if (!is_array($tile) || (string) ($tile['tileId'] ?? '') !== $TileId) {
-                    continue;
-                }
-                $kind = (string) ($tile['kind'] ?? '');
-                if ($kind === 'camera') {
-                    if ((string) ($tile['cameraSource'] ?? 'url') === 'media') {
-                        $binary = $this->mediaBytesForVariable((int) ($tile['variableId'] ?? 0));
-                        if ($binary === null || $binary === '') {
-                            return $this->encode(['ok' => false, 'error' => 'media']);
-                        }
-                        return $this->encode(['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)]);
-                    }
-                    $url = $this->cameraUrlForTile($this->InstanceID, $TileId);
-                    $binary = $url !== '' ? $this->fetchRemoteBinary($url) : null;
-                    if ($binary === null || $binary === '') {
-                        return $this->encode(['ok' => false, 'error' => 'camera_fetch']);
-                    }
-                    return $this->encode(['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)]);
-                }
-                if ($kind === 'image' && (string) ($tile['imageSource'] ?? 'catalog') === 'media') {
-                    $binary = $this->mediaBytesForVariable((int) ($tile['variableId'] ?? 0));
-                    if ($binary === null || $binary === '') {
-                        return $this->encode(['ok' => false, 'error' => 'media']);
-                    }
-                    return $this->encode(['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)]);
-                }
+        $tile = null;
+        if ($TileJson !== '') {
+            $decoded = json_decode($TileJson, true);
+            if (is_array($decoded)) {
+                $tile = $decoded;
             }
         }
-        return $this->encode(['ok' => false, 'error' => 'tile']);
+        if ($tile === null) {
+            $tile = $this->findLayoutTile($this->InstanceID, $TileId);
+        }
+        if ($tile === null) {
+            return $this->encode(['ok' => false, 'error' => 'tile']);
+        }
+        return $this->encode($this->probeTileImagePayload($tile));
+    }
+
+    /** @param array<string, mixed> $tile @return array<string, mixed> */
+    private function probeTileImagePayload(array $tile): array
+    {
+        $kind = (string) ($tile['kind'] ?? '');
+        if ($kind === 'camera') {
+            $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
+            if ($mediaId > 0) {
+                $binary = HomeDisplayMedia::mediaBytes($mediaId);
+                if ($binary === null || $binary === '') {
+                    return ['ok' => false, 'error' => 'media'];
+                }
+                return ['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)];
+            }
+            $url = HomeDisplayMedia::cameraImageUrl($tile);
+            if ($url === '') {
+                return ['ok' => false, 'error' => 'camera'];
+            }
+            $binary = $this->fetchRemoteBinary($url);
+            if ($binary === null || $binary === '') {
+                return ['ok' => false, 'error' => 'camera_fetch'];
+            }
+            return ['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)];
+        }
+        if ($kind === 'image' && (string) ($tile['imageSource'] ?? 'catalog') === 'media') {
+            $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
+            if ($mediaId <= 0) {
+                return ['ok' => false, 'error' => 'media'];
+            }
+            $binary = HomeDisplayMedia::mediaBytes($mediaId);
+            if ($binary === null || $binary === '') {
+                return ['ok' => false, 'error' => 'media_fetch'];
+            }
+            return ['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)];
+        }
+        return ['ok' => false, 'error' => 'tile'];
     }
 
     /** @return array<string, mixed> */
@@ -1233,19 +1290,22 @@ class HomeDisplay extends IPSModuleStrict
     private function sendCameraSnapshot(array $device, string $tileId): void
     {
         $tile = $this->findLayoutTile($device['id'], $tileId);
-        if ($tile !== null && (string) ($tile['kind'] ?? '') === 'camera' && (string) ($tile['cameraSource'] ?? 'url') === 'media') {
-            $binary = $this->mediaBytesForVariable((int) ($tile['variableId'] ?? 0));
-            if ($binary === null || $binary === '') {
-                http_response_code(502);
-                $this->json(['error' => 'media_fetch']);
+        if ($tile !== null && (string) ($tile['kind'] ?? '') === 'camera') {
+            $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
+            if ($mediaId > 0) {
+                $binary = HomeDisplayMedia::mediaBytes($mediaId);
+                if ($binary === null || $binary === '') {
+                    http_response_code(502);
+                    $this->json(['error' => 'media_fetch']);
+                    return;
+                }
+                header('Content-Type: ' . $this->guessImageMime($binary));
+                header('Cache-Control: no-store');
+                echo $binary;
                 return;
             }
-            header('Content-Type: ' . $this->guessImageMime($binary));
-            header('Cache-Control: no-store');
-            echo $binary;
-            return;
         }
-        $url = $this->cameraUrlForTile($device['id'], $tileId);
+        $url = $tile !== null ? HomeDisplayMedia::cameraImageUrl($tile) : $this->cameraUrlForTile($device['id'], $tileId);
         if ($url === '') {
             http_response_code(404);
             $this->json(['error' => 'camera']);
@@ -1272,7 +1332,12 @@ class HomeDisplay extends IPSModuleStrict
             $this->json(['error' => 'media']);
             return;
         }
-        $binary = $this->mediaBytesForVariable($variableId);
+        $tile = $this->findLayoutTile($device['id'], $tileId);
+        $mediaId = $tile !== null ? HomeDisplayMedia::resolveImageMediaId($tile) : 0;
+        if ($mediaId <= 0 && $variableId > 0) {
+            $mediaId = HomeDisplayMedia::imageMediaIdFromVariable($variableId);
+        }
+        $binary = $mediaId > 0 ? HomeDisplayMedia::mediaBytes($mediaId) : null;
         if ($binary === null || $binary === '') {
             http_response_code(502);
             $this->json(['error' => 'media_fetch']);
@@ -1309,52 +1374,13 @@ class HomeDisplay extends IPSModuleStrict
         return 0;
     }
 
-    private function mediaBytesForVariable(int $variableId): ?string
-    {
-        if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
-            return null;
-        }
-        $variable = IPS_GetVariable($variableId);
-        if ((int) ($variable['VariableType'] ?? -1) !== 6) {
-            return null;
-        }
-        $mediaId = (int) GetValue($variableId);
-        if ($mediaId <= 0) {
-            return null;
-        }
-        if (!function_exists('IPS_MediaExists') || !IPS_MediaExists($mediaId)) {
-            return null;
-        }
-        $media = IPS_Media_Get($mediaId);
-        if (!is_array($media)) {
-            return null;
-        }
-        $file = (string) ($media['File'] ?? '');
-        if ($file === '') {
-            return null;
-        }
-        $path = rtrim(IPS_GetKernelDir(), '\\/') . DIRECTORY_SEPARATOR . 'media' . DIRECTORY_SEPARATOR . $file;
-        if (!is_file($path)) {
-            return null;
-        }
-        $binary = file_get_contents($path);
-        return is_string($binary) && $binary !== '' ? $binary : null;
-    }
-
     private function cameraUrlForTile(int $instanceId, string $tileId): string
     {
         $tile = $this->findLayoutTile($instanceId, $tileId);
         if ($tile === null || (string) ($tile['kind'] ?? '') !== 'camera') {
             return '';
         }
-        if ((string) ($tile['cameraSource'] ?? 'url') === 'media') {
-            return '';
-        }
-        $variableId = (int) ($tile['variableId'] ?? 0);
-        if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
-            return '';
-        }
-        return trim((string) GetValue($variableId));
+        return HomeDisplayMedia::cameraImageUrl($tile);
     }
 
     /** @return array<string, mixed>|null */

@@ -6,6 +6,7 @@ declare(strict_types=1);
  * Gemeinsamer Katalog für Layouts und Konfigurationen.
  * Liegt außerhalb der Instanzen, damit jede Panel-Instanz daraus wählen kann.
  */
+require_once __DIR__ . '/Media.php';
 require_once __DIR__ . '/PanelSchema.php';
 
 final class HomeDisplayCatalogStore
