@@ -11,7 +11,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 20;
+    private const MODULE_BUILD = 21;
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
@@ -1198,12 +1198,8 @@ class HomeDisplay extends IPSModuleStrict
     {
         $kind = (string) ($tile['kind'] ?? '');
         if ($kind === 'camera') {
-            $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
-            if ($mediaId > 0) {
-                $binary = HomeDisplayMedia::mediaBytes($mediaId);
-                if ($binary === null || $binary === '') {
-                    return ['ok' => false, 'error' => 'media'];
-                }
+            $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
+            if ($binary !== null && $binary !== '') {
                 return ['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)];
             }
             $url = HomeDisplayMedia::cameraImageUrl($tile);
@@ -1217,11 +1213,7 @@ class HomeDisplay extends IPSModuleStrict
             return ['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)];
         }
         if ($kind === 'image' && (string) ($tile['imageSource'] ?? 'catalog') === 'media') {
-            $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
-            if ($mediaId <= 0) {
-                return ['ok' => false, 'error' => 'media'];
-            }
-            $binary = HomeDisplayMedia::mediaBytes($mediaId);
+            $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
             if ($binary === null || $binary === '') {
                 return ['ok' => false, 'error' => 'media_fetch'];
             }
@@ -1303,14 +1295,8 @@ class HomeDisplay extends IPSModuleStrict
     {
         $tile = $this->findLayoutTile($device['id'], $tileId);
         if ($tile !== null && (string) ($tile['kind'] ?? '') === 'camera') {
-            $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
-            if ($mediaId > 0) {
-                $binary = HomeDisplayMedia::mediaBytes($mediaId);
-                if ($binary === null || $binary === '') {
-                    http_response_code(502);
-                    $this->json(['error' => 'media_fetch']);
-                    return;
-                }
+            $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
+            if ($binary !== null && $binary !== '') {
                 header('Content-Type: ' . $this->guessImageMime($binary));
                 header('Cache-Control: no-store');
                 echo $binary;
@@ -1345,11 +1331,10 @@ class HomeDisplay extends IPSModuleStrict
             return;
         }
         $tile = $this->findLayoutTile($device['id'], $tileId);
-        $mediaId = $tile !== null ? HomeDisplayMedia::resolveImageMediaId($tile) : 0;
-        if ($mediaId <= 0 && $variableId > 0) {
-            $mediaId = HomeDisplayMedia::imageMediaIdFromVariable($variableId);
+        $binary = $tile !== null ? HomeDisplayMedia::snapshotMediaBinary($tile) : null;
+        if (($binary === null || $binary === '') && $variableId > 0) {
+            $binary = HomeDisplayMedia::variableMediaBytes($variableId);
         }
-        $binary = $mediaId > 0 ? HomeDisplayMedia::mediaBytes($mediaId) : null;
         if ($binary === null || $binary === '') {
             http_response_code(502);
             $this->json(['error' => 'media_fetch']);
@@ -1421,20 +1406,74 @@ class HomeDisplay extends IPSModuleStrict
         if ($url === '' || !preg_match('#^https?://#i', $url)) {
             return null;
         }
+        $binary = $this->fetchRemoteBinaryAttempt($url, true);
+        if ($binary !== null) {
+            return $binary;
+        }
+        return $this->fetchRemoteBinaryAttempt($url, false);
+    }
+
+    private function fetchRemoteBinaryAttempt(string $url, bool $verifySsl): ?string
+    {
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            if ($ch !== false) {
+                curl_setopt_array($ch, [
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_MAXREDIRS => 3,
+                    CURLOPT_CONNECTTIMEOUT => 8,
+                    CURLOPT_TIMEOUT => 15,
+                    CURLOPT_SSL_VERIFYPEER => $verifySsl,
+                    CURLOPT_SSL_VERIFYHOST => $verifySsl ? 2 : 0,
+                    CURLOPT_USERAGENT => 'HomeDisplay/1.0',
+                ]);
+                $binary = curl_exec($ch);
+                $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+                if (is_string($binary) && $binary !== '' && $code >= 200 && $code < 300 && $this->looksLikeImageBinary($binary)) {
+                    return $binary;
+                }
+            }
+        }
         $context = stream_context_create([
             'http' => [
-                'timeout' => 12,
+                'timeout' => 15,
                 'follow_location' => 1,
                 'max_redirects' => 3,
                 'header' => "User-Agent: HomeDisplay/1.0\r\n",
             ],
             'ssl' => [
-                'verify_peer' => true,
-                'verify_peer_name' => true,
+                'verify_peer' => $verifySsl,
+                'verify_peer_name' => $verifySsl,
             ],
         ]);
         $binary = @file_get_contents($url, false, $context);
-        return is_string($binary) && $binary !== '' ? $binary : null;
+        if (is_string($binary) && $binary !== '' && $this->looksLikeImageBinary($binary)) {
+            return $binary;
+        }
+        return null;
+    }
+
+    private function looksLikeImageBinary(string $binary): bool
+    {
+        if ($binary === '' || strlen($binary) < 32) {
+            return false;
+        }
+        $head = strtolower(substr($binary, 0, 256));
+        if (str_starts_with(ltrim($binary), '<') || str_contains($head, '<html') || str_contains($head, '<!doctype')) {
+            return false;
+        }
+        if (str_starts_with($binary, "\xFF\xD8\xFF")) {
+            return true;
+        }
+        if (str_starts_with($binary, "\x89PNG\r\n\x1a\n")) {
+            return true;
+        }
+        if (str_starts_with($binary, 'GIF87a') || str_starts_with($binary, 'GIF89a')) {
+            return true;
+        }
+        return str_starts_with($binary, 'RIFF') && strlen($binary) > 12 && substr($binary, 8, 4) === 'WEBP';
     }
 
     private function guessImageMime(string $binary): string

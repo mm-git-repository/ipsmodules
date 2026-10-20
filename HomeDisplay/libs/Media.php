@@ -132,6 +132,18 @@ final class HomeDisplayMedia
 
     public static function mediaBytes(int $mediaId): ?string
     {
+        if ($mediaId <= 0 || !function_exists('IPS_MediaExists') || !IPS_MediaExists($mediaId)) {
+            return null;
+        }
+        if (function_exists('IPS_GetMediaContent')) {
+            $encoded = @IPS_GetMediaContent($mediaId);
+            if (is_string($encoded) && $encoded !== '') {
+                $binary = base64_decode($encoded, true);
+                if (is_string($binary) && $binary !== '') {
+                    return $binary;
+                }
+            }
+        }
         if (!self::isImageMediaId($mediaId)) {
             return null;
         }
@@ -156,6 +168,26 @@ final class HomeDisplayMedia
         }
         $binary = file_get_contents($path);
         return is_string($binary) && $binary !== '' ? $binary : null;
+    }
+
+    /** Medien aus Kachel (Objekt-ID oder Integer-Variable), ohne URL-Abruf. */
+    public static function snapshotMediaBinary(array $tile): ?string
+    {
+        $mediaId = self::resolveImageMediaId($tile);
+        if ($mediaId > 0) {
+            $binary = self::mediaBytes($mediaId);
+            if ($binary !== null && $binary !== '') {
+                return $binary;
+            }
+        }
+        $variableId = (int) ($tile['variableId'] ?? 0);
+        if ($variableId > 0) {
+            $binary = self::variableMediaBytes($variableId);
+            if ($binary !== null && $binary !== '') {
+                return $binary;
+            }
+        }
+        return null;
     }
 
     public static function variableMediaBytes(int $variableId): ?string

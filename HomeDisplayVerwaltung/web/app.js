@@ -675,7 +675,8 @@ function buildTileElement(tile, context) {
       if (live && live.quality === "empty") {
         preview = "Keine Bildquelle (Variable leer oder nicht konfiguriert)";
       } else if (mode === "probe" && tile.cameraFile) {
-        preview = "Snapshot konnte nicht geladen werden (Symcon prüfen)";
+        const err = context.probeImageErrors && context.probeImageErrors[tile.tileId];
+        preview = probeImageErrorText(err);
       } else {
         preview = bound
           ? (fromMedia ? `IPS-Medien: ${bound}` : "Snapshot über Bild-URL")
@@ -2090,7 +2091,19 @@ $("open-settings").addEventListener("click", openSettings);
 
 /* ---------- Prüfen ---------- */
 
-let probe = { page: "", snapshot: null, probeImageUrls: {}, timer: null, lastLive: "" };
+const PROBE_IMAGE_ERROR_TEXT = {
+  tile: "Kachel nicht in der veröffentlichten Ansicht",
+  camera: "Variable ohne http(s)-Bildadresse",
+  camera_fetch: "Snapshot-URL von Symcon aus nicht erreichbar (Netzwerk/SSL/Zertifikat)",
+  media: "Medienobjekt nicht lesbar",
+  media_fetch: "Mediendatei fehlt oder ist leer"
+};
+
+function probeImageErrorText(code) {
+  return PROBE_IMAGE_ERROR_TEXT[code] || "Snapshot konnte nicht geladen werden (Symcon prüfen)";
+}
+
+let probe = { page: "", snapshot: null, probeImageUrls: {}, probeImageErrors: {}, timer: null, lastLive: "" };
 
 function scaleProbeViewport() {
   const viewport = $("probe-viewport");
@@ -2120,6 +2133,7 @@ function updateProbeValuesOnly() {
 
 async function loadProbeImages(layout, panelId, stateTiles) {
   probe.probeImageUrls = {};
+  probe.probeImageErrors = {};
   const liveById = {};
   for (const st of stateTiles || []) liveById[st.tileId] = st;
   for (const page of layout.pages || []) {
@@ -2133,9 +2147,11 @@ async function loadProbeImages(layout, panelId, stateTiles) {
           probe.probeImageUrls[tile.tileId] = {
             url: `data:${result.mime || "image/jpeg"};base64,${result.data}`
           };
+        } else if (result.error) {
+          probe.probeImageErrors[tile.tileId] = result.error;
         }
       } catch (error) {
-        /* optional */
+        probe.probeImageErrors[tile.tileId] = "fetch";
       }
     }
   }
@@ -2192,7 +2208,8 @@ function renderProbe() {
     const element = buildTileElement(tile, {
       mode: "probe",
       stateByTileId: values,
-      probeImageUrls: probe.probeImageUrls
+      probeImageUrls: probe.probeImageUrls,
+      probeImageErrors: probe.probeImageErrors
     });
     element.dataset.tileId = tile.tileId;
     grid.appendChild(element);
