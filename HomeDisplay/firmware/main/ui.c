@@ -33,6 +33,9 @@ typedef struct {
     lv_obj_t *fill;
     lv_obj_t *knob;
     lv_obj_t *power;
+    lv_obj_t *battery_shell;
+    lv_obj_t *battery_fill;
+    lv_obj_t *camera_img;
 } tile_view_t;
 
 static lv_obj_t *status_label;
@@ -282,6 +285,51 @@ static void build_power(tile_view_t *view)
     lv_obj_add_event_cb(view->power, power_event, LV_EVENT_VALUE_CHANGED, view);
 }
 
+static void place_battery(tile_view_t *tile, int value)
+{
+    if (!tile->battery_shell || !tile->battery_fill) return;
+    int min = tile->value_min;
+    int max = tile->value_max > min ? tile->value_max : min + 1;
+    if (value < min) value = min;
+    if (value > max) value = max;
+    int inner = lv_obj_get_width(tile->battery_shell) - 8;
+    if (inner < 8) inner = 8;
+    int width = 4 + (value - min) * (inner - 4) / (max - min);
+    if (width < 4) width = 4;
+    lv_obj_set_width(tile->battery_fill, width);
+    lv_color_t fill = lv_color_hex(0x3DDC84);
+    if (value <= min + (max - min) / 5) fill = lv_color_hex(0xE05252);
+    else if (value <= min + (max - min) / 3) fill = lv_color_hex(0xFFB547);
+    lv_obj_set_style_bg_color(tile->battery_fill, fill, 0);
+    tile->value = value;
+}
+
+static void build_battery(tile_view_t *view)
+{
+    view->battery_shell = lv_obj_create(view->card);
+    lv_obj_set_size(view->battery_shell, 78, 38);
+    lv_obj_set_style_bg_color(view->battery_shell, lv_color_hex(0x0B1626), 0);
+    lv_obj_set_style_radius(view->battery_shell, 6, 0);
+    lv_obj_set_style_border_width(view->battery_shell, 2, 0);
+    lv_obj_set_style_border_color(view->battery_shell, lv_color_hex(0xF4F7FB), 0);
+    lv_obj_set_style_pad_all(view->battery_shell, 4, 0);
+    lv_obj_clear_flag(view->battery_shell, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *cap = lv_obj_create(view->card);
+    lv_obj_set_size(cap, 6, 18);
+    lv_obj_set_style_bg_color(cap, lv_color_hex(0xF4F7FB), 0);
+    lv_obj_set_style_radius(cap, 2, 0);
+    lv_obj_set_style_border_width(cap, 0, 0);
+    lv_obj_align_to(cap, view->battery_shell, LV_ALIGN_OUT_RIGHT_MID, 2, 0);
+    view->battery_fill = lv_obj_create(view->battery_shell);
+    lv_obj_set_size(view->battery_fill, 8, 26);
+    lv_obj_set_style_bg_color(view->battery_fill, lv_color_hex(0x3DDC84), 0);
+    lv_obj_set_style_radius(view->battery_fill, 3, 0);
+    lv_obj_set_style_border_width(view->battery_fill, 0, 0);
+    lv_obj_align(view->battery_fill, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align(view->battery_shell, LV_ALIGN_CENTER, -4, 8);
+    place_battery(view, view->value_max);
+}
+
 static void show_background(cJSON *page)
 {
     if (!page_background) return;
@@ -435,6 +483,21 @@ static void show_page(int index)
             lv_obj_center(image);
             continue;
         }
+        if (strcmp(kind, "camera") == 0) {
+            const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile"));
+            lv_obj_set_style_bg_color(view->card, lv_color_hex(0x0B1626), 0);
+            lv_obj_set_style_pad_all(view->card, 0, 0);
+            lv_obj_t *name = lv_label_create(view->card);
+            lv_label_set_text(name, view->title[0] ? view->title : "Kamera");
+            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 8, 6);
+            view->camera_img = lv_img_create(view->card);
+            char path[80];
+            snprintf(path, sizeof(path), "S:/%s", file ? file : "");
+            lv_img_set_src(view->camera_img, path);
+            lv_obj_set_size(view->camera_img, lv_obj_get_width(view->card) - 16, lv_obj_get_height(view->card) - 36);
+            lv_obj_align(view->camera_img, LV_ALIGN_BOTTOM_MID, 0, -6);
+            continue;
+        }
         view->has_action = action_id && action_id[0];
         if (view->has_action) snprintf(view->action_id, sizeof(view->action_id), "%s", action_id);
         const char *control = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "control"));
@@ -443,9 +506,21 @@ static void show_page(int index)
         view->value_max = json_int(tile, "valueMax", 100);
         if (view->value_max <= view->value_min) view->value_max = view->value_min + 100;
         view->level = view->value_max;
+        bool battery = strcmp(view->control, "battery") == 0;
         bool dim_switch = strcmp(view->control, "dimSwitch") == 0;
         bool slider = strcmp(view->control, "slider") == 0;
         bool combo = strcmp(view->control, "combo") == 0;
+        if (battery) {
+            lv_obj_t *name = lv_label_create(view->card);
+            lv_label_set_text(name, view->title);
+            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 8, 8);
+            build_battery(view);
+            view->label = lv_label_create(view->card);
+            lv_label_set_text(view->label, "—");
+            lv_obj_set_style_text_font(view->label, &lv_font_montserrat_28, 0);
+            lv_obj_align(view->label, LV_ALIGN_TOP_RIGHT, -8, 8);
+            continue;
+        }
         lv_obj_t *symbol = lv_label_create(view->card);
         lv_label_set_text(symbol, icon_symbol(icon));
         lv_obj_align(symbol, LV_ALIGN_TOP_LEFT, 8, 8);
@@ -733,17 +808,36 @@ void homedisplay_ui_apply_state(const char *json)
             if (!has_number) continue;
             tiles[index].applying = true;
             tiles[index].value = number;
-            if (number > tiles[index].value_min) tiles[index].level = number;
-            place_level(&tiles[index], number);
-            if (tiles[index].power) {
-                if (number > tiles[index].value_min) lv_obj_add_state(tiles[index].power, LV_STATE_CHECKED);
-                else lv_obj_clear_state(tiles[index].power, LV_STATE_CHECKED);
+            if (strcmp(tiles[index].control, "battery") == 0) {
+                place_battery(&tiles[index], number);
+            } else {
+                if (number > tiles[index].value_min) tiles[index].level = number;
+                place_level(&tiles[index], number);
+                if (tiles[index].power) {
+                    if (number > tiles[index].value_min) lv_obj_add_state(tiles[index].power, LV_STATE_CHECKED);
+                    else lv_obj_clear_state(tiles[index].power, LV_STATE_CHECKED);
+                }
             }
             tiles[index].applying = false;
         }
     }
     lvgl_port_unlock();
     cJSON_Delete(root);
+}
+
+void homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
+{
+    if (!tile_id || !tile_id[0] || !file || !file[0]) return;
+    char path[96];
+    snprintf(path, sizeof(path), "S:/%s", file);
+    lvgl_port_lock(0);
+    for (int index = 0; index < tile_count; index++) {
+        if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].camera_img) {
+            lv_img_set_src(tiles[index].camera_img, path);
+            break;
+        }
+    }
+    lvgl_port_unlock();
 }
 
 void homedisplay_ui_set_online(bool value, int rssi)

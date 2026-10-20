@@ -68,9 +68,11 @@
         <div class="palette-item" draggable="true" data-kind="value" data-control="dimSwitch">Dimmschalter</div>
         <div class="palette-item" draggable="true" data-kind="value" data-control="slider">Dimmbalken</div>
         <div class="palette-item" draggable="true" data-kind="value" data-control="combo">Kombischalter</div>
+        <div class="palette-item" draggable="true" data-kind="value" data-control="battery">Batterie</div>
         <div class="palette-item" draggable="true" data-kind="nav">Seitenwechsler</div>
         <div class="palette-item" draggable="true" data-kind="label">Text</div>
         <div class="palette-item" draggable="true" data-kind="image">Bild</div>
+        <div class="palette-item" draggable="true" data-kind="camera">Kamera</div>
         <div class="palette-item" draggable="true" data-kind="separator">Trennlinie</div>
         <div class="palette-item" draggable="true" data-kind="system">Anzeigestatus</div>
       </div>
@@ -111,8 +113,10 @@
             <select id="p-icon"></select>
           </label>
         </div>
-        <div data-for="value">
+        <div data-for="value camera">
           <label>Variable <input id="p-variable" readonly placeholder="Aus dem Variablenbaum wählen"></label>
+        </div>
+        <div data-for="value">
           <div class="row">
             <label>Einheit <input id="p-unit"></label>
             <label>Nachkommastellen <input id="p-decimals" type="number" min="0" max="3" value="0"></label>
@@ -123,6 +127,7 @@
               <option value="dimSwitch">Dimmschalter</option>
               <option value="slider">Dimmbalken</option>
               <option value="combo">Kombischalter</option>
+              <option value="battery">Batterie (Ladestand)</option>
             </select>
           </label>
           <p id="p-control-hint" class="hint hidden"></p>
@@ -151,6 +156,9 @@
         <div data-for="image">
           <label>Bild <select id="p-image"></select></label>
           <img id="p-image-preview" alt="">
+        </div>
+        <div data-for="camera">
+          <p class="hint">Die Variable liefert eine http- oder https-Adresse zu einem Kamerabild (JPEG/PNG). IP-Symcon holt das Bild zentral ab; die Anzeige aktualisiert es im Abrufintervall. Mindestens 2×2 Zellen empfohlen.</p>
         </div>
         <div data-for="system">
           <p class="hint">Die Anzeige füllt diese Kachel selbst: Programm, WLAN-Stärke, IP-Adresse, Laufzeit, freier Speicher und Alter der Werte. Mindestens 2 × 2 Zellen empfohlen.</p>

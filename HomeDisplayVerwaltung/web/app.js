@@ -12,8 +12,8 @@ const ICONS = [
   ["energy", "Energie"], ["temperature", "Temperatur"], ["light", "Licht"], ["shutter", "Rollladen"],
   ["pump", "Pumpe"], ["valve", "Ventil"], ["alarm", "Alarm"], ["home", "Haus"], ["clock", "Uhr"], ["info", "Info"]
 ];
-const KIND_NAMES = { value: "Wert", nav: "Seitenwechsler", label: "Text", image: "Bild", separator: "Trennlinie", system: "Anzeigestatus" };
-const CONTROL_NAMES = { switch: "Schalter", dimSwitch: "Dimmschalter", slider: "Dimmbalken", combo: "Kombischalter" };
+const KIND_NAMES = { value: "Wert", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", system: "Anzeigestatus" };
+const CONTROL_NAMES = { switch: "Schalter", dimSwitch: "Dimmschalter", slider: "Dimmbalken", combo: "Kombischalter", battery: "Batterie" };
 const DIM_CONTROLS = ["dimSwitch", "slider", "combo"];
 const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text"];
 
@@ -296,7 +296,8 @@ function renderTile(tile) {
     const variable = variableById(tile.variableId);
     const control = tile.control || "switch";
     if (DIM_CONTROLS.includes(control)) element.classList.add("dim");
-    const kicker = DIM_CONTROLS.includes(control) ? CONTROL_NAMES[control] : `${iconName(tile.icon)}${tile.actionId ? " · schaltbar" : ""}`;
+    if (control === "battery") element.classList.add("battery");
+    const kicker = CONTROL_NAMES[control] || `${iconName(tile.icon)}${tile.actionId ? " · schaltbar" : ""}`;
     const body = controlMarkup(control);
     element.innerHTML = `<div class="kicker">${kicker}</div><div class="name"></div>${body || `<div class="value">${variable ? "12,3" : "—"}${tile.unit ? " " + escapeHtml(tile.unit) : ""}</div>`}`;
     element.querySelector(".name").textContent = tile.title || (variable ? variable.name : "Wert");
@@ -315,6 +316,11 @@ function renderTile(tile) {
   } else if (tile.kind === "image") {
     const image = state.images.find((item) => item.id === tile.imageId);
     element.innerHTML = image ? `<img src="images/${image.id}.${image.ext}" alt="">` : `<div class="missing">Bild wählen</div>`;
+  } else if (tile.kind === "camera") {
+    element.classList.add("camera");
+    const variable = variableById(tile.variableId);
+    element.innerHTML = `<div class="kicker">Kamera · Livebild</div><div class="name"></div><div class="camera-preview">${variable ? "Snapshot über Variable" : "Variable mit Bild-URL wählen"}</div>`;
+    element.querySelector(".name").textContent = tile.title || (variable ? variable.name : "Kamera");
   }
   element.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -341,6 +347,7 @@ function controlMarkup(control) {
   if (control === "dimSwitch") return `<div class="ctl"><span class="sw"></span><span class="ctl-label">Aus</span></div>`;
   if (control === "slider") return `<div class="ctl"><div class="track"><div class="fill"></div><div class="knob"></div></div></div>`;
   if (control === "combo") return `<div class="ctl"><span class="sw"></span><div class="track"><div class="fill"></div><div class="knob"></div></div></div>`;
+  if (control === "battery") return `<div class="battery"><div class="battery-body"><div class="battery-fill" style="width:72%"></div></div><div class="battery-cap"></div><span class="battery-pct">72 %</span></div>`;
   return "";
 }
 
@@ -408,7 +415,7 @@ function bindDrop(target, col, row, existing) {
       return;
     }
     if (variableId) {
-      if (existing && existing.kind === "value") {
+      if (existing && (existing.kind === "value" || existing.kind === "camera")) {
         assignVariable(existing, variableById(variableId));
         return;
       }
@@ -455,11 +462,15 @@ function addTile(kind, col, row, variable, control) {
   const stamp = Date.now().toString(36);
   const tile = { tileId: `t${stamp}`, kind, title: "", col, row, colSpan: 1, rowSpan: 1 };
   if (kind === "value") {
-    tile.icon = DIM_CONTROLS.includes(control) ? "light" : "energy";
+    tile.icon = DIM_CONTROLS.includes(control) || control === "battery" ? (control === "battery" ? "energy" : "light") : "energy";
     tile.variableId = 0;
-    tile.unit = DIM_CONTROLS.includes(control) ? "%" : "";
+    tile.unit = DIM_CONTROLS.includes(control) || control === "battery" ? "%" : "";
     tile.decimals = 0;
-    if (DIM_CONTROLS.includes(control)) {
+    if (control === "battery") {
+      tile.control = "battery";
+      tile.valueMin = 0;
+      tile.valueMax = 100;
+    } else if (DIM_CONTROLS.includes(control)) {
       tile.control = control;
       tile.actionKind = "dim";
       tile.valueMin = 0;
@@ -486,6 +497,16 @@ function addTile(kind, col, row, variable, control) {
     }
   } else if (kind === "image") {
     tile.imageId = state.images[0] ? state.images[0].id : "";
+  } else if (kind === "camera") {
+    tile.title = "Kamera";
+    tile.variableId = 0;
+    tile.colSpan = Math.min(2, state.layout.columns);
+    tile.rowSpan = Math.min(2, state.layout.rows);
+    if (!fits(null, col, row, tile.colSpan, tile.rowSpan, null)) {
+      tile.colSpan = 1;
+      tile.rowSpan = 1;
+    }
+    if (variable) assignVariable(tile, variable, true);
   }
   if (!fits(null, col, row, tile.colSpan, tile.rowSpan, null)) {
     setStatus("Diese Zelle ist belegt.");
@@ -504,6 +525,18 @@ function addTile(kind, col, row, variable, control) {
 function assignVariable(tile, variable, silent) {
   if (!variable) return;
   tile.variableId = variable.id;
+  if (tile.kind === "camera") {
+    if (!tile.title) tile.title = variable.name;
+    delete tile.actionId;
+    delete tile.actionKind;
+    tile.confirm = false;
+    if (!silent) {
+      markDirty();
+      renderGrid();
+      renderProperties();
+    }
+    return;
+  }
   if (!tile.title) tile.title = variable.name;
   if (!variable.action) {
     delete tile.actionId;
@@ -534,6 +567,7 @@ function guessIcon(variable) {
   if (text.includes("pump")) return "pump";
   if (text.includes("ventil") || text.includes("valve")) return "valve";
   if (text.includes("alarm") || text.includes("warn")) return "alarm";
+  if (text.includes("batt") || text.includes("akku") || text.includes("battery")) return "energy";
   return "energy";
 }
 
@@ -651,7 +685,14 @@ function applyProperties() {
     const control = $("p-control").value || "switch";
     tile.control = control === "switch" ? undefined : control;
     if (control === "switch") delete tile.control;
-    if (DIM_CONTROLS.includes(control)) {
+    if (control === "battery") {
+      tile.valueMin = tile.valueMin ?? 0;
+      tile.valueMax = tile.valueMax ?? 100;
+      if (!tile.unit) tile.unit = "%";
+      delete tile.actionId;
+      delete tile.actionKind;
+      tile.confirm = false;
+    } else if (DIM_CONTROLS.includes(control)) {
       tile.actionKind = "dim";
       tile.valueMin = tile.valueMin ?? 0;
       tile.valueMax = tile.valueMax ?? 100;
@@ -749,7 +790,7 @@ function openDetails(tile) {
     fields.unit = add("Einheit", text(tile.unit));
     fields.decimals = add("Nachkommastellen", number(tile.decimals || 0, 0, 3));
     const control = document.createElement("select");
-    control.innerHTML = '<option value="switch">Schalter</option><option value="dimSwitch">Dimmschalter</option><option value="slider">Dimmbalken</option><option value="combo">Kombischalter</option>';
+    control.innerHTML = '<option value="switch">Schalter</option><option value="dimSwitch">Dimmschalter</option><option value="slider">Dimmbalken</option><option value="combo">Kombischalter</option><option value="battery">Batterie (Ladestand)</option>';
     control.value = tile.control || "switch";
     fields.control = add("Bedienung", control);
     fields.action = add("Schaltbar", check(tile.actionId));
@@ -798,6 +839,26 @@ function openDetails(tile) {
     manage.addEventListener("click", () => openImages());
     body.appendChild(manage);
   }
+  if (tile.kind === "camera") {
+    const picker = document.createElement("select");
+    picker.innerHTML = '<option value="0">Keine Variable</option>';
+    for (const item of state.variables) {
+      const option = document.createElement("option");
+      option.value = String(item.id);
+      option.textContent = `${item.path ? item.path + " / " : ""}${item.name} (${item.id})`;
+      picker.appendChild(option);
+    }
+    picker.value = String(tile.variableId || 0);
+    fields.variable = add("Variable (Bild-URL)", picker);
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "Textvariable mit http- oder https-Adresse zu einem Kamerabild (JPEG/PNG).";
+    body.appendChild(hint);
+    picker.addEventListener("change", () => {
+      const chosen = variableById(Number(picker.value));
+      if (!fields.title.value && chosen) fields.title.value = chosen.name;
+    });
+  }
   dialog.returnValue = "";
   dialog.showModal();
   dialog.onclose = () => {
@@ -831,8 +892,13 @@ function openDetails(tile) {
       } else {
         delete tile.actionId;
         if (!DIM_CONTROLS.includes(control)) delete tile.actionKind;
-        delete tile.valueMin;
-        delete tile.valueMax;
+        if (control === "battery") {
+          tile.valueMin = Number(fields.valueMin.value);
+          tile.valueMax = Number(fields.valueMax.value);
+        } else {
+          delete tile.valueMin;
+          delete tile.valueMax;
+        }
         tile.confirm = false;
       }
       if (fields.threshold.value.trim() !== "" && !Number.isNaN(Number(fields.threshold.value))) {
@@ -849,6 +915,10 @@ function openDetails(tile) {
       tile.size = fields.size.value;
     }
     if (tile.kind === "image") tile.imageId = fields.image.value;
+    if (tile.kind === "camera") {
+      const chosen = variableById(Number(fields.variable.value));
+      tile.variableId = chosen ? chosen.id : 0;
+    }
     markDirty();
     renderGrid();
     renderProperties();
@@ -1022,6 +1092,8 @@ function validateLayout(layout) {
     for (const tile of page.tiles) {
       if (seen.has(tile.tileId)) throw new Error("Doppelte Kachelkennung.");
       seen.add(tile.tileId);
+      if (tile.kind === "value" && tile.control === "battery" && !tile.variableId) throw new Error(`Die Batteriekachel „${tile.title || tile.tileId}“ braucht eine Variable.`);
+      if (tile.kind === "camera" && !tile.variableId) throw new Error(`Die Kamerakachel „${tile.title || tile.tileId}“ braucht eine Variable mit Bild-URL.`);
       if (tile.kind === "value" && DIM_CONTROLS.includes(tile.control) && !tile.actionId) throw new Error(`„${tile.title || tile.tileId}“ braucht eine schaltbare Dimmvariable.`);
       if (tile.kind === "value" && tile.actionId) {
         const variable = variableById(tile.variableId);

@@ -120,6 +120,13 @@ label.small { font-size: 12px; color: var(--muted); }
 .tile.image { background: #0b1626; padding: 0; align-items: center; justify-content: center; }
 .tile.image img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .tile.image .missing { color: #5a7391; padding: 10px; }
+.tile.battery .battery { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.tile.battery .battery-body { width: 56px; height: 28px; border: 2px solid #f4f7fb; border-radius: 5px; padding: 3px; background: #0b1626; }
+.tile.battery .battery-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, #3ddc84, #7cf0a8); }
+.tile.battery .battery-cap { width: 5px; height: 12px; background: #f4f7fb; border-radius: 0 2px 2px 0; }
+.tile.battery .battery-pct { font-size: 18px; font-weight: 600; }
+.tile.camera { background: #0b1626; }
+.tile.camera .camera-preview { flex: 1; display: flex; align-items: center; justify-content: center; margin-top: 8px; border: 1px dashed #5a7391; border-radius: 6px; color: #9fb2c8; font-size: 12px; text-align: center; padding: 8px; min-height: 48px; }
 
 #statusbar { display: flex; justify-content: space-between; padding: 4px 12px; background: #f7f8fa; border-top: 1px solid var(--line); color: var(--muted); }
 

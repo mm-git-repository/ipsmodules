@@ -10,7 +10,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 14;
+    private const MODULE_BUILD = 15;
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
@@ -413,6 +413,10 @@ class HomeDisplay extends IPSModuleStrict
                 $this->sendImage(substr($route, strlen('/v1/images/')));
                 return;
             }
+            if ($method === 'GET' && preg_match('#^/v1/camera/([A-Za-z0-9_-]{1,40})$#', $route, $match) === 1) {
+                $this->sendCameraSnapshot($device, $match[1]);
+                return;
+            }
             if ($method === 'POST' && $route === '/v1/actions') {
                 $this->json($this->performAction($device, self::body()));
                 return;
@@ -800,10 +804,33 @@ class HomeDisplay extends IPSModuleStrict
                 continue;
             }
             foreach ($page['tiles'] ?? [] as $tile) {
-                if (!is_array($tile) || (string) ($tile['kind'] ?? 'value') !== 'value') {
+                if (!is_array($tile)) {
                     continue;
                 }
-                $tileId = (string) $tile['tileId'];
+                $kind = (string) ($tile['kind'] ?? 'value');
+                $tileId = (string) ($tile['tileId']);
+                if ($kind === 'camera') {
+                    $variableId = (int) ($tile['variableId'] ?? 0);
+                    $seq = 0;
+                    $quality = 'empty';
+                    if ($variableId > 0 && IPS_VariableExists($variableId)) {
+                        $url = trim((string) GetValue($variableId));
+                        if ($url !== '') {
+                            $interval = max(10, (int) IPS_GetProperty($device['id'], 'StateIntervalSec'));
+                            $seq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32($url));
+                            $quality = 'ok';
+                        }
+                    }
+                    $tiles[] = [
+                        'tileId' => $tileId,
+                        'cameraSeq' => $seq,
+                        'quality' => $quality,
+                    ];
+                    continue;
+                }
+                if ($kind !== 'value') {
+                    continue;
+                }
                 $variableId = (int) ($tile['variableId'] ?? 0);
                 $text = '—';
                 $quality = 'empty';
@@ -1106,6 +1133,86 @@ class HomeDisplay extends IPSModuleStrict
             'available' => $available,
             'path' => $path,
         ];
+    }
+
+    /** @param array{id: int, token: string} $device */
+    private function sendCameraSnapshot(array $device, string $tileId): void
+    {
+        $url = $this->cameraUrlForTile($device['id'], $tileId);
+        if ($url === '') {
+            http_response_code(404);
+            $this->json(['error' => 'camera']);
+            return;
+        }
+        $binary = $this->fetchRemoteBinary($url);
+        if ($binary === null || $binary === '') {
+            http_response_code(502);
+            $this->json(['error' => 'camera_fetch']);
+            return;
+        }
+        $mime = $this->guessImageMime($binary);
+        header('Content-Type: ' . $mime);
+        header('Cache-Control: no-store');
+        echo $binary;
+    }
+
+    private function cameraUrlForTile(int $instanceId, string $tileId): string
+    {
+        $layout = $this->activeLayout($instanceId);
+        if ($layout === null) {
+            return '';
+        }
+        foreach ($layout['pages'] ?? [] as $page) {
+            if (!is_array($page)) {
+                continue;
+            }
+            foreach ($page['tiles'] ?? [] as $tile) {
+                if (!is_array($tile) || (string) ($tile['kind'] ?? '') !== 'camera') {
+                    continue;
+                }
+                if ((string) ($tile['tileId'] ?? '') !== $tileId) {
+                    continue;
+                }
+                $variableId = (int) ($tile['variableId'] ?? 0);
+                if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
+                    return '';
+                }
+                return trim((string) GetValue($variableId));
+            }
+        }
+        return '';
+    }
+
+    private function fetchRemoteBinary(string $url): ?string
+    {
+        if ($url === '' || !preg_match('#^https?://#i', $url)) {
+            return null;
+        }
+        $context = stream_context_create([
+            'http' => [
+                'timeout' => 12,
+                'follow_location' => 1,
+                'max_redirects' => 3,
+                'header' => "User-Agent: HomeDisplay/1.0\r\n",
+            ],
+            'ssl' => [
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+            ],
+        ]);
+        $binary = @file_get_contents($url, false, $context);
+        return is_string($binary) && $binary !== '' ? $binary : null;
+    }
+
+    private function guessImageMime(string $binary): string
+    {
+        if (str_starts_with($binary, "\xFF\xD8\xFF")) {
+            return 'image/jpeg';
+        }
+        if (str_starts_with($binary, "\x89PNG\r\n\x1a\n")) {
+            return 'image/png';
+        }
+        return 'image/jpeg';
     }
 
     private function sendImage(string $id): void

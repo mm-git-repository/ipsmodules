@@ -376,6 +376,133 @@ static void fetch_images(const char *layout_json)
     cJSON_Delete(root);
 }
 
+#define CAM_STAMP_MAX 16
+typedef struct {
+    char id[40];
+    int stamp;
+} cam_stamp_entry_t;
+static cam_stamp_entry_t cam_stamps[CAM_STAMP_MAX];
+
+static bool cam_stamp_unchanged(const char *tile_id, int stamp)
+{
+    for (int index = 0; index < CAM_STAMP_MAX; index++) {
+        if (cam_stamps[index].id[0] && strcmp(cam_stamps[index].id, tile_id) == 0) {
+            if (cam_stamps[index].stamp == stamp) return true;
+            cam_stamps[index].stamp = stamp;
+            return false;
+        }
+    }
+    for (int index = 0; index < CAM_STAMP_MAX; index++) {
+        if (!cam_stamps[index].id[0]) {
+            snprintf(cam_stamps[index].id, sizeof(cam_stamps[index].id), "%s", tile_id);
+            cam_stamps[index].stamp = stamp;
+            return false;
+        }
+    }
+    return false;
+}
+
+static const char *camera_file_for_tile(cJSON *layout_root, const char *tile_id)
+{
+    cJSON *page = NULL;
+    cJSON_ArrayForEach(page, cJSON_GetObjectItem(layout_root, "pages")) {
+        cJSON *tile = NULL;
+        cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
+            const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
+            const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
+            if (kind && strcmp(kind, "camera") == 0 && id && tile_id && strcmp(id, tile_id) == 0) {
+                return cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile"));
+            }
+        }
+    }
+    return NULL;
+}
+
+static void fetch_one_camera(const char *tile_id, const char *file)
+{
+    if (!tile_id || !tile_id[0] || !file || !file[0]) return;
+    char target[96];
+    snprintf(target, sizeof(target), "/storage/%s", file);
+    char path[80];
+    snprintf(path, sizeof(path), "/v1/camera/%s", tile_id);
+    homedisplay_ui_status("Lade Kamera");
+    if (download_to_file(path, target) != ESP_OK) {
+        ESP_LOGW(TAG, "Kamera %s konnte nicht geladen werden", tile_id);
+        return;
+    }
+    homedisplay_ui_refresh_camera(tile_id, file);
+}
+
+static cJSON *read_layout_cache(void)
+{
+    FILE *layout_file = fopen(LAYOUT_CACHE, "r");
+    if (!layout_file) return NULL;
+    fseek(layout_file, 0, SEEK_END);
+    long size = ftell(layout_file);
+    if (size <= 0 || size > 16000) {
+        fclose(layout_file);
+        return NULL;
+    }
+    fseek(layout_file, 0, SEEK_SET);
+    char *layout_text = malloc((size_t) size + 1);
+    if (!layout_text) {
+        fclose(layout_file);
+        return NULL;
+    }
+    if (fread(layout_text, 1, (size_t) size, layout_file) != (size_t) size) {
+        free(layout_text);
+        fclose(layout_file);
+        return NULL;
+    }
+    layout_text[size] = '\0';
+    fclose(layout_file);
+    cJSON *layout = cJSON_Parse(layout_text);
+    free(layout_text);
+    return layout;
+}
+
+static void fetch_layout_cameras(const char *layout_json)
+{
+    cJSON *root = cJSON_Parse(layout_json);
+    if (!root) return;
+    cJSON *page = NULL;
+    cJSON_ArrayForEach(page, cJSON_GetObjectItem(root, "pages")) {
+        cJSON *tile = NULL;
+        cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
+            const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
+            if (!kind || strcmp(kind, "camera") != 0) continue;
+            fetch_one_camera(
+                cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId")),
+                cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile")));
+        }
+    }
+    cJSON_Delete(root);
+}
+
+static void sync_cameras_from_state(const char *state_json)
+{
+    cJSON *state = cJSON_Parse(state_json);
+    if (!state) return;
+    if (cJSON_IsTrue(cJSON_GetObjectItem(state, "unchanged"))) {
+        cJSON_Delete(state);
+        return;
+    }
+    cJSON *layout = read_layout_cache();
+    cJSON *tile = NULL;
+    cJSON_ArrayForEach(tile, cJSON_GetObjectItem(state, "tiles")) {
+        cJSON *stamp_item = cJSON_GetObjectItem(tile, "cameraSeq");
+        if (!stamp_item || !cJSON_IsNumber(stamp_item)) continue;
+        const char *tile_id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
+        int stamp = stamp_item->valueint;
+        if (!tile_id || stamp <= 0) continue;
+        if (cam_stamp_unchanged(tile_id, stamp)) continue;
+        const char *file = layout ? camera_file_for_tile(layout, tile_id) : NULL;
+        if (file) fetch_one_camera(tile_id, file);
+    }
+    if (layout) cJSON_Delete(layout);
+    cJSON_Delete(state);
+}
+
 static void apply_config_document(const char *json)
 {
     homedisplay_ui_apply_config(json);
@@ -462,6 +589,7 @@ static void pull_manifest(char *response, size_t length)
     }
     if (!layout_held && next_layout[0] && strcmp(next_layout, layout_sha) != 0 && request("/v1/layout", "GET", NULL, response, length) == ESP_OK) {
         fetch_images(response);
+        fetch_layout_cameras(response);
         snprintf(layout_sha, sizeof(layout_sha), "%s", next_layout);
         homedisplay_ui_apply_layout(response);
         write_cache(LAYOUT_CACHE, response);
@@ -607,6 +735,7 @@ static void client_task(void *argument)
             if (seq) last_seq = seq->valueint;
             if (root) remember_time(root);
             if (root) cJSON_Delete(root);
+            sync_cameras_from_state(response);
             homedisplay_ui_apply_state(response);
             if (!unchanged) write_cache(STATE_CACHE, response);
             set_online(true);

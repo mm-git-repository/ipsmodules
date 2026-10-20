@@ -22,12 +22,12 @@ final class HomeDisplayPanelSchema
     public const ICONS = ['energy', 'temperature', 'light', 'shutter', 'pump', 'valve', 'alarm', 'home', 'clock', 'info'];
 
     /** system: Diagnosekachel, die das Panel selbst mit Firmware, WLAN, Laufzeit und Datenalter füllt. */
-    public const KINDS = ['value', 'nav', 'label', 'image', 'separator', 'system'];
+    public const KINDS = ['value', 'nav', 'label', 'image', 'camera', 'separator', 'system'];
 
     public const ACTIONS = ['switch', 'dim', 'position'];
 
-    /** switch: Tippen. dimSwitch: Ein/Aus eines Dimmwerts. slider: nur Ziehen. combo: Schalter und Balken. */
-    public const CONTROLS = ['switch', 'dimSwitch', 'slider', 'combo'];
+    /** switch: Tippen. dimSwitch: Ein/Aus eines Dimmwerts. slider: nur Ziehen. combo: Schalter und Balken. battery: Ladestand grafisch. */
+    public const CONTROLS = ['switch', 'dimSwitch', 'slider', 'combo', 'battery'];
 
     public const COLORS = ['neutral', 'ok', 'warn', 'alarm'];
 
@@ -175,6 +175,9 @@ final class HomeDisplayPanelSchema
                     $public['imageId'] = $imageId;
                     $public['imageFile'] = HomeDisplayCatalogStore::imageFileName($imageId);
                 }
+                if ($kind === 'camera') {
+                    $public['cameraFile'] = self::cameraFileName((string) $tile['tileId']);
+                }
                 if ($kind === 'value') {
                     $actionId = trim((string) ($tile['actionId'] ?? ''));
                     $control = (string) ($tile['control'] ?? 'switch');
@@ -196,6 +199,10 @@ final class HomeDisplayPanelSchema
                     if (isset($tile['threshold'], $tile['color'])) {
                         $public['threshold'] = (float) $tile['threshold'];
                         $public['color'] = (string) $tile['color'];
+                    }
+                    if ($control === 'battery') {
+                        $public['valueMin'] = (float) ($tile['valueMin'] ?? 0);
+                        $public['valueMax'] = (float) ($tile['valueMax'] ?? 100);
                     }
                 }
                 $tiles[] = $public;
@@ -486,6 +493,12 @@ final class HomeDisplayPanelSchema
             if (!in_array($control, self::CONTROLS, true)) {
                 throw new InvalidArgumentException('Unbekannte Bedienung: ' . $control);
             }
+            if ($control === 'battery') {
+                if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) $tile['variableId']))) {
+                    throw new InvalidArgumentException('Batteriekachel ohne Variable.');
+                }
+                return;
+            }
             if (in_array($control, ['dimSwitch', 'slider', 'combo'], true)) {
                 if ((string) ($tile['actionKind'] ?? 'dim') !== 'dim') {
                     throw new InvalidArgumentException('Dimmschalter, Dimmbalken und Kombischalter brauchen die Aktionsart Dimmen.');
@@ -528,7 +541,22 @@ final class HomeDisplayPanelSchema
             if ($publish && !HomeDisplayCatalogStore::imageExists($imageId)) {
                 throw new InvalidArgumentException('Das Bild der Kachel wurde gelöscht.');
             }
+            return;
         }
+        if ($kind === 'camera') {
+            if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) $tile['variableId']))) {
+                throw new InvalidArgumentException('Kamerakachel ohne Variable für die Bildadresse.');
+            }
+        }
+    }
+
+    public static function cameraFileName(string $tileId): string
+    {
+        $safe = preg_replace('/[^A-Za-z0-9_-]/', '', $tileId) ?? '';
+        if ($safe === '') {
+            $safe = 'cam';
+        }
+        return 'cam_' . substr($safe, 0, 32) . '.jpg';
     }
 
     /** @param array<string, mixed> $tile */
