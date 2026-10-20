@@ -101,6 +101,14 @@ function tileNeedsLivePreview(tile) {
   return false;
 }
 
+/** Prüfen-Dialog: Layout kommt von Inspect (publicLayout ohne Variablen-IDs). */
+function tileNeedsProbeImage(tile) {
+  if (!tile) return false;
+  if (tile.kind === "camera") return true;
+  if (tile.kind === "image" && (tile.imageSource || "catalog") === "media") return true;
+  return false;
+}
+
 const state = {
   catalog: { layouts: [], configs: [] },
   variables: [],
@@ -645,9 +653,10 @@ function buildTileElement(tile, context) {
       normalizeMediaTileBindings(tile);
       const bound = mediaBindingName(tile);
       element.innerHTML = `<div class="media-placeholder">Medien${bound ? ": " + escapeHtml(bound) : ""}</div>`;
-      if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
-        element.innerHTML = `<img src="${context.probeImageUrls[tile.tileId]}" alt="">`;
-      }
+    if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
+      const src = context.probeImageUrls[tile.tileId].url || context.probeImageUrls[tile.tileId];
+      element.innerHTML = `<img src="${src}" alt="">`;
+    }
     } else {
       const image = state.images.find((item) => item.id === tile.imageId);
       element.innerHTML = image ? `<img src="images/${image.id}.${image.ext}" alt="">` : `<div class="missing">Bild wählen</div>`;
@@ -658,11 +667,20 @@ function buildTileElement(tile, context) {
     const bound = mediaBindingName(tile);
     const fromMedia = (tile.cameraSource || "url") === "media" || Boolean(tile.mediaObjectId) || isMediaPick(variableById(tile.variableId));
     if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
-      element.innerHTML = `<div class="kicker">Kamera</div><img src="${context.probeImageUrls[tile.tileId]}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1">`;
+      const src = context.probeImageUrls[tile.tileId].url || context.probeImageUrls[tile.tileId];
+      element.innerHTML = `<div class="kicker">Kamera</div><img src="${src}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1">`;
     } else {
-      const preview = bound
-        ? (fromMedia ? `IPS-Medien: ${bound}` : "Snapshot über Bild-URL")
-        : (fromMedia ? "Medien-Variable oder Medienobjekt wählen" : "Variable mit Bild-URL wählen");
+      const live = context.stateByTileId && context.stateByTileId[tile.tileId];
+      let preview;
+      if (live && live.quality === "empty") {
+        preview = "Keine Bildquelle (Variable leer oder nicht konfiguriert)";
+      } else if (mode === "probe" && tile.cameraFile) {
+        preview = "Snapshot konnte nicht geladen werden (Symcon prüfen)";
+      } else {
+        preview = bound
+          ? (fromMedia ? `IPS-Medien: ${bound}` : "Snapshot über Bild-URL")
+          : (fromMedia ? "Medien-Variable oder Medienobjekt wählen" : "Variable mit Bild-URL wählen");
+      }
       element.innerHTML = `<div class="kicker">${fromMedia ? "Kamera · Medien" : "Kamera · Livebild"}</div><div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div>`;
       element.querySelector(".name").textContent = tile.title || bound || "Kamera";
     }
@@ -2100,17 +2118,22 @@ function updateProbeValuesOnly() {
   }
 }
 
-async function loadProbeImages(layout, panelId) {
+async function loadProbeImages(layout, panelId, stateTiles) {
   probe.probeImageUrls = {};
+  const liveById = {};
+  for (const st of stateTiles || []) liveById[st.tileId] = st;
   for (const page of layout.pages || []) {
     for (const tile of page.tiles || []) {
-      if (!tileNeedsLivePreview(tile)) continue;
+      if (!tileNeedsProbeImage(tile)) continue;
       try {
-        normalizeMediaTileBindings(tile);
-        const result = await call("probeImage", { id: panelId, tileId: tile.tileId, tile });
-          if (result.ok && result.data) {
-            probe.probeImageUrls[tile.tileId] = `data:${result.mime || "image/jpeg"};base64,${result.data}`;
-          }
+        const live = liveById[tile.tileId];
+        if (live && live.quality === "empty") continue;
+        const result = await call("probeImage", { id: panelId, tileId: tile.tileId });
+        if (result.ok && result.data) {
+          probe.probeImageUrls[tile.tileId] = {
+            url: `data:${result.mime || "image/jpeg"};base64,${result.data}`
+          };
+        }
       } catch (error) {
         /* optional */
       }
@@ -2191,7 +2214,9 @@ async function loadProbe(fullRender) {
     updateProbeValuesOnly();
     return;
   }
-  if (probe.snapshot.layout) await loadProbeImages(probe.snapshot.layout, id);
+  if (probe.snapshot.layout) {
+    await loadProbeImages(probe.snapshot.layout, id, (probe.snapshot.state && probe.snapshot.state.tiles) || []);
+  }
   renderProbe();
 }
 
