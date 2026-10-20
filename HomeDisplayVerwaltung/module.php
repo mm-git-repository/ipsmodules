@@ -85,10 +85,20 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
                 continue;
             }
             if (($element['name'] ?? '') === 'AdminUrlLabel') {
-                $element['caption'] = 'Verwaltungsseite: ' . $this->pageUrl();
+                $element['caption'] = 'Adresse der Verwaltungsseite (Editor): ' . $this->pageUrl();
+            }
+            if (($element['name'] ?? '') === 'AdminUrlNote') {
+                if ($this->ReadPropertyString('AdminPassword') === '') {
+                    $element['caption'] = 'Zuerst ein Passwort eintragen und die Instanz übernehmen. Ohne Passwort antwortet die Seite nicht.';
+                } else {
+                    $element['caption'] = 'Diese Adresse im Browser öffnen (nicht die Dienstadresse unten). Beim Aufruf erscheint die Anmeldung mit dem Passwort von oben.';
+                }
             }
             if (($element['name'] ?? '') === 'ServiceUrlLabel') {
                 $element['caption'] = $this->serviceLabel();
+            }
+            if (($element['name'] ?? '') === 'ServiceUrlNote') {
+                $element['caption'] = 'Nur für gekoppelte Anzeigen. Wird die Dienstadresse im Browser geöffnet, erscheint {\"error\":\"token\"} – das ist erwartet.';
             }
         }
         unset($element);
@@ -114,6 +124,12 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
     public function GetServiceInstance(): int
     {
         return $this->serviceInstance();
+    }
+
+    /** Adresse der Verwaltungsseite im Browser (Editor), inklusive abschließendem Schrägstrich. */
+    public function GetAdminPageUrl(): string
+    {
+        return $this->pageUrl();
     }
 
     /** Zieht den Dienst von einer Anzeige ab, die gelöscht oder deaktiviert wird. */

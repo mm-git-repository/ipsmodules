@@ -22,7 +22,12 @@
                 {
                     "type": "Label",
                     "name": "AdminUrlLabel",
-                    "caption": "Verwaltungsseite: wird nach dem Übernehmen angezeigt."
+                    "caption": "Adresse der Verwaltungsseite (Editor): nach Übernehmen sichtbar."
+                },
+                {
+                    "type": "Label",
+                    "name": "AdminUrlNote",
+                    "caption": "Hinweis zur Adresse."
                 }
             ]
         },
@@ -45,11 +50,21 @@
                     "type": "Label",
                     "name": "ServiceUrlLabel",
                     "caption": "Dienst: wird nach dem Übernehmen angezeigt."
+                },
+                {
+                    "type": "Label",
+                    "name": "ServiceUrlNote",
+                    "caption": "Hinweis zum Dienst."
                 }
             ]
         }
     ],
     "actions": [
+        {
+            "type": "Button",
+            "caption": "Verwaltungsadresse anzeigen",
+            "onClick": "IPS_ApplyChanges($id); $urlId = @IPS_GetObjectIDByIdent('AdminUrl', $id); echo $urlId > 0 ? GetValue($urlId) : 'Passwort setzen und Instanz übernehmen.';"
+        },
         {
             "type": "Button",
             "caption": "Dienst neu einrichten",

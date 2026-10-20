@@ -10,7 +10,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 13;
+    private const MODULE_BUILD = 14;
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
@@ -377,6 +377,12 @@ class HomeDisplay extends IPSModuleStrict
                 $this->json($this->hello(self::body()));
                 return;
             }
+            if ($method === 'GET' && $route === '/') {
+                http_response_code(403);
+                header('Content-Type: text/plain; charset=utf-8');
+                echo $this->serviceBrowserHint();
+                return;
+            }
             $device = $this->deviceFromToken();
             if ($device === null) {
                 http_response_code(401);
@@ -569,6 +575,38 @@ class HomeDisplay extends IPSModuleStrict
             return '';
         }
         return (string) HDADM_GetServiceUrl($admin);
+    }
+
+    private function serviceBrowserHint(): string
+    {
+        $lines = [
+            'Dies ist der API-Dienst für gekoppelte Anzeigen, nicht die Verwaltungsseite im Browser.',
+            'Ohne Geräte-Schlüssel antwortet der Dienst deshalb mit {"error":"token"}.',
+        ];
+        $admin = $this->adminInstanceId();
+        if ($admin > 0 && function_exists('HDADM_GetAdminPageUrl')) {
+            $url = trim((string) HDADM_GetAdminPageUrl($admin));
+            if ($url !== '') {
+                $lines[] = '';
+                $lines[] = 'Verwaltungsseite (Editor): ' . $url;
+                $lines[] = 'Passwort: Instanz „Hausanzeige Verwaltung“ → „Passwort für die Verwaltungsseite“.';
+                return implode("\n", $lines);
+            }
+        }
+        if ($admin > 0) {
+            $variableId = @IPS_GetObjectIDByIdent('AdminUrl', $admin);
+            if (is_int($variableId) && $variableId > 0) {
+                $url = trim((string) GetValue($variableId));
+                if ($url !== '') {
+                    $lines[] = '';
+                    $lines[] = 'Verwaltungsseite (Editor): ' . $url;
+                    $lines[] = 'Passwort: Instanz „Hausanzeige Verwaltung“ → „Passwort für die Verwaltungsseite“.';
+                }
+            }
+        }
+        $lines[] = '';
+        $lines[] = 'Legen Sie die Instanz „Hausanzeige Verwaltung“ an, setzen Sie ein Passwort und übernehmen Sie die Änderungen.';
+        return implode("\n", $lines);
     }
 
     private function hookRoute(): string
