@@ -11,7 +11,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 24;
+    private const MODULE_BUILD = 25;
 
     private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
@@ -1202,10 +1202,32 @@ class HomeDisplay extends IPSModuleStrict
             return $this->encode(['ok' => false, 'error' => 'tile']);
         }
         $payload = $this->probeTileImagePayload($tile);
-        if (($Mode === 'meta' || $Mode === 'metaOnly') && !empty($payload['ok'])) {
-            unset($payload['data']);
+        if (!empty($payload['ok']) && isset($payload['data'])) {
+            $payload = $this->applyProbeImageMode($payload, $Mode, $this->InstanceID, $TileId);
         }
         return $this->encode($payload);
+    }
+
+    /** @param array<string, mixed> $payload @return array<string, mixed> */
+    private function applyProbeImageMode(array $payload, string $mode, int $instanceId, string $tileId): array
+    {
+        if ($mode === 'meta' || $mode === 'metaOnly') {
+            unset($payload['data']);
+            return $payload;
+        }
+        if ($mode !== 'stream') {
+            return $payload;
+        }
+        $binary = base64_decode((string) ($payload['data'] ?? ''), true);
+        unset($payload['data']);
+        if (!is_string($binary) || $binary === '') {
+            return ['ok' => false, 'error' => 'camera_fetch', 'detail' => 'Bilddaten nach Abruf leer (IPS-Größenlimit?)'];
+        }
+        $path = HomeDisplayCatalogStore::probeCacheFile($instanceId, $tileId);
+        if (file_put_contents($path, $binary, LOCK_EX) === false) {
+            return ['ok' => false, 'error' => 'camera_fetch', 'detail' => 'Probe-Cache nicht schreibbar'];
+        }
+        return $payload;
     }
 
     /** @param array<string, mixed> $tile @return array<string, mixed> */
@@ -1560,19 +1582,23 @@ class HomeDisplay extends IPSModuleStrict
                 return null;
             }
         }
+        $headers = "User-Agent: HomeDisplay/1.0\r\n";
+        if ($normalized['userPwd'] !== '') {
+            $headers .= 'Authorization: Basic ' . base64_encode($normalized['userPwd']) . "\r\n";
+        }
         $context = stream_context_create([
             'http' => [
                 'timeout' => 15,
                 'follow_location' => 1,
                 'max_redirects' => 3,
-                'header' => "User-Agent: HomeDisplay/1.0\r\n",
+                'header' => $headers,
             ],
             'ssl' => [
                 'verify_peer' => $verifySsl,
                 'verify_peer_name' => $verifySsl,
             ],
         ]);
-        $binary = @file_get_contents($url, false, $context);
+        $binary = @file_get_contents($normalized['url'], false, $context);
         if (!is_string($binary) || $binary === '') {
             return null;
         }

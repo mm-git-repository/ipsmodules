@@ -127,7 +127,17 @@ final class HomeDisplayMedia
         if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
             return '';
         }
-        return trim((string) GetValue($variableId));
+        return self::normalizeCameraSource((string) GetValue($variableId));
+    }
+
+    public static function normalizeCameraSource(string $raw): string
+    {
+        $raw = trim(html_entity_decode($raw, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if ($raw === '') {
+            return '';
+        }
+        $line = preg_split('/\r\n|\r|\n/', $raw)[0] ?? $raw;
+        return trim((string) $line);
     }
 
     /** Datei unter IPS-Kernel (media/…, absoluter Pfad oder data:image-URL). */

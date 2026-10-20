@@ -2211,18 +2211,22 @@ async function loadProbeImages(layout, panelId, stateTiles) {
       try {
         const live = liveById[tile.tileId];
         const bust = live && (live.cameraSeq != null || live.mediaSeq != null) ? (live.cameraSeq ?? live.mediaSeq) : Date.now();
-        const result = await call("probeImage", { id: panelId, tileId: tile.tileId, meta: true });
-        if (!result.ok) {
-          probe.probeImageErrors[tile.tileId] = result.error || "unknown";
-          if (result.detail) probe.probeImageErrorDetails[tile.tileId] = result.detail;
-          continue;
-        }
         const streamUrl = probeImageStreamUrl(panelId, tile.tileId, bust);
         const response = await fetch(streamUrl, { credentials: "same-origin" });
         if (!response.ok) {
-          probe.probeImageErrors[tile.tileId] = response.headers.get("X-HomeDisplay-Error") || "camera_fetch";
-          const detail = response.headers.get("X-HomeDisplay-Detail");
-          if (detail) probe.probeImageErrorDetails[tile.tileId] = detail;
+          let detail = response.headers.get("X-HomeDisplay-Detail") || "";
+          const err = response.headers.get("X-HomeDisplay-Error") || "camera_fetch";
+          if (!detail) {
+            try {
+              const meta = await call("probeImage", { id: panelId, tileId: tile.tileId, meta: true });
+              if (meta.error) probe.probeImageErrors[tile.tileId] = meta.error;
+              if (meta.detail) detail = meta.detail;
+            } catch (error) {
+              /* optional */
+            }
+          }
+          probe.probeImageErrors[tile.tileId] = probe.probeImageErrors[tile.tileId] || err;
+          probe.probeImageErrorDetails[tile.tileId] = detail || `HTTP ${response.status}`;
           continue;
         }
         const blob = await response.blob();

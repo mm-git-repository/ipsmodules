@@ -573,7 +573,7 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             echo 'HomeDisplay nicht geladen.';
             return;
         }
-        $result = $this->decodeCall(HDISP_ProbeTileImage($panel, $tileId, ''));
+        $result = $this->decodeCall(HDISP_ProbeTileImage($panel, $tileId, '', 'stream'));
         if (empty($result['ok'])) {
             http_response_code(502);
             header('Content-Type: text/plain; charset=utf-8');
@@ -584,16 +584,29 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             echo 'Snapshot fehlt.';
             return;
         }
-        $binary = base64_decode((string) ($result['data'] ?? ''), true);
-        if (!is_string($binary) || $binary === '') {
+        $path = $this->probeCacheFile($panel, $tileId);
+        if (!is_file($path)) {
             http_response_code(502);
             header('Content-Type: text/plain; charset=utf-8');
-            echo 'Snapshot leer.';
+            header('X-HomeDisplay-Error: camera_fetch');
+            header('X-HomeDisplay-Detail: Bild-Cache fehlt nach Abruf');
+            echo 'Snapshot fehlt.';
             return;
         }
         header('Content-Type: ' . (string) ($result['mime'] ?? 'image/jpeg'));
         header('Cache-Control: no-store');
-        echo $binary;
+        readfile($path);
+    }
+
+    private function probeCacheFile(int $panel, string $tileId): string
+    {
+        $kernel = rtrim(IPS_GetKernelDir(), '\\/');
+        $safe = preg_replace('/[^A-Za-z0-9_-]/', '', $tileId) ?? '';
+        if ($safe === '') {
+            $safe = 'tile';
+        }
+        return $kernel . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'HomeDisplay'
+            . DIRECTORY_SEPARATOR . 'probe-cache' . DIRECTORY_SEPARATOR . $panel . '-' . $safe . '.bin';
     }
 
     private function sendImage(string $id): void

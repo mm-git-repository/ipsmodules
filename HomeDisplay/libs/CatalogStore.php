@@ -21,6 +21,19 @@ final class HomeDisplayCatalogStore
         return $dir . DIRECTORY_SEPARATOR . 'catalog.json';
     }
 
+    public static function probeCacheFile(int $instanceId, string $tileId): string
+    {
+        $dir = dirname(self::path()) . DIRECTORY_SEPARATOR . 'probe-cache';
+        if (!is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+        $safe = preg_replace('/[^A-Za-z0-9_-]/', '', $tileId) ?? '';
+        if ($safe === '') {
+            $safe = 'tile';
+        }
+        return $dir . DIRECTORY_SEPARATOR . $instanceId . '-' . $safe . '.bin';
+    }
+
     /** @return array<string, mixed> */
     public static function load(): array
     {
