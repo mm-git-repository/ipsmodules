@@ -11,7 +11,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 18;
+    private const MODULE_BUILD = 20;
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
@@ -757,7 +757,7 @@ class HomeDisplay extends IPSModuleStrict
         $configDocument = $this->configDocument($device['id']);
         $layout = $this->assigned($device['id'], 'layouts', 'LayoutId');
         $layoutDocument = $this->deviceLayout($device);
-        $firmware = $this->firmwareDescriptor();
+        $firmware = $this->firmwareDescriptor($device['id']);
         $runtime = $this->runtime();
         $command = $runtime[(string) $device['id']]['command'] ?? null;
         return [
@@ -1270,19 +1270,31 @@ class HomeDisplay extends IPSModuleStrict
         return hash('sha256', $json === false ? '' : $json);
     }
 
-    /** @return array{version: string, sha256: string, signature: string, available: bool, path: string} */
-    private function firmwareDescriptor(): array
+    /** @return array{version: string, sha256: string, signature: string, available: bool, path: string, target: string} */
+    private function firmwareDescriptor(int $instanceId = 0): array
     {
-        $versionFile = __DIR__ . '/firmware/VERSION';
-        $version = is_file($versionFile) ? trim((string) file_get_contents($versionFile)) : self::FIRMWARE_VERSION;
-        $path = __DIR__ . '/firmware/build/homedisplay.bin';
+        $profile = $instanceId > 0 ? (string) IPS_GetProperty($instanceId, 'DisplayProfile') : '';
+        $firebeetle = $profile !== '' && str_starts_with($profile, 'firebeetle-epd-');
+        if ($firebeetle) {
+            $versionFile = __DIR__ . '/firmware-firebeetle/VERSION';
+            $path = __DIR__ . '/firmware-firebeetle/build/firmware.bin';
+            $fallbackVersion = '0.1.0';
+            $target = 'firebeetle';
+        } else {
+            $versionFile = __DIR__ . '/firmware/VERSION';
+            $path = __DIR__ . '/firmware/build/homedisplay.bin';
+            $fallbackVersion = self::FIRMWARE_VERSION;
+            $target = 'waveshare';
+        }
+        $version = is_file($versionFile) ? trim((string) file_get_contents($versionFile)) : $fallbackVersion;
         $available = is_file($path);
         return [
-            'version' => $version !== '' ? $version : self::FIRMWARE_VERSION,
+            'version' => $version !== '' ? $version : $fallbackVersion,
             'sha256' => $available ? hash_file('sha256', $path) : '',
             'signature' => $available ? $this->firmwareSignature($path) : '',
             'available' => $available,
             'path' => $path,
+            'target' => $target,
         ];
     }
 
@@ -1452,7 +1464,9 @@ class HomeDisplay extends IPSModuleStrict
 
     private function sendFirmware(): void
     {
-        $firmware = $this->firmwareDescriptor();
+        $device = $this->deviceFromToken();
+        $instanceId = is_array($device) ? (int) ($device['id'] ?? 0) : 0;
+        $firmware = $this->firmwareDescriptor($instanceId);
         if (!$firmware['available']) {
             http_response_code(404);
             $this->json(['error' => 'Programmdatei fehlt. Zuerst lokal bauen.']);

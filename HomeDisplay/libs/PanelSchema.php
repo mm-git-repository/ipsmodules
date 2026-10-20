@@ -36,6 +36,24 @@ final class HomeDisplayPanelSchema
             'maxColumns' => 4,
             'maxRows' => 6,
         ],
+        'firebeetle-epd-400x300' => [
+            'label' => 'FireBeetle E-Ink 4,2" (400×300)',
+            'width' => 400,
+            'height' => 300,
+            'defaultColumns' => 3,
+            'defaultRows' => 4,
+            'maxColumns' => 3,
+            'maxRows' => 4,
+        ],
+        'firebeetle-epd-800x480' => [
+            'label' => 'FireBeetle E-Ink 7,5" (800×480)',
+            'width' => 800,
+            'height' => 480,
+            'defaultColumns' => 4,
+            'defaultRows' => 6,
+            'maxColumns' => 4,
+            'maxRows' => 6,
+        ],
     ];
 
     /** system: Diagnosekachel, die das Panel selbst mit Firmware, WLAN, Laufzeit und Datenalter füllt. */

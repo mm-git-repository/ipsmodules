@@ -41,6 +41,17 @@ Der Editor im Ordner `editor` zeigt dieselbe Oberfläche vom PC aus und meldet d
 
 ## Programm der Anzeige
 
+Es gibt zwei Firmware-Pfade:
+
+| Hardware | Ordner | Binary für OTA |
+|----------|--------|----------------|
+| Waveshare ESP32-S3 5B (1024×600, Touch) | `firmware/` (ESP-IDF) | `firmware/build/homedisplay.bin` |
+| FireBeetle 2 + E-Ink 4,2"/7,5" | `firmware-firebeetle/` (PlatformIO) | `firmware-firebeetle/build/firmware.bin` |
+
+In der Instanz **Hausanzeige** das passende **Display-Profil** wählen; OTA und Manifest liefern dann die richtige Datei. Details E-Ink: [`firmware-firebeetle/README.md`](firmware-firebeetle/README.md).
+
+### Waveshare (ESP-IDF)
+
 Das Projekt liegt in `firmware`. Vor dem ersten Schreiben in `menuconfig` unter HomeDisplay den WLAN-Namen, das Passwort und die Dienstadresse eintragen. Die Adresse hat die Form `https://192.168.1.10:3777/hook/homedisplay`.
 
 Bauen und auf die Anzeige schreiben, sobald sie per USB verbunden ist:

@@ -102,7 +102,11 @@ final class HomeDisplayMedia
     /** @param array<string, mixed> $tile */
     public static function resolveImageMediaId(array $tile): int
     {
-        $direct = (int) ($tile['mediaObjectId'] ?? 0);
+        $rawObject = $tile['mediaObjectId'] ?? 0;
+        if (is_string($rawObject) && ctype_digit(trim($rawObject))) {
+            $rawObject = (int) trim($rawObject);
+        }
+        $direct = (int) $rawObject;
         if ($direct > 0 && self::isImageMediaId($direct)) {
             return $direct;
         }

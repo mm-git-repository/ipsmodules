@@ -16,7 +16,9 @@ const ICONS = [
   ["plug", "Steckdose"], ["batteryIcon", "Akku"], ["wifi", "WLAN"], ["car", "Auto"]
 ];
 const DISPLAY_PROFILES = {
-  "waveshare-5b-1024x600": { label: "Waveshare 5B (1024×600)", width: 1024, height: 600, defaultColumns: 3, defaultRows: 4, maxColumns: 4, maxRows: 6 }
+  "waveshare-5b-1024x600": { label: "Waveshare 5B (1024×600)", width: 1024, height: 600, defaultColumns: 3, defaultRows: 4, maxColumns: 4, maxRows: 6 },
+  "firebeetle-epd-400x300": { label: "FireBeetle E-Ink 4,2\" (400×300)", width: 400, height: 300, defaultColumns: 3, defaultRows: 4, maxColumns: 3, maxRows: 4 },
+  "firebeetle-epd-800x480": { label: "FireBeetle E-Ink 7,5\" (800×480)", width: 800, height: 480, defaultColumns: 4, defaultRows: 6, maxColumns: 4, maxRows: 6 }
 };
 const KIND_NAMES = { value: "Wert", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", system: "Anzeigestatus" };
 const CONTROL_NAMES = { switch: "Schalter", dimSwitch: "Dimmschalter", slider: "Dimmbalken", combo: "Kombischalter", battery: "Batterie" };
@@ -52,7 +54,7 @@ function bindMediaToTile(tile, item, kind) {
     delete tile.imageId;
   }
   if (kind === "camera") {
-    tile.cameraSource = isMediaPick(item) ? "media" : "url";
+    tile.cameraSource = isMediaPick(item) || isMediaObject(item) ? "media" : "url";
   }
   if (isMediaObject(item)) {
     tile.mediaObjectId = item.mediaId || item.id;
@@ -60,6 +62,35 @@ function bindMediaToTile(tile, item, kind) {
   } else {
     tile.variableId = item.id;
     delete tile.mediaObjectId;
+  }
+}
+
+function treeItemById(id) {
+  const n = Number(id);
+  if (!n) return null;
+  return state.variables.find((item) => item.id === n || item.mediaId === n) || null;
+}
+
+function mediaBindingName(tile) {
+  if (tile.mediaObjectId) {
+    const obj = treeItemById(tile.mediaObjectId);
+    return obj ? obj.name : `Medienobjekt ${tile.mediaObjectId}`;
+  }
+  const variable = variableById(tile.variableId);
+  return variable ? variable.name : "";
+}
+
+function normalizeMediaTileBindings(tile) {
+  if (!tile) return;
+  if (tile.kind === "camera") {
+    if (tile.mediaObjectId) {
+      tile.cameraSource = "media";
+    } else if (tile.variableId && isMediaPick(variableById(tile.variableId))) {
+      tile.cameraSource = "media";
+    }
+  }
+  if (tile.kind === "image" && tile.mediaObjectId) {
+    tile.imageSource = "media";
   }
 }
 
@@ -439,6 +470,7 @@ async function refreshEditorTilePreviews() {
   let changed = false;
   for (const tile of targets) {
     try {
+      normalizeMediaTileBindings(tile);
       const result = await call("probeImage", { id: state.previewPanelId, tileId: tile.tileId, tile });
       if (token !== state.previewFetchToken) return;
       if (result.ok && result.data) {
@@ -610,8 +642,9 @@ function buildTileElement(tile, context) {
     element.querySelector(".name").textContent = tile.title || "Anzeige";
   } else if (tile.kind === "image") {
     if ((tile.imageSource || "catalog") === "media") {
-      const variable = variableById(tile.variableId);
-      element.innerHTML = `<div class="media-placeholder">Medien${variable ? ": " + escapeHtml(variable.name) : ""}</div>`;
+      normalizeMediaTileBindings(tile);
+      const bound = mediaBindingName(tile);
+      element.innerHTML = `<div class="media-placeholder">Medien${bound ? ": " + escapeHtml(bound) : ""}</div>`;
       if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
         element.innerHTML = `<img src="${context.probeImageUrls[tile.tileId]}" alt="">`;
       }
@@ -621,16 +654,17 @@ function buildTileElement(tile, context) {
     }
   } else if (tile.kind === "camera") {
     element.classList.add("camera");
-    const variable = variableById(tile.variableId);
-    const fromMedia = Boolean(tile.mediaObjectId) || (tile.cameraSource || "url") === "media" || isMediaPick(variable);
+    normalizeMediaTileBindings(tile);
+    const bound = mediaBindingName(tile);
+    const fromMedia = (tile.cameraSource || "url") === "media" || Boolean(tile.mediaObjectId) || isMediaPick(variableById(tile.variableId));
     if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
       element.innerHTML = `<div class="kicker">Kamera</div><img src="${context.probeImageUrls[tile.tileId]}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1">`;
     } else {
-      const preview = variable
-        ? (fromMedia ? `IPS-Medien: ${variable.name}` : "Snapshot über Bild-URL")
-        : (fromMedia ? "Medien-Variable aus dem Baum wählen" : "Variable mit Bild-URL wählen");
+      const preview = bound
+        ? (fromMedia ? `IPS-Medien: ${bound}` : "Snapshot über Bild-URL")
+        : (fromMedia ? "Medien-Variable oder Medienobjekt wählen" : "Variable mit Bild-URL wählen");
       element.innerHTML = `<div class="kicker">${fromMedia ? "Kamera · Medien" : "Kamera · Livebild"}</div><div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div>`;
-      element.querySelector(".name").textContent = tile.title || (variable ? variable.name : "Kamera");
+      element.querySelector(".name").textContent = tile.title || bound || "Kamera";
     }
   }
   if (mode === "edit") {
@@ -905,8 +939,9 @@ function addTile(kind, col, row, variable, control) {
 }
 
 function assignCameraMedia(tile, item, silent) {
-  if (!isMediaPick(item)) return;
+  if (!isMediaPick(item) && !isMediaObject(item)) return;
   bindMediaToTile(tile, item, "camera");
+  normalizeMediaTileBindings(tile);
   if (!tile.title) tile.title = item.name;
   if (!silent) {
     markDirty();
@@ -1472,7 +1507,7 @@ function openDetails(tile) {
     if (tile.kind === "image") tile.imageId = fields.image.value;
     if (tile.kind === "camera") {
       tile.cameraSource = fields.cameraSource ? fields.cameraSource.value : "url";
-      const chosen = variableById(Number(fields.variable.value));
+      const chosen = treeItemById(Number(fields.variable.value));
       if (!chosen || Number(fields.variable.value) === 0) {
         tile.variableId = 0;
         delete tile.mediaObjectId;
@@ -2069,15 +2104,15 @@ async function loadProbeImages(layout, panelId) {
   probe.probeImageUrls = {};
   for (const page of layout.pages || []) {
     for (const tile of page.tiles || []) {
-      if (tile.kind === "camera" || (tile.kind === "image" && tile.imageSource === "media")) {
-        try {
-          const result = await call("probeImage", { id: panelId, tileId: tile.tileId, tile });
+      if (!tileNeedsLivePreview(tile)) continue;
+      try {
+        normalizeMediaTileBindings(tile);
+        const result = await call("probeImage", { id: panelId, tileId: tile.tileId, tile });
           if (result.ok && result.data) {
             probe.probeImageUrls[tile.tileId] = `data:${result.mime || "image/jpeg"};base64,${result.data}`;
           }
-        } catch (error) {
-          /* optional */
-        }
+      } catch (error) {
+        /* optional */
       }
     }
   }
