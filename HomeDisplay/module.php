@@ -1122,9 +1122,9 @@ class HomeDisplay extends IPSModuleStrict
     }
 
     /** Bildbytes für Live-Vorschau (Kamera-URL oder IPS-Medien). @return array<string, mixed> */
-    public function ProbeTileImage(int $InstanceID, string $TileId): string
+    public function ProbeTileImage(string $TileId): string
     {
-        $layout = $this->activeLayout($InstanceID);
+        $layout = $this->activeLayout($this->InstanceID);
         if ($layout === null) {
             return $this->encode(['ok' => false, 'error' => 'layout']);
         }
@@ -1138,7 +1138,7 @@ class HomeDisplay extends IPSModuleStrict
                 }
                 $kind = (string) ($tile['kind'] ?? '');
                 if ($kind === 'camera') {
-                    $url = $this->cameraUrlForTile($InstanceID, $TileId);
+                    $url = $this->cameraUrlForTile($this->InstanceID, $TileId);
                     $binary = $url !== '' ? $this->fetchRemoteBinary($url) : null;
                     if ($binary === null || $binary === '') {
                         return $this->encode(['ok' => false, 'error' => 'camera_fetch']);
