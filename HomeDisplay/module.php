@@ -10,7 +10,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 16;
+    private const MODULE_BUILD = 17;
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
@@ -836,12 +836,21 @@ class HomeDisplay extends IPSModuleStrict
                     $variableId = (int) ($tile['variableId'] ?? 0);
                     $seq = 0;
                     $quality = 'empty';
+                    $cameraSource = (string) ($tile['cameraSource'] ?? 'url');
                     if ($variableId > 0 && IPS_VariableExists($variableId)) {
-                        $url = trim((string) GetValue($variableId));
-                        if ($url !== '') {
-                            $interval = max(10, (int) IPS_GetProperty($device['id'], 'StateIntervalSec'));
-                            $seq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32($url));
-                            $quality = 'ok';
+                        $interval = max(10, (int) IPS_GetProperty($device['id'], 'StateIntervalSec'));
+                        if ($cameraSource === 'media') {
+                            $mediaId = (int) GetValue($variableId);
+                            if ($mediaId > 0) {
+                                $seq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32((string) $mediaId));
+                                $quality = 'ok';
+                            }
+                        } else {
+                            $url = trim((string) GetValue($variableId));
+                            if ($url !== '') {
+                                $seq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32($url));
+                                $quality = 'ok';
+                            }
                         }
                     }
                     $tiles[] = [
@@ -1138,6 +1147,13 @@ class HomeDisplay extends IPSModuleStrict
                 }
                 $kind = (string) ($tile['kind'] ?? '');
                 if ($kind === 'camera') {
+                    if ((string) ($tile['cameraSource'] ?? 'url') === 'media') {
+                        $binary = $this->mediaBytesForVariable((int) ($tile['variableId'] ?? 0));
+                        if ($binary === null || $binary === '') {
+                            return $this->encode(['ok' => false, 'error' => 'media']);
+                        }
+                        return $this->encode(['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)]);
+                    }
                     $url = $this->cameraUrlForTile($this->InstanceID, $TileId);
                     $binary = $url !== '' ? $this->fetchRemoteBinary($url) : null;
                     if ($binary === null || $binary === '') {
@@ -1216,6 +1232,19 @@ class HomeDisplay extends IPSModuleStrict
     /** @param array{id: int, token: string} $device */
     private function sendCameraSnapshot(array $device, string $tileId): void
     {
+        $tile = $this->findLayoutTile($device['id'], $tileId);
+        if ($tile !== null && (string) ($tile['kind'] ?? '') === 'camera' && (string) ($tile['cameraSource'] ?? 'url') === 'media') {
+            $binary = $this->mediaBytesForVariable((int) ($tile['variableId'] ?? 0));
+            if ($binary === null || $binary === '') {
+                http_response_code(502);
+                $this->json(['error' => 'media_fetch']);
+                return;
+            }
+            header('Content-Type: ' . $this->guessImageMime($binary));
+            header('Cache-Control: no-store');
+            echo $binary;
+            return;
+        }
         $url = $this->cameraUrlForTile($device['id'], $tileId);
         if ($url === '') {
             http_response_code(404);
@@ -1314,29 +1343,39 @@ class HomeDisplay extends IPSModuleStrict
 
     private function cameraUrlForTile(int $instanceId, string $tileId): string
     {
+        $tile = $this->findLayoutTile($instanceId, $tileId);
+        if ($tile === null || (string) ($tile['kind'] ?? '') !== 'camera') {
+            return '';
+        }
+        if ((string) ($tile['cameraSource'] ?? 'url') === 'media') {
+            return '';
+        }
+        $variableId = (int) ($tile['variableId'] ?? 0);
+        if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
+            return '';
+        }
+        return trim((string) GetValue($variableId));
+    }
+
+    /** @return array<string, mixed>|null */
+    private function findLayoutTile(int $instanceId, string $tileId): ?array
+    {
         $layout = $this->activeLayout($instanceId);
         if ($layout === null) {
-            return '';
+            return null;
         }
         foreach ($layout['pages'] ?? [] as $page) {
             if (!is_array($page)) {
                 continue;
             }
             foreach ($page['tiles'] ?? [] as $tile) {
-                if (!is_array($tile) || (string) ($tile['kind'] ?? '') !== 'camera') {
+                if (!is_array($tile) || (string) ($tile['tileId'] ?? '') !== $tileId) {
                     continue;
                 }
-                if ((string) ($tile['tileId'] ?? '') !== $tileId) {
-                    continue;
-                }
-                $variableId = (int) ($tile['variableId'] ?? 0);
-                if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
-                    return '';
-                }
-                return trim((string) GetValue($variableId));
+                return $tile;
             }
         }
-        return '';
+        return null;
     }
 
     private function fetchRemoteBinary(string $url): ?string

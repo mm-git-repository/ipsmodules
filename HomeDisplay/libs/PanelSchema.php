@@ -636,8 +636,25 @@ final class HomeDisplayPanelSchema
             return;
         }
         if ($kind === 'camera') {
-            if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) $tile['variableId']))) {
-                throw new InvalidArgumentException('Kamerakachel ohne Variable für die Bildadresse.');
+            $source = (string) ($tile['cameraSource'] ?? 'url');
+            if (!in_array($source, ['url', 'media'], true)) {
+                throw new InvalidArgumentException('Ungültige Kameraquelle.');
+            }
+            $variableId = (int) ($tile['variableId'] ?? 0);
+            if ($publish && ($variableId <= 0 || !IPS_VariableExists($variableId))) {
+                throw new InvalidArgumentException($source === 'media'
+                    ? 'Kamerakachel ohne Medien-Variable.'
+                    : 'Kamerakachel ohne Variable für die Bildadresse.');
+            }
+            if ($publish && $variableId > 0 && IPS_VariableExists($variableId)) {
+                $variable = IPS_GetVariable($variableId);
+                $type = (int) ($variable['VariableType'] ?? -1);
+                if ($source === 'media' && $type !== 6) {
+                    throw new InvalidArgumentException('Die Kameraquelle Medien erwartet eine Medien-Variable.');
+                }
+                if ($source === 'url' && $type === 6) {
+                    throw new InvalidArgumentException('Für Medien-Variablen die Kameraquelle „Medien“ wählen.');
+                }
             }
         }
     }

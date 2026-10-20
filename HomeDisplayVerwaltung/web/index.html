@@ -211,7 +211,19 @@
           </div>
         </div>
         <div data-for="camera">
-          <p class="hint">Die Variable liefert eine http- oder https-Adresse zu einem Kamerabild (JPEG/PNG). IP-Symcon holt das Bild zentral ab; die Anzeige aktualisiert es im Abrufintervall. Mindestens 2×2 Zellen empfohlen.</p>
+          <label>Quelle
+            <select id="p-camerasource">
+              <option value="url">Variable mit Bild-URL</option>
+              <option value="media">IPS-Medien-Variable</option>
+            </select>
+          </label>
+          <div id="p-camera-url">
+            <p class="hint">Textvariable mit http- oder https-Adresse (JPEG/PNG). IP-Symcon lädt das Bild zentral; die Anzeige aktualisiert im Abrufintervall.</p>
+          </div>
+          <div id="p-camera-media" class="hidden">
+            <p class="hint">Medien-Variable aus dem Baum (Badge „Medien“) wählen oder auf die Kachel ziehen. Für statische Einzelbilder reicht oft eine <strong>Bild</strong>-Kachel mit Quelle „IPS-Medien-Variable“.</p>
+          </div>
+          <p class="hint">Mindestens 2×2 Zellen empfohlen.</p>
         </div>
         <div data-for="system">
           <p class="hint">Die Anzeige füllt diese Kachel selbst: Programm, WLAN-Stärke, IP-Adresse, Laufzeit, freier Speicher und Alter der Werte. Mindestens 2 × 2 Zellen empfohlen.</p>

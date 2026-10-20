@@ -24,6 +24,10 @@ const DIM_CONTROLS = ["dimSwitch", "slider", "combo"];
 const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text", "", "", "Medien"];
 const MEDIA_TYPE = 6;
 
+function isMediaVariable(variable) {
+  return variable && Number(variable.type) === MEDIA_TYPE;
+}
+
 const state = {
   catalog: { layouts: [], configs: [] },
   variables: [],
@@ -351,8 +355,12 @@ function renderGrid() {
       bindDrop(cell, col, row);
       cell.addEventListener("click", () => {
         if (state.pickedVariable) {
-          if (state.pickedVariable.type === MEDIA_TYPE) addTile("image", col, row, state.pickedVariable);
-          else addTile("value", col, row, state.pickedVariable);
+          if (isMediaVariable(state.pickedVariable)) {
+            const tile = selectedTile();
+            if (tile && tile.kind === "camera") assignCameraMedia(tile, state.pickedVariable);
+            else if (tile && tile.kind === "image") assignMediaVariable(tile, state.pickedVariable);
+            else addTile("image", col, row, state.pickedVariable);
+          } else addTile("value", col, row, state.pickedVariable);
           return;
         }
         state.selected = null;
@@ -511,10 +519,14 @@ function buildTileElement(tile, context) {
   } else if (tile.kind === "camera") {
     element.classList.add("camera");
     const variable = variableById(tile.variableId);
+    const fromMedia = (tile.cameraSource || "url") === "media";
     if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
       element.innerHTML = `<div class="kicker">Kamera</div><img src="${context.probeImageUrls[tile.tileId]}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1">`;
     } else {
-      element.innerHTML = `<div class="kicker">Kamera · Livebild</div><div class="name"></div><div class="camera-preview">${variable ? "Snapshot über Variable" : "Variable mit Bild-URL wählen"}</div>`;
+      const preview = variable
+        ? (fromMedia ? `IPS-Medien: ${variable.name}` : "Snapshot über Bild-URL")
+        : (fromMedia ? "Medien-Variable aus dem Baum wählen" : "Variable mit Bild-URL wählen");
+      element.innerHTML = `<div class="kicker">${fromMedia ? "Kamera · Medien" : "Kamera · Livebild"}</div><div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div>`;
       element.querySelector(".name").textContent = tile.title || (variable ? variable.name : "Kamera");
     }
   }
@@ -652,15 +664,19 @@ function bindDrop(target, col, row, existing) {
     }
     if (variableId) {
       const variable = variableById(variableId);
-      if (existing && existing.kind === "image" && variable && variable.type === MEDIA_TYPE) {
+      if (existing && existing.kind === "image" && isMediaVariable(variable)) {
         assignMediaVariable(existing, variable);
+        return;
+      }
+      if (existing && existing.kind === "camera" && isMediaVariable(variable)) {
+        assignCameraMedia(existing, variable);
         return;
       }
       if (existing && (existing.kind === "value" || existing.kind === "camera")) {
         assignVariable(existing, variable);
         return;
       }
-      if (!existing && variable && variable.type === MEDIA_TYPE) {
+      if (!existing && isMediaVariable(variable)) {
         addTile("image", col, row, variable);
         return;
       }
@@ -741,7 +757,7 @@ function addTile(kind, col, row, variable, control) {
       tile.rowSpan = 1;
     }
   } else if (kind === "image") {
-    if (variable && variable.type === MEDIA_TYPE) {
+    if (isMediaVariable(variable)) {
       tile.imageSource = "media";
       tile.variableId = variable.id;
       tile.title = tile.title || variable.name;
@@ -751,6 +767,7 @@ function addTile(kind, col, row, variable, control) {
     }
   } else if (kind === "camera") {
     tile.title = "Kamera";
+    tile.cameraSource = "url";
     tile.variableId = 0;
     tile.colSpan = Math.min(2, state.layout.columns);
     tile.rowSpan = Math.min(2, state.layout.rows);
@@ -758,7 +775,10 @@ function addTile(kind, col, row, variable, control) {
       tile.colSpan = 1;
       tile.rowSpan = 1;
     }
-    if (variable) assignVariable(tile, variable, true);
+    if (variable) {
+      if (isMediaVariable(variable)) assignCameraMedia(tile, variable, true);
+      else assignVariable(tile, variable, true);
+    }
   }
   if (!fits(null, col, row, tile.colSpan, tile.rowSpan, null)) {
     setStatus("Diese Zelle ist belegt.");
@@ -774,8 +794,22 @@ function addTile(kind, col, row, variable, control) {
   if (kind === "image" && tile.imageSource !== "media" && !tile.imageId) openImages();
 }
 
+function assignCameraMedia(tile, variable, silent) {
+  if (!variable || !isMediaVariable(variable)) return;
+  tile.cameraSource = "media";
+  tile.variableId = variable.id;
+  if (!tile.title) tile.title = variable.name;
+  if (!silent) {
+    markDirty();
+    renderGrid();
+    renderProperties();
+    renderVariableTree();
+    setStatus(`Kamera-Kachel mit Medien-Variable „${variable.name}“ verknüpft.`);
+  }
+}
+
 function assignMediaVariable(tile, variable, silent) {
-  if (!variable || variable.type !== MEDIA_TYPE) return;
+  if (!variable || !isMediaVariable(variable)) return;
   tile.imageSource = "media";
   tile.variableId = variable.id;
   if (!tile.title) tile.title = variable.name;
@@ -791,6 +825,11 @@ function assignVariable(tile, variable, silent) {
   if (!variable) return;
   tile.variableId = variable.id;
   if (tile.kind === "camera") {
+    if (isMediaVariable(variable)) {
+      assignCameraMedia(tile, variable, silent);
+      return;
+    }
+    tile.cameraSource = "url";
     if (!tile.title) tile.title = variable.name;
     delete tile.actionId;
     delete tile.actionKind;
@@ -951,6 +990,23 @@ function renderProperties() {
       ? `${mediaVar.path ? mediaVar.path + " / " : ""}${mediaVar.name} (${mediaVar.id})`
       : "";
   }
+  const camSource = tile.cameraSource || "url";
+  if ($("p-camerasource")) {
+    $("p-camerasource").value = camSource;
+    $("p-camera-url").classList.toggle("hidden", camSource === "media");
+    $("p-camera-media").classList.toggle("hidden", camSource !== "media");
+  }
+  if (tile.kind === "camera" && $("p-variable")) {
+    const camVar = variableById(tile.variableId);
+    const wrongMedia = camSource === "media" && camVar && !isMediaVariable(camVar);
+    const wrongUrl = camSource === "url" && camVar && isMediaVariable(camVar);
+    $("p-variable").placeholder = camSource === "media"
+      ? "Medien-Variable aus dem Baum wählen"
+      : "Textvariable mit Bild-URL";
+    if (wrongMedia || wrongUrl) {
+      $("p-variable").value = `${camVar.path ? camVar.path + " / " : ""}${camVar.name} (${camVar.id}) — passt nicht zur Quelle`;
+    }
+  }
 }
 
 function applyProperties() {
@@ -1030,6 +1086,13 @@ function applyProperties() {
       delete tile.variableId;
     }
   }
+  if (tile.kind === "camera" && $("p-camerasource")) {
+    const source = $("p-camerasource").value || "url";
+    tile.cameraSource = source;
+    const camVar = variableById(tile.variableId);
+    if (source === "media" && camVar && !isMediaVariable(camVar)) tile.variableId = 0;
+    if (source === "url" && camVar && isMediaVariable(camVar)) tile.variableId = 0;
+  }
   markDirty();
   renderGrid();
   renderProperties();
@@ -1044,13 +1107,20 @@ $("p-control").addEventListener("change", () => {
   }
   applyProperties();
 });
-for (const id of ["p-title", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-iconmode", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-size", "p-image", "p-imagesource", "p-batterypad", "p-batterylabel"]) {
+for (const id of ["p-title", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-iconmode", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-size", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-iconmode")) {
   $("p-iconmode").addEventListener("change", () => {
     $("p-icon-static").classList.toggle("hidden", $("p-iconmode").value === "toggle");
     $("p-icon-toggle").classList.toggle("hidden", $("p-iconmode").value !== "toggle");
+    applyProperties();
+  });
+}
+if ($("p-camerasource")) {
+  $("p-camerasource").addEventListener("change", () => {
+    $("p-camera-url").classList.toggle("hidden", $("p-camerasource").value === "media");
+    $("p-camera-media").classList.toggle("hidden", $("p-camerasource").value !== "media");
     applyProperties();
   });
 }
@@ -1193,20 +1263,27 @@ function openDetails(tile) {
     body.appendChild(manage);
   }
   if (tile.kind === "camera") {
+    const source = document.createElement("select");
+    source.innerHTML = '<option value="url">Variable mit Bild-URL</option><option value="media">IPS-Medien-Variable</option>';
+    source.value = tile.cameraSource || "url";
+    fields.cameraSource = add("Quelle", source);
     const picker = document.createElement("select");
     picker.innerHTML = '<option value="0">Keine Variable</option>';
-    for (const item of state.variables) {
-      const option = document.createElement("option");
-      option.value = String(item.id);
-      option.textContent = `${item.path ? item.path + " / " : ""}${item.name} (${item.id})`;
-      picker.appendChild(option);
-    }
-    picker.value = String(tile.variableId || 0);
-    fields.variable = add("Variable (Bild-URL)", picker);
-    const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = "Textvariable mit http- oder https-Adresse zu einem Kamerabild (JPEG/PNG).";
-    body.appendChild(hint);
+    fields.variable = add("Variable", picker);
+    const refreshPicker = () => {
+      const wantMedia = source.value === "media";
+      picker.innerHTML = '<option value="0">Keine Variable</option>';
+      for (const item of state.variables) {
+        if (wantMedia ? !isMediaVariable(item) : isMediaVariable(item)) continue;
+        const option = document.createElement("option");
+        option.value = String(item.id);
+        option.textContent = `${item.path ? item.path + " / " : ""}${item.name} (${item.id})`;
+        picker.appendChild(option);
+      }
+      picker.value = String(tile.variableId || 0);
+    };
+    refreshPicker();
+    source.addEventListener("change", refreshPicker);
     picker.addEventListener("change", () => {
       const chosen = variableById(Number(picker.value));
       if (!fields.title.value && chosen) fields.title.value = chosen.name;
@@ -1269,6 +1346,7 @@ function openDetails(tile) {
     }
     if (tile.kind === "image") tile.imageId = fields.image.value;
     if (tile.kind === "camera") {
+      tile.cameraSource = fields.cameraSource ? fields.cameraSource.value : "url";
       const chosen = variableById(Number(fields.variable.value));
       tile.variableId = chosen ? chosen.id : 0;
     }
@@ -1384,8 +1462,8 @@ function renderVariableTree() {
   const onlyActions = $("only-actions").checked;
   const groups = new Map();
   for (const variable of state.variables) {
-    if (onlyActions && !variable.action) continue;
-    if (variable.type !== MEDIA_TYPE && variable.type > 3) continue;
+    if (onlyActions && !variable.action && !isMediaVariable(variable)) continue;
+    if (!isMediaVariable(variable) && Number(variable.type) > 3) continue;
     if (needle && !`${variable.name} ${variable.path} ${variable.id}`.toLowerCase().includes(needle)) continue;
     const key = variable.path || "Ohne Kategorie";
     if (!groups.has(key)) groups.set(key, []);
@@ -1410,7 +1488,7 @@ function renderVariableTree() {
       row.className = "variable" + (state.pickedVariable && state.pickedVariable.id === variable.id ? " selected" : "");
       row.draggable = true;
       row.title = `${variable.path ? variable.path + " / " : ""}${variable.name}\nID ${variable.id}${variable.profile ? "\nProfil " + variable.profile : ""}`;
-      const mediaBadge = variable.type === MEDIA_TYPE ? ' <span class="badge badge-media">Medien</span>' : "";
+      const mediaBadge = isMediaVariable(variable) ? ' <span class="badge badge-media">Medien</span>' : "";
       row.innerHTML = `<span></span><span class="meta">${TYPE_NAMES[variable.type] || ""}${mediaBadge}${variable.action ? ' <span class="badge">schaltbar</span>' : ""}</span>`;
       row.firstChild.textContent = variable.name;
       row.addEventListener("dragstart", (event) => {
@@ -1419,18 +1497,29 @@ function renderVariableTree() {
       });
       row.addEventListener("click", () => {
         const tile = selectedTile();
-        if (tile && tile.kind === "image" && variable.type === MEDIA_TYPE) {
+        if (tile && tile.kind === "image" && isMediaVariable(variable)) {
           assignMediaVariable(tile, variable);
+          return;
+        }
+        if (tile && tile.kind === "camera" && isMediaVariable(variable)) {
+          assignCameraMedia(tile, variable);
           return;
         }
         if (tile && tile.kind === "value") {
           assignVariable(tile, variable);
           return;
         }
+        if (tile && tile.kind === "camera" && !isMediaVariable(variable)) {
+          assignVariable(tile, variable);
+          return;
+        }
         state.pickedVariable = state.pickedVariable && state.pickedVariable.id === variable.id ? null : variable;
-        const hint = variable.type === MEDIA_TYPE
-          ? `„${variable.name}“ gewählt – auf Bild-Kachel oder freie Zelle.`
-          : `„${variable.name}“ gewählt – freie Zelle anklicken, um eine Wertkachel anzulegen.`;
+        let hint;
+        if (isMediaVariable(variable)) {
+          hint = `„${variable.name}“ gewählt – Bild- oder Kamera-Kachel (Quelle Medien) oder freie Zelle.`;
+        } else {
+          hint = `„${variable.name}“ gewählt – freie Zelle anklicken, um eine Wertkachel anzulegen.`;
+        }
         setHint(state.pickedVariable ? hint : "");
         renderVariableTree();
       });
@@ -1440,7 +1529,7 @@ function renderVariableTree() {
           setStatus("Auf dieser Seite ist keine Zelle frei.");
           return;
         }
-        if (variable.type === MEDIA_TYPE) addTile("image", cell.col, cell.row, variable);
+        if (isMediaVariable(variable)) addTile("image", cell.col, cell.row, variable);
         else addTile("value", cell.col, cell.row, variable);
       });
       details.appendChild(row);
@@ -1478,7 +1567,16 @@ function validateLayout(layout) {
       if (seen.has(tile.tileId)) throw new Error("Doppelte Kachelkennung.");
       seen.add(tile.tileId);
       if (tile.kind === "value" && tile.control === "battery" && !tile.variableId) throw new Error(`Die Batteriekachel „${tile.title || tile.tileId}“ braucht eine Variable.`);
-      if (tile.kind === "camera" && !tile.variableId) throw new Error(`Die Kamerakachel „${tile.title || tile.tileId}“ braucht eine Variable mit Bild-URL.`);
+      if (tile.kind === "camera" && !tile.variableId) {
+        const src = tile.cameraSource || "url";
+        throw new Error(`Die Kamerakachel „${tile.title || tile.tileId}“ braucht ${src === "media" ? "eine Medien-Variable" : "eine Variable mit Bild-URL"}.`);
+      }
+      if (tile.kind === "camera" && tile.variableId) {
+        const camVar = variableById(tile.variableId);
+        const src = tile.cameraSource || "url";
+        if (src === "media" && camVar && !isMediaVariable(camVar)) throw new Error(`Die Kamerakachel „${tile.title || tile.tileId}“ erwartet eine Medien-Variable.`);
+        if (src === "url" && camVar && isMediaVariable(camVar)) throw new Error(`Die Kamerakachel „${tile.title || tile.tileId}“ erwartet eine Textvariable mit Bild-URL (oder Quelle auf Medien stellen).`);
+      }
       if (tile.kind === "value" && DIM_CONTROLS.includes(tile.control) && !tile.actionId) throw new Error(`„${tile.title || tile.tileId}“ braucht eine schaltbare Dimmvariable.`);
       if (tile.kind === "value" && tile.actionId) {
         const variable = variableById(tile.variableId);
@@ -2018,7 +2116,10 @@ async function start() {
   try {
     state.catalog = await call("catalog");
     const variables = await call("variables");
-    state.variables = (variables.variables || []).filter((variable) => variable.type >= 0 && (variable.type <= 3 || variable.type === MEDIA_TYPE));
+    state.variables = (variables.variables || []).filter((variable) => {
+      const type = Number(variable.type);
+      return type >= 0 && (type <= 3 || type === MEDIA_TYPE);
+    });
     fillProfileSelect($("display-profile"), defaultProfileId());
     await loadImages();
     renderVariableTree();
