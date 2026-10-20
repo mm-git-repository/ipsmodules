@@ -192,8 +192,8 @@ class HomeDisplay extends IPSModuleStrict
         return $this->encode(['ok' => true, 'tiles' => $state['tiles'] ?? []]);
     }
 
-    /** Führt eine freigegebene Kachelaktion dieser Anzeige aus. Leerer Wert schaltet um. */
-    public function SimulateAction(string $TileId, string $ActionId, string $Value): string
+    /** Führt eine freigegebene Kachelaktion dieser Anzeige aus. Leerer Wert schaltet um. Optional $TileJson = Kachel aus Editor/Prüfung. */
+    public function SimulateAction(string $TileId, string $ActionId, string $Value = '', string $TileJson = ''): string
     {
         try {
             $body = [
@@ -204,7 +204,14 @@ class HomeDisplay extends IPSModuleStrict
             if ($Value !== '' && is_numeric($Value)) {
                 $body['value'] = str_contains($Value, '.') ? (float) $Value : (int) $Value;
             }
-            return $this->encode($this->performAction(['id' => $this->InstanceID, 'token' => ''], $body));
+            $tileOverride = null;
+            if ($TileJson !== '') {
+                $decoded = json_decode($TileJson, true);
+                if (is_array($decoded)) {
+                    $tileOverride = $decoded;
+                }
+            }
+            return $this->encode($this->performAction(['id' => $this->InstanceID, 'token' => ''], $body, $tileOverride));
         } catch (Throwable $e) {
             return $this->encode(['ok' => false, 'error' => $e->getMessage()]);
         }
@@ -1116,8 +1123,8 @@ class HomeDisplay extends IPSModuleStrict
         return $unit === '' ? $text : $text . ' ' . $unit;
     }
 
-    /** @param array{id: int, token: string} $device @param array<string, mixed> $body @return array<string, mixed> */
-    private function performAction(array $device, array $body): array
+    /** @param array{id: int, token: string} $device @param array<string, mixed> $body @param array<string, mixed>|null $tileOverride Nur für SimulateAction (Editor/Prüfung). */
+    private function performAction(array $device, array $body, ?array $tileOverride = null): array
     {
         $runtime = $this->runtime();
         $key = (string) $device['id'];
@@ -1125,7 +1132,11 @@ class HomeDisplay extends IPSModuleStrict
         $seen = is_array($entry['requests'] ?? null) ? $entry['requests'] : [];
         $recent = is_array($entry['recent'] ?? null) ? $entry['recent'] : [];
         $tileId = trim((string) ($body['tileId'] ?? ''));
-        $tile = $tileId === '' ? null : $this->findTile($device['id'], $tileId);
+        if ($tileOverride !== null) {
+            $tile = $tileOverride;
+        } else {
+            $tile = $tileId === '' ? null : $this->findTile($device['id'], $tileId);
+        }
         $decision = HomeDisplayPanelActionGuard::authorize($tile, $body, $seen, $recent, time());
         if ($decision['duplicate']) {
             return ['ok' => true, 'duplicate' => true];

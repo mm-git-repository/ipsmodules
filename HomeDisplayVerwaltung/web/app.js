@@ -1720,6 +1720,102 @@ $("p-delete").addEventListener("click", deleteSelected);
 
 /* ---------- Detaildialog ---------- */
 
+function detailsVariableSelect(selectedId, filterFn) {
+  const picker = document.createElement("select");
+  picker.innerHTML = '<option value="0">Keine Variable</option>';
+  for (const item of state.variables) {
+    if (filterFn && !filterFn(item)) continue;
+    const option = document.createElement("option");
+    option.value = String(item.id);
+    option.textContent = `${item.path ? item.path + " / " : ""}${item.name} (${item.id})`;
+    picker.appendChild(option);
+  }
+  picker.value = String(selectedId || 0);
+  return picker;
+}
+
+function flowVariableFilter(item) {
+  const t = item.type;
+  return t === 0 || t === 1 || t === 2;
+}
+
+function allFlowVariableKeys() {
+  const keys = new Set();
+  for (const mode of ["signed", "split"]) {
+    for (const key of Object.values(flowSlotMap({ flowMode: mode }))) keys.add(key);
+  }
+  return keys;
+}
+
+function appendEnergyFlowDetails(body, tile, fields, add, check, number, text) {
+  const modeSelect = document.createElement("select");
+  modeSelect.innerHTML = '<option value="signed">Vorzeichen (±)</option><option value="split">Getrennt (Bezug / Einspeisung)</option>';
+  modeSelect.value = tile.flowMode || "signed";
+  fields.flowMode = add("Berechnungsmodus", modeSelect);
+  fields.homeOverride = add("Hausverbrauch aus Variable (sonst berechnet)", check(tile.homeOverride !== false));
+  const signedSec = document.createElement("div");
+  signedSec.className = "flow-section";
+  signedSec.dataset.flowSection = "signed";
+  const splitSec = document.createElement("div");
+  splitSec.className = "flow-section hidden";
+  splitSec.dataset.flowSection = "split";
+  body.append(signedSec, splitSec);
+  const relocate = (slot, parent, label, variableId) => {
+    const picker = detailsVariableSelect(variableId, flowVariableFilter);
+    fields[`flowSlot_${slot}`] = picker;
+    const wrap = document.createElement("label");
+    wrap.textContent = label;
+    wrap.appendChild(picker);
+    parent.appendChild(wrap);
+  };
+  const sharedSlots = new Set(["load", "pv", "soc"]);
+  for (const [slot, label] of Object.entries(FLOW_SLOT_LABELS.signed)) {
+    if (sharedSlots.has(slot)) continue;
+    const prop = flowSlotMap({ flowMode: "signed" })[slot];
+    relocate(slot, signedSec, label, tile[prop]);
+  }
+  for (const [slot, label] of Object.entries(FLOW_SLOT_LABELS.split)) {
+    if (sharedSlots.has(slot)) continue;
+    const prop = flowSlotMap({ flowMode: "split" })[slot];
+    relocate(slot, splitSec, label, tile[prop]);
+  }
+  relocate("pv", body, "PV-Erzeugung", tile.pvVariableId);
+  relocate("soc", body, "SOC (optional)", tile.batterySocVariableId);
+  const loadWrap = document.createElement("label");
+  loadWrap.id = "d-flow-load-wrap";
+  loadWrap.textContent = "Hausverbrauch ";
+  fields.flowSlot_load = detailsVariableSelect(tile.loadVariableId, flowVariableFilter);
+  loadWrap.appendChild(fields.flowSlot_load);
+  body.appendChild(loadWrap);
+  const socHint = document.createElement("p");
+  socHint.className = "hint";
+  socHint.textContent = "Pflicht: Netz, PV und Batterie (je nach Modus). SOC optional. Kachel 2×2 empfohlen.";
+  body.appendChild(socHint);
+  const unitRow = document.createElement("div");
+  unitRow.className = "row";
+  body.appendChild(unitRow);
+  const unitWrap = document.createElement("label");
+  unitWrap.textContent = "Einheit ";
+  fields.flowUnit = text(tile.unit || "W");
+  unitWrap.appendChild(fields.flowUnit);
+  unitRow.appendChild(unitWrap);
+  const decWrap = document.createElement("label");
+  decWrap.textContent = "Nachkommastellen ";
+  fields.flowDecimals = number(tile.decimals ?? 0, 0, 3);
+  decWrap.appendChild(fields.flowDecimals);
+  unitRow.appendChild(decWrap);
+  fields.flowThreshold = add("Animation ab (W)", number(tile.flowThreshold ?? 50, 0, 999999));
+  const sync = () => {
+    const mode = modeSelect.value;
+    signedSec.classList.toggle("hidden", mode === "split");
+    splitSec.classList.toggle("hidden", mode !== "split");
+    loadWrap.classList.toggle("hidden", !fields.homeOverride.checked);
+  };
+  modeSelect.addEventListener("change", sync);
+  fields.homeOverride.addEventListener("change", sync);
+  sync();
+}
+
 function openDetails(tile) {
   const dialog = $("details");
   const body = $("d-body");
@@ -1755,9 +1851,9 @@ function openDetails(tile) {
     wrap.appendChild(fields[key]);
     grid.appendChild(wrap);
   }
-  if (tile.kind === "value" || tile.kind === "nav") {
+  if (tile.kind === "nav") {
     fields.icon = add("Symbol", document.createElement("select"));
-    fillIconSelect(fields.icon, tile.kind === "nav");
+    fillIconSelect(fields.icon, true);
     fields.icon.value = tile.icon || "";
   }
   if (tile.kind === "value") {
@@ -1792,6 +1888,60 @@ function openDetails(tile) {
     color.innerHTML = '<option value="neutral">Neutral</option><option value="ok">Grün</option><option value="warn">Gelb</option><option value="alarm">Rot</option>';
     color.value = tile.color || "neutral";
     fields.color = add("Farbe über dem Schwellwert", color);
+    const iconModeSel = document.createElement("select");
+    iconModeSel.innerHTML = '<option value="static">Festes Symbol</option><option value="toggle">Ein/Aus-Symbol</option>';
+    iconModeSel.value = tile.iconMode || "static";
+    fields.iconMode = add("Symbolmodus", iconModeSel);
+    const staticIconWrap = document.createElement("label");
+    staticIconWrap.textContent = "Symbol ";
+    fields.icon = document.createElement("select");
+    fillIconSelect(fields.icon, false);
+    fields.icon.value = tile.icon || "";
+    staticIconWrap.appendChild(fields.icon);
+    body.appendChild(staticIconWrap);
+    const toggleIconWrap = document.createElement("div");
+    toggleIconWrap.className = "row hidden";
+    toggleIconWrap.dataset.iconSection = "toggle";
+    const onWrap = document.createElement("label");
+    onWrap.textContent = "Symbol Ein ";
+    fields.iconOn = document.createElement("select");
+    fillIconSelect(fields.iconOn, false);
+    fields.iconOn.value = tile.iconOn || "lightOn";
+    onWrap.appendChild(fields.iconOn);
+    const offWrap = document.createElement("label");
+    offWrap.textContent = "Symbol Aus ";
+    fields.iconOff = document.createElement("select");
+    fillIconSelect(fields.iconOff, false);
+    fields.iconOff.value = tile.iconOff || "lightOff";
+    offWrap.appendChild(fields.iconOff);
+    toggleIconWrap.append(onWrap, offWrap);
+    body.appendChild(toggleIconWrap);
+    const batteryWrap = document.createElement("div");
+    batteryWrap.className = "row hidden";
+    batteryWrap.dataset.controlSection = "battery";
+    const padWrap = document.createElement("label");
+    padWrap.textContent = "Innenabstand (px) ";
+    fields.batteryPad = number(tile.batteryPad != null ? tile.batteryPad : 8, 0, 40);
+    padWrap.appendChild(fields.batteryPad);
+    const labelWrap = document.createElement("label");
+    labelWrap.textContent = "Prozent-Anzeige ";
+    const batteryLabel = document.createElement("select");
+    batteryLabel.innerHTML = '<option value="inside">In der Batterie</option><option value="right">Rechts daneben</option><option value="below">Darunter</option>';
+    batteryLabel.value = tile.batteryLabel || "inside";
+    fields.batteryLabel = batteryLabel;
+    labelWrap.appendChild(batteryLabel);
+    batteryWrap.append(padWrap, labelWrap);
+    body.appendChild(batteryWrap);
+    const syncValueDetails = () => {
+      const toggle = iconModeSel.value === "toggle";
+      staticIconWrap.classList.toggle("hidden", toggle);
+      toggleIconWrap.classList.toggle("hidden", !toggle);
+      batteryWrap.classList.toggle("hidden", control.value !== "battery");
+      if (DIM_CONTROLS.includes(control.value)) fields.actionKind.value = "dim";
+    };
+    iconModeSel.addEventListener("change", syncValueDetails);
+    control.addEventListener("change", syncValueDetails);
+    syncValueDetails();
     picker.addEventListener("change", () => {
       const chosen = variableById(Number(picker.value));
       fields.action.disabled = !(chosen && chosen.action);
@@ -1836,9 +1986,37 @@ function openDetails(tile) {
     fields.icon.value = tile.icon || "";
   }
   if (tile.kind === "image") {
-    fields.image = add("Bild", document.createElement("select"));
+    const imgSource = document.createElement("select");
+    imgSource.innerHTML = '<option value="catalog">Katalog (hochgeladen)</option><option value="media">IPS-Medien-Variable</option>';
+    imgSource.value = tile.imageSource || "catalog";
+    fields.imageSource = add("Bildquelle", imgSource);
+    const catalogWrap = document.createElement("div");
+    catalogWrap.dataset.imageSection = "catalog";
+    fields.image = document.createElement("select");
     fillImageSelect(fields.image);
     fields.image.value = tile.imageId || "";
+    const catLabel = document.createElement("label");
+    catLabel.textContent = "Bild ";
+    catLabel.appendChild(fields.image);
+    catalogWrap.appendChild(catLabel);
+    body.appendChild(catalogWrap);
+    const mediaWrap = document.createElement("div");
+    mediaWrap.className = "hidden";
+    mediaWrap.dataset.imageSection = "media";
+    const mediaId = tile.mediaObjectId || (tile.imageSource === "media" ? tile.variableId : 0);
+    const mediaLabel = document.createElement("label");
+    mediaLabel.textContent = "Medien-Variable ";
+    fields.imageMedia = detailsVariableSelect(mediaId, isMediaPick);
+    mediaLabel.appendChild(fields.imageMedia);
+    mediaWrap.appendChild(mediaLabel);
+    body.appendChild(mediaWrap);
+    const syncImageDetails = () => {
+      const media = imgSource.value === "media";
+      catalogWrap.classList.toggle("hidden", media);
+      mediaWrap.classList.toggle("hidden", !media);
+    };
+    imgSource.addEventListener("change", syncImageDetails);
+    syncImageDetails();
     const manage = document.createElement("button");
     manage.type = "button";
     manage.textContent = "Bilder verwalten …";
@@ -1876,6 +2054,21 @@ function openDetails(tile) {
       if (!fields.title.value && chosen) fields.title.value = chosen.name;
     });
   }
+  if (tile.kind === "energyflow") {
+    appendEnergyFlowDetails(body, tile, fields, add, check, number, text);
+  }
+  if (tile.kind === "system") {
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "Die Anzeige füllt diese Kachel selbst (Programm, WLAN, IP, Laufzeit, Speicher, Datenalter). Mindestens 2×2 Zellen empfohlen.";
+    body.appendChild(hint);
+  }
+  if (tile.kind === "separator") {
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "Horizontale Trennlinie über die volle Rasterbreite der Zeile.";
+    body.appendChild(hint);
+  }
   dialog.returnValue = "";
   dialog.showModal();
   dialog.onclose = () => {
@@ -1890,7 +2083,7 @@ function openDetails(tile) {
     } else {
       setStatus("Position oder Größe passt nicht ins Raster. Übrige Angaben wurden übernommen.");
     }
-    if (fields.icon) tile.icon = fields.icon.value;
+    if (fields.icon && tile.kind === "nav") tile.icon = fields.icon.value;
     if (tile.kind === "value") {
       const chosen = variableById(Number(fields.variable.value));
       tile.variableId = chosen ? chosen.id : 0;
@@ -1900,22 +2093,40 @@ function openDetails(tile) {
       if (control === "switch") delete tile.control;
       else tile.control = control;
       if (DIM_CONTROLS.includes(control)) fields.actionKind.value = "dim";
-      if (fields.action.checked && chosen && chosen.action) {
+      if (fields.iconMode && fields.iconMode.value === "toggle") {
+        tile.iconMode = "toggle";
+        tile.iconOn = fields.iconOn.value;
+        tile.iconOff = fields.iconOff.value;
+        delete tile.icon;
+      } else if (fields.icon) {
+        delete tile.iconMode;
+        delete tile.iconOn;
+        delete tile.iconOff;
+        tile.icon = fields.icon.value;
+      }
+      if (control === "battery") {
+        tile.valueMin = Number(fields.valueMin.value);
+        tile.valueMax = Number(fields.valueMax.value);
+        tile.batteryPad = Number(fields.batteryPad.value) || 8;
+        tile.batteryLabel = fields.batteryLabel.value || "inside";
+        delete tile.actionId;
+        delete tile.actionKind;
+        tile.confirm = false;
+      } else if (fields.action.checked && chosen && chosen.action) {
         tile.actionId = tile.actionId || `a-${tile.tileId}`;
         tile.actionKind = DIM_CONTROLS.includes(control) ? "dim" : fields.actionKind.value;
         tile.confirm = fields.confirm.checked;
         tile.valueMin = Number(fields.valueMin.value);
         tile.valueMax = Number(fields.valueMax.value);
+        delete tile.batteryPad;
+        delete tile.batteryLabel;
       } else {
         delete tile.actionId;
         if (!DIM_CONTROLS.includes(control)) delete tile.actionKind;
-        if (control === "battery") {
-          tile.valueMin = Number(fields.valueMin.value);
-          tile.valueMax = Number(fields.valueMax.value);
-        } else {
-          delete tile.valueMin;
-          delete tile.valueMax;
-        }
+        delete tile.valueMin;
+        delete tile.valueMax;
+        delete tile.batteryPad;
+        delete tile.batteryLabel;
         tile.confirm = false;
       }
       if (fields.threshold.value.trim() !== "" && !Number.isNaN(Number(fields.threshold.value))) {
@@ -1946,7 +2157,41 @@ function openDetails(tile) {
         delete tile.text;
       }
     }
-    if (tile.kind === "image") tile.imageId = fields.image.value;
+    if (tile.kind === "image") {
+      const source = fields.imageSource.value || "catalog";
+      if (source === "media") {
+        tile.imageSource = "media";
+        delete tile.imageId;
+        const mediaVar = variableById(Number(fields.imageMedia.value));
+        if (mediaVar && isMediaPick(mediaVar)) assignMediaVariable(tile, mediaVar, true);
+        else {
+          tile.variableId = 0;
+          delete tile.mediaObjectId;
+        }
+      } else {
+        tile.imageSource = "catalog";
+        tile.imageId = fields.image.value;
+        delete tile.variableId;
+        delete tile.mediaObjectId;
+      }
+    }
+    if (tile.kind === "energyflow") {
+      tile.flowMode = fields.flowMode.value;
+      tile.homeOverride = fields.homeOverride.checked;
+      tile.unit = fields.flowUnit.value || "W";
+      tile.decimals = Number(fields.flowDecimals.value) || 0;
+      tile.flowThreshold = Number(fields.flowThreshold.value) || 0;
+      for (const key of allFlowVariableKeys()) delete tile[key];
+      const map = flowSlotMap(tile);
+      for (const [slot, propKey] of Object.entries(map)) {
+        const picker = fields[`flowSlot_${slot}`];
+        if (!picker) continue;
+        const id = Number(picker.value) || 0;
+        if (id > 0) tile[propKey] = id;
+      }
+      if (!tile.homeOverride) delete tile.loadVariableId;
+      if (!tile.title) tile.title = "Energiefluss";
+    }
     if (tile.kind === "camera") {
       tile.cameraSource = fields.cameraSource ? fields.cameraSource.value : "url";
       const chosen = treeItemById(Number(fields.variable.value));
@@ -2834,9 +3079,25 @@ function startProbeTimer() {
   }, sec * 1000);
 }
 
+function probeTileFromLayout(tileId) {
+  const layout = probe.snapshot && probe.snapshot.layout;
+  if (!layout) return null;
+  for (const page of layout.pages || []) {
+    for (const t of page.tiles || []) {
+      if (t.tileId === tileId) return t;
+    }
+  }
+  return null;
+}
+
 async function sendProbeAction(tile) {
+  const layoutTile = probeTileFromLayout(tile.tileId) || tile;
+  if (!layoutTile.actionId) {
+    setStatus("Kachel ist nicht schaltbar: In Details „Schaltbar“ aktivieren, Variable mit Aktion wählen, Entwurf speichern bzw. veröffentlichen.");
+    return;
+  }
   let value = "";
-  if (tile.actionKind === "dim" || tile.actionKind === "position") {
+  if (layoutTile.actionKind === "dim" || layoutTile.actionKind === "position") {
     const entered = prompt("Wert", "50");
     if (entered === null) return;
     value = entered.trim();
@@ -2844,13 +3105,14 @@ async function sendProbeAction(tile) {
   try {
     const result = await call("simulateAction", {
       id: Number($("probe-panel").value),
-      tileId: tile.tileId,
-      actionId: tile.actionId,
-      value
+      tileId: layoutTile.tileId,
+      actionId: layoutTile.actionId,
+      value,
+      tile: layoutTile
     });
-    if (result.ok === false) throw new Error(result.error || "Aktion abgelehnt");
+    if (result && result.ok === false) throw new Error(result.error || "Aktion abgelehnt");
     setStatus("Aktion ausgeführt.");
-    await loadProbe();
+    await loadProbe(false);
   } catch (error) {
     setStatus(error.message);
   }

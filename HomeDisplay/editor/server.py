@@ -133,11 +133,16 @@ def api(incoming):
         return checked(ips_call("HDISP_Inspect", [int(incoming.get("id", 0))]))
     if method == "simulateAction":
         value = incoming.get("value", "")
+        tile = incoming.get("tile")
+        tile_json = ""
+        if isinstance(tile, dict):
+            tile_json = json.dumps(tile, ensure_ascii=False)
         return checked(ips_call("HDISP_SimulateAction", [
             int(incoming.get("id", 0)),
             str(incoming.get("tileId", "")),
             str(incoming.get("actionId", "")),
             "" if value is None else str(value),
+            tile_json,
         ]))
     panel = panel_id()
     if method == "catalog":

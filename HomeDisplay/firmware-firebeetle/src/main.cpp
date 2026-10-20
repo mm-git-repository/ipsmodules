@@ -55,7 +55,7 @@ void setup() {
   hdUiBegin();
   hdClientBegin(gCfg);
   hdClientSetRefreshCallback(onClientRefresh);
-  if (LittleFS.open("/layout.json", "r")) {
+  if (LittleFS.exists("/layout.json")) {
     hdUiRefreshFromDisk();
   } else {
     epaperShowStatus("Verbunden", "Warte auf Layout");

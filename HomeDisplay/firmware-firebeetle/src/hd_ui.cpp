@@ -19,6 +19,7 @@ static unsigned long lastButtonMs = 0;
 static bool lastButton = true;
 
 static String readFile(const char *path) {
+  if (!LittleFS.exists(path)) return "";
   File f = LittleFS.open(path, "r");
   if (!f) return "";
   String s = f.readString();

@@ -59,6 +59,7 @@ static bool drawJpegBytes(Adafruit_GFX *gfx, const uint8_t *data, size_t len, in
 }
 
 static bool drawCachedFile(Adafruit_GFX *gfx, const char *path, int16_t x, int16_t y, int16_t w, int16_t h) {
+  if (!LittleFS.exists(path)) return false;
   File f = LittleFS.open(path, "r");
   if (!f) return false;
   size_t len = f.size();
@@ -98,12 +99,8 @@ static void fetchIfNeeded(const char *cachePath, const char *urlPath, const char
   if (seq <= 0) return;
   char tag[80];
   snprintf(tag, sizeof(tag), "%s:%d", key, seq);
-  if (strcmp(tag, lastFetchKey) == 0 && lastFetchSeq == seq) {
-    File test = LittleFS.open(cachePath, "r");
-    if (test) {
-      test.close();
-      return;
-    }
+  if (strcmp(tag, lastFetchKey) == 0 && lastFetchSeq == seq && LittleFS.exists(cachePath)) {
+    return;
   }
   String body = hdClientGetBinary(urlPath);
   if (body.length()) {
@@ -164,11 +161,7 @@ void hdMediaEnsureLayoutImages(JsonDocument &layout) {
         snprintf(path, sizeof(path), "/img_%s.jpg", tileId);
         snprintf(url, sizeof(url), "/v1/images/%s", imageId);
       }
-      File test = LittleFS.open(path, "r");
-      if (test) {
-        test.close();
-        continue;
-      }
+      if (LittleFS.exists(path)) continue;
       String body = hdClientGetBinary(url);
       if (body.length()) cacheBinary(path, body);
     }

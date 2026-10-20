@@ -52,7 +52,8 @@ void hdNetRunSetupPortal(HdDeviceConfig &cfg) {
                 "</style><h1>Hausanzeige einrichten</h1><form method=post action=/save>"
                 "<label>WLAN<input name=ssid required maxlength=32></label>"
                 "<label>Passwort<input name=password type=password maxlength=63></label>"
-                "<label>Dienstadresse<input name=adapter placeholder=https://host:3777/hook/homedisplay maxlength=150></label>"
+                "<label>Dienstadresse<input name=adapter placeholder=http://192.168.1.10:3777/hook/homedisplay maxlength=150></label>"
+                "<p>Schema wie in IPS: SSL aus → <code>http://</code>, SSL an → <code>https://</code></p>"
                 "<label>Display<select name=dmodel><option value=0>4.2 400x300</option><option value=1>7.5 800x480</option></select></label>"
                 "<label>Farbe<select name=dcolor><option value=0>S/W</option><option value=1>S/W/R</option></select></label>"
                 "<button>Speichern</button></form>");

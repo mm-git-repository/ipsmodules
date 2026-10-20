@@ -4,10 +4,12 @@
 #include <HTTPClient.h>
 #include <LittleFS.h>
 #include <Preferences.h>
+#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <esp_random.h>
 
 #include "epaper_driver.h"
+#include "hd_config.h"
 
 #ifndef HOMEDISPLAY_FB_FIRMWARE_VERSION
 #define HOMEDISPLAY_FB_FIRMWARE_VERSION "0.1.0"
@@ -25,13 +27,27 @@ static String layoutSha;
 static String configSha;
 static int manifestFailures = 0;
 
+static void pullManifest();
+static void pullState();
+
+static bool serviceUrlUsesTls() {
+  return gCfg && gCfg->serviceUrl.startsWith("https://");
+}
+
 static bool httpRequest(const char *path, const char *method, const char *body, String &response, bool *is401) {
   if (!gCfg || gCfg->serviceUrl.isEmpty() || !WiFi.isConnected()) return false;
-  WiFiClientSecure client;
-  client.setInsecure();
+  WiFiClient plainClient;
+  WiFiClientSecure tlsClient;
   HTTPClient http;
   String url = gCfg->serviceUrl + path;
-  if (!http.begin(client, url)) return false;
+  bool began = false;
+  if (serviceUrlUsesTls()) {
+    tlsClient.setInsecure();
+    began = http.begin(tlsClient, url);
+  } else {
+    began = http.begin(plainClient, url);
+  }
+  if (!began) return false;
   http.setTimeout(12000);
   if (gCfg->deviceToken.length()) {
     http.addHeader("Authorization", "Bearer " + gCfg->deviceToken);
@@ -69,10 +85,18 @@ bool hdClientHttpJson(const char *path, const char *method, const char *body, St
 String hdClientGetBinary(const char *path, int *httpCode) {
   String empty;
   if (!gCfg || gCfg->serviceUrl.isEmpty()) return empty;
-  WiFiClientSecure client;
-  client.setInsecure();
+  WiFiClient plainClient;
+  WiFiClientSecure tlsClient;
   HTTPClient http;
-  if (!http.begin(client, gCfg->serviceUrl + path)) return empty;
+  const String url = gCfg->serviceUrl + path;
+  bool began = false;
+  if (serviceUrlUsesTls()) {
+    tlsClient.setInsecure();
+    began = http.begin(tlsClient, url);
+  } else {
+    began = http.begin(plainClient, url);
+  }
+  if (!began) return empty;
   if (gCfg->deviceToken.length()) http.addHeader("Authorization", "Bearer " + gCfg->deviceToken);
   int code = http.GET();
   if (httpCode) *httpCode = code;
@@ -139,8 +163,21 @@ static void pairTick() {
   snprintf(body, sizeof(body), "{\"code\":\"%s\",\"firmware\":\"%s\"}", pairingCode, HOMEDISPLAY_FB_FIRMWARE_VERSION);
   String response;
   if (!hdClientHttpJson("/v1/hello", "POST", body, response)) {
-    Serial.println(F("[pair] hello fehlgeschlagen (URL/WLAN/HTTPS?)"));
-    return;
+    Serial.printf("[pair] hello fehlgeschlagen, URL=%s\n", gCfg->serviceUrl.c_str());
+    if (gCfg->serviceUrl.startsWith("https://")) {
+      const String httpUrl = "http://" + gCfg->serviceUrl.substring(8);
+      gCfg->serviceUrl = httpUrl;
+      Serial.printf("[pair] erneuter Versuch mit %s\n", httpUrl.c_str());
+      if (hdClientHttpJson("/v1/hello", "POST", body, response)) {
+        hdConfigSave(*gCfg);
+      } else {
+        Serial.println(F("[pair] auch http fehlgeschlagen – IP, Port, /hook/homedisplay prüfen"));
+        return;
+      }
+    } else {
+      Serial.println(F("[pair] WLAN/URL prüfen (Port 3777, /hook/homedisplay)"));
+      return;
+    }
   }
   JsonDocument doc;
   if (deserializeJson(doc, response) != DeserializationError::Ok) return;
@@ -157,6 +194,10 @@ static void pairTick() {
     pairingCode[0] = '\0';
     epaperShowStatus("Verbunden", "Hausanzeige");
     Serial.println(F("[pair] Token erhalten"));
+    nextManifestMs = 0;
+    nextStateMs = 0;
+    pullManifest();
+    pullState();
   }
 }
 
@@ -169,6 +210,7 @@ static bool writeFile(const char *path, const String &content) {
 }
 
 static String readFile(const char *path) {
+  if (!LittleFS.exists(path)) return "";
   File f = LittleFS.open(path, "r");
   if (!f) return "";
   String s = f.readString();

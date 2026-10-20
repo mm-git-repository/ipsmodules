@@ -453,7 +453,14 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
                 return ['ok' => false, 'error' => 'HomeDisplay ist nicht geladen.'];
             }
             $value = isset($body['value']) && $body['value'] !== '' && $body['value'] !== null ? (string) $body['value'] : '';
-            return ['ok' => true, 'result' => $this->decodeCall(HDISP_SimulateAction($id, (string) ($body['tileId'] ?? ''), (string) ($body['actionId'] ?? ''), $value))];
+            $tileJson = '';
+            if (isset($body['tile']) && is_array($body['tile'])) {
+                $encoded = json_encode($body['tile'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                if (is_string($encoded)) {
+                    $tileJson = $encoded;
+                }
+            }
+            return ['ok' => true, 'result' => $this->decodeCall(HDISP_SimulateAction($id, (string) ($body['tileId'] ?? ''), (string) ($body['actionId'] ?? ''), $value, $tileJson))];
         }
         $panel = $this->panelId();
         if ($panel === 0) {

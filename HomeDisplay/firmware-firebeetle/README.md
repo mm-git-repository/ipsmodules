@@ -22,7 +22,7 @@ PlatformIO-Firmware für DFRobot FireBeetle 2 ESP32-E mit Waveshare DESPI-C02 (G
 3. Alternativ SoftAP **Hausanzeige-Setup-XXXX**, Passwort `hausanzeige` → Browser-Formular
 4. In IP-Symcon Instanz **Hausanzeige**: Display-Profil `FireBeetle E-Ink 4,2"` oder `7,5"` wählen, Kopplungscode vom E-Paper eintragen
 
-TLS: Zertifikat wird nicht geprüft (wie Waveshare-Firmware).
+**HTTP/HTTPS:** Muss zum IPS-Webserver passen (`WebServer::SSL` aus → `http://IP:3777/hook/homedisplay`, SSL an → `https://…`). Nur IP ohne Schema wird als `http://` gespeichert. TLS-Zertifikat wird bei HTTPS nicht geprüft.
 
 ## Build
 
