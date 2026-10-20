@@ -433,21 +433,35 @@ function renderPageTabs() {
 
 /* ---------- Raster ---------- */
 
+function pageBackgroundImageUrl(page) {
+  if (!page || !page.backgroundId) return "";
+  const fromCatalog = state.images.find((item) => item.id === page.backgroundId);
+  if (fromCatalog) return `images/${fromCatalog.id}.${fromCatalog.ext}`;
+  if (page.backgroundFile) return `images/${page.backgroundFile}`;
+  return "";
+}
+
+function applyPageBackground(element, page) {
+  if (!element) return;
+  const url = pageBackgroundImageUrl(page);
+  if (url) {
+    element.style.backgroundImage = `url("${url}")`;
+    element.style.backgroundSize = "cover";
+    element.style.backgroundPosition = "center";
+  } else {
+    element.style.backgroundImage = "";
+    element.style.backgroundSize = "";
+    element.style.backgroundPosition = "";
+  }
+}
+
 function renderPageBackground() {
   const select = $("page-background");
   const page = currentPage();
   fillImageSelect(select);
   select.value = page && page.backgroundId ? page.backgroundId : "";
   select.disabled = !page;
-  const image = page ? state.images.find((item) => item.id === page.backgroundId) : null;
-  const grid = $("grid");
-  if (image) {
-    grid.style.backgroundImage = `url("images/${image.id}.${image.ext}")`;
-    grid.style.backgroundSize = "cover";
-    grid.style.backgroundPosition = "center";
-  } else {
-    grid.style.backgroundImage = "";
-  }
+  applyPageBackground($("grid"), page);
 }
 
 function tileAt(col, row) {
@@ -2479,6 +2493,7 @@ function renderProbe() {
     }
   }
   const current = layout.pages.find((page) => page.id === probe.page);
+  applyPageBackground(grid, current || null);
   grid.style.gridTemplateColumns = `repeat(${layout.columns || 2}, 1fr)`;
   grid.style.gridTemplateRows = `repeat(${layout.rows || 4}, 1fr)`;
   for (const tile of (current && current.tiles) || []) {
