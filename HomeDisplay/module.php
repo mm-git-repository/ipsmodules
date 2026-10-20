@@ -11,7 +11,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 22;
+    private const MODULE_BUILD = 23;
 
     private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
@@ -153,12 +153,21 @@ class HomeDisplay extends IPSModuleStrict
     public function Inspect(): string
     {
         $device = ['id' => $this->InstanceID, 'token' => ''];
+        $active = $this->activeLayout($this->InstanceID);
+        $runtime = $this->runtime();
+        $preview = $runtime[(string) $this->InstanceID]['preview'] ?? null;
+        $previewActive = is_array($preview) && (int) ($preview['until'] ?? 0) > time();
         return $this->encode([
             'ok' => true,
             'manifest' => $this->manifest($device),
             'config' => $this->deviceConfig($device),
             'layout' => $this->deviceLayout($device),
             'state' => $this->deviceState($device),
+            'probe' => [
+                'previewActive' => $previewActive,
+                'layoutId' => is_array($active) ? (string) ($active['id'] ?? '') : '',
+                'layoutVersion' => is_array($active) ? (int) ($active['version'] ?? 0) : 0,
+            ],
         ]);
     }
 

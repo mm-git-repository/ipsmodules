@@ -124,6 +124,8 @@ const state = {
   panelProfiles: {},
   previewPanelId: 0,
   tilePreviewUrls: {},
+  tilePreviewErrors: {},
+  tilePreviewErrorDetails: {},
   previewTimer: null,
   previewFetchToken: 0
 };
@@ -475,42 +477,32 @@ async function refreshEditorTilePreviews() {
   if (!page) return;
   const targets = page.tiles.filter(tileNeedsLivePreview);
   const token = ++state.previewFetchToken;
-  let changed = false;
   for (const tile of targets) {
     try {
       normalizeMediaTileBindings(tile);
       const result = await call("probeImage", { id: state.previewPanelId, tileId: tile.tileId, tile });
       if (token !== state.previewFetchToken) return;
       if (result.ok && result.data) {
-        const url = `data:${result.mime || "image/jpeg"};base64,${result.data}`;
-        if (state.tilePreviewUrls[tile.tileId] !== url) {
-          state.tilePreviewUrls[tile.tileId] = url;
-          changed = true;
-        }
-      } else if (state.tilePreviewUrls[tile.tileId]) {
+        state.tilePreviewUrls[tile.tileId] = `data:${result.mime || "image/jpeg"};base64,${result.data}`;
+        delete state.tilePreviewErrors[tile.tileId];
+        delete state.tilePreviewErrorDetails[tile.tileId];
+      } else {
         delete state.tilePreviewUrls[tile.tileId];
-        changed = true;
+        state.tilePreviewErrors[tile.tileId] = result.error || "unknown";
+        if (result.detail) state.tilePreviewErrorDetails[tile.tileId] = result.detail;
+        else delete state.tilePreviewErrorDetails[tile.tileId];
       }
     } catch (error) {
-      if (state.tilePreviewUrls[tile.tileId]) {
-        delete state.tilePreviewUrls[tile.tileId];
-        changed = true;
-      }
+      delete state.tilePreviewUrls[tile.tileId];
+      state.tilePreviewErrors[tile.tileId] = "fetch";
+      state.tilePreviewErrorDetails[tile.tileId] = error && error.message ? error.message : "";
     }
   }
-  if (changed && token === state.previewFetchToken) {
-    const grid = $("grid");
-    if (!grid) return;
-    for (const tile of targets) {
-      const element = grid.querySelector(`.tile[data-tile-id="${tile.tileId}"]`);
-      if (!element || !state.tilePreviewUrls[tile.tileId]) continue;
-      const url = state.tilePreviewUrls[tile.tileId];
-      if (tile.kind === "image") {
-        element.innerHTML = `<img src="${url}" alt="">`;
-      } else if (tile.kind === "camera") {
-        element.innerHTML = `<div class="kicker">Kamera</div><img src="${url}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1">`;
-      }
-    }
+  if (token !== state.previewFetchToken) return;
+  const grid = $("grid");
+  if (!grid) return;
+  for (const tile of targets) {
+    paintEditorLiveTile(grid.querySelector(`.tile[data-tile-id="${tile.tileId}"]`), tile);
   }
 }
 
@@ -656,6 +648,9 @@ function buildTileElement(tile, context) {
     if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
       const src = context.probeImageUrls[tile.tileId].url || context.probeImageUrls[tile.tileId];
       element.innerHTML = `<img src="${src}" alt="">`;
+    } else if (mode === "probe" && context.probeImageErrors && context.probeImageErrors[tile.tileId]) {
+      const detail = context.probeImageErrorDetails && context.probeImageErrorDetails[tile.tileId];
+      element.innerHTML = `<div class="media-placeholder">${escapeHtml(probeImageErrorText(context.probeImageErrors[tile.tileId], detail))}</div>`;
     }
     } else {
       const image = state.images.find((item) => item.id === tile.imageId);
@@ -668,13 +663,21 @@ function buildTileElement(tile, context) {
     const fromMedia = (tile.cameraSource || "url") === "media" || Boolean(tile.mediaObjectId) || isMediaPick(variableById(tile.variableId));
     if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
       const src = context.probeImageUrls[tile.tileId].url || context.probeImageUrls[tile.tileId];
-      element.innerHTML = `<div class="kicker">Kamera</div><img src="${src}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1">`;
+      element.innerHTML = `<div class="kicker">Kamera</div><img src="${src}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1" class="live-preview">`;
+      const img = element.querySelector("img.live-preview");
+      if (img && mode === "probe") {
+        img.addEventListener("error", () => {
+          const err = (context.probeImageErrors && context.probeImageErrors[tile.tileId]) || "camera_fetch";
+          const detail = context.probeImageErrorDetails && context.probeImageErrorDetails[tile.tileId];
+          paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, tile.title);
+        });
+      }
     } else {
       const live = context.stateByTileId && context.stateByTileId[tile.tileId];
       let preview;
       if (live && live.quality === "empty") {
         preview = "Keine Bildquelle (Variable leer oder nicht konfiguriert)";
-      } else if (mode === "probe" && tile.cameraFile) {
+      } else if ((mode === "probe" && tile.cameraFile) || (mode === "edit" && context.probeImageErrors && context.probeImageErrors[tile.tileId])) {
         const err = context.probeImageErrors && context.probeImageErrors[tile.tileId];
         const detail = context.probeImageErrorDetails && context.probeImageErrorDetails[tile.tileId];
         preview = probeImageErrorText(err || "unknown", detail);
@@ -735,7 +738,12 @@ function buildTileElement(tile, context) {
 }
 
 function renderTile(tile) {
-  return buildTileElement(tile, { mode: "edit", probeImageUrls: state.tilePreviewUrls });
+  return buildTileElement(tile, {
+    mode: "edit",
+    probeImageUrls: state.tilePreviewUrls,
+    probeImageErrors: state.tilePreviewErrors,
+    probeImageErrorDetails: state.tilePreviewErrorDetails
+  });
 }
 
 function controlMarkup(control, tile) {
@@ -2117,6 +2125,51 @@ function probeImageStreamUrl(panelId, tileId, bust) {
   return `probe-image?${q.toString()}`;
 }
 
+function revokeProbeObjectUrls() {
+  for (const entry of Object.values(probe.probeImageUrls || {})) {
+    if (entry && entry.revoke) URL.revokeObjectURL(entry.url);
+  }
+}
+
+function paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, title) {
+  const preview = probeImageErrorText(err || "unknown", detail);
+  element.innerHTML = `<div class="kicker">${fromMedia ? "Kamera · Medien" : "Kamera · Livebild"}</div><div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div>`;
+  element.querySelector(".name").textContent = title || bound || "Kamera";
+}
+
+function paintEditorLiveTile(element, tile) {
+  if (!element) return;
+  const url = state.tilePreviewUrls[tile.tileId];
+  const err = state.tilePreviewErrors[tile.tileId];
+  const detail = state.tilePreviewErrorDetails[tile.tileId];
+  if (tile.kind === "image" && (tile.imageSource || "catalog") === "media") {
+    if (url) {
+      element.innerHTML = `<img src="${url}" alt="">`;
+      return;
+    }
+    if (err) {
+      element.innerHTML = `<div class="media-placeholder">${escapeHtml(probeImageErrorText(err, detail))}</div>`;
+    }
+    return;
+  }
+  if (tile.kind !== "camera") return;
+  const bound = mediaBindingName(tile);
+  const fromMedia = (tile.cameraSource || "url") === "media" || Boolean(tile.mediaObjectId) || isMediaPick(variableById(tile.variableId));
+  if (url) {
+    element.innerHTML = `<div class="kicker">Kamera</div><img src="${url}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1" class="live-preview">`;
+    const img = element.querySelector("img.live-preview");
+    if (img) {
+      img.addEventListener("error", () => {
+        paintCameraPreviewError(element, tile, "camera_fetch", "Bild im Browser nicht darstellbar", fromMedia, bound, tile.title);
+      });
+    }
+    return;
+  }
+  if (err) {
+    paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, tile.title);
+  }
+}
+
 let probe = { page: "", snapshot: null, probeImageUrls: {}, probeImageErrors: {}, probeImageErrorDetails: {}, timer: null, lastLive: "" };
 
 function scaleProbeViewport() {
@@ -2146,6 +2199,7 @@ function updateProbeValuesOnly() {
 }
 
 async function loadProbeImages(layout, panelId, stateTiles) {
+  revokeProbeObjectUrls();
   probe.probeImageUrls = {};
   probe.probeImageErrors = {};
   probe.probeImageErrorDetails = {};
@@ -2156,15 +2210,28 @@ async function loadProbeImages(layout, panelId, stateTiles) {
       if (!tileNeedsProbeImage(tile)) continue;
       try {
         const live = liveById[tile.tileId];
-        if (live && live.quality === "empty") continue;
         const bust = live && (live.cameraSeq != null || live.mediaSeq != null) ? (live.cameraSeq ?? live.mediaSeq) : Date.now();
         const result = await call("probeImage", { id: panelId, tileId: tile.tileId, meta: true });
-        if (result.ok) {
-          probe.probeImageUrls[tile.tileId] = { url: probeImageStreamUrl(panelId, tile.tileId, bust) };
-        } else {
+        if (!result.ok) {
           probe.probeImageErrors[tile.tileId] = result.error || "unknown";
           if (result.detail) probe.probeImageErrorDetails[tile.tileId] = result.detail;
+          continue;
         }
+        const streamUrl = probeImageStreamUrl(panelId, tile.tileId, bust);
+        const response = await fetch(streamUrl, { credentials: "same-origin" });
+        if (!response.ok) {
+          probe.probeImageErrors[tile.tileId] = response.headers.get("X-HomeDisplay-Error") || "camera_fetch";
+          const detail = response.headers.get("X-HomeDisplay-Detail");
+          if (detail) probe.probeImageErrorDetails[tile.tileId] = detail;
+          continue;
+        }
+        const blob = await response.blob();
+        if (!blob.size) {
+          probe.probeImageErrors[tile.tileId] = "camera_fetch";
+          probe.probeImageErrorDetails[tile.tileId] = "Leere Antwort von Symcon";
+          continue;
+        }
+        probe.probeImageUrls[tile.tileId] = { url: URL.createObjectURL(blob), revoke: true };
       } catch (error) {
         probe.probeImageErrors[tile.tileId] = "fetch";
         probe.probeImageErrorDetails[tile.tileId] = error && error.message ? error.message : "";
@@ -2189,7 +2256,17 @@ function renderProbe() {
   const values = {};
   for (const tile of (probe.snapshot.state && probe.snapshot.state.tiles) || []) values[tile.tileId] = tile;
   const profile = layoutProfile({ displayProfile: layout.displayProfile });
-  $("probe-meta").textContent = `Panel-Vorschau · ${profile.width}×${profile.height}`;
+  let metaText = `Panel-Vorschau · ${profile.width}×${profile.height}`;
+  const probeInfo = probe.snapshot && probe.snapshot.probe;
+  if (probeInfo && probeInfo.previewActive) {
+    metaText += " · Geräte-Vorschau (zeitlich begrenzt) aktiv";
+  } else {
+    metaText += " · veröffentlichte Ansicht der Instanz";
+  }
+  if (state.dirty && state.layout && probeInfo && state.layout.id === probeInfo.layoutId) {
+    metaText += " · Editor-Entwurf ist noch nicht veröffentlicht";
+  }
+  $("probe-meta").textContent = metaText;
   if (layout.showTabs) {
     tabs.classList.remove("hidden");
     for (const page of layout.pages) {
@@ -2320,7 +2397,10 @@ async function openProbe() {
   startProbeTimer();
 }
 
-$("probe-dialog").addEventListener("close", stopProbeTimer);
+$("probe-dialog").addEventListener("close", () => {
+  stopProbeTimer();
+  revokeProbeObjectUrls();
+});
 $("probe-live").addEventListener("change", () => {
   if ($("probe-dialog").open) startProbeTimer();
   else stopProbeTimer();
