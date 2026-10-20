@@ -676,7 +676,8 @@ function buildTileElement(tile, context) {
         preview = "Keine Bildquelle (Variable leer oder nicht konfiguriert)";
       } else if (mode === "probe" && tile.cameraFile) {
         const err = context.probeImageErrors && context.probeImageErrors[tile.tileId];
-        preview = probeImageErrorText(err);
+        const detail = context.probeImageErrorDetails && context.probeImageErrorDetails[tile.tileId];
+        preview = probeImageErrorText(err || "unknown", detail);
       } else {
         preview = bound
           ? (fromMedia ? `IPS-Medien: ${bound}` : "Snapshot über Bild-URL")
@@ -2093,17 +2094,30 @@ $("open-settings").addEventListener("click", openSettings);
 
 const PROBE_IMAGE_ERROR_TEXT = {
   tile: "Kachel nicht in der veröffentlichten Ansicht",
-  camera: "Variable ohne http(s)-Bildadresse",
-  camera_fetch: "Snapshot-URL von Symcon aus nicht erreichbar (Netzwerk/SSL/Zertifikat)",
+  camera: "Variable ohne Bildadresse (http(s), Pfad oder Medien-ID)",
+  camera_fetch: "Snapshot von Symcon aus nicht ladbar",
   media: "Medienobjekt nicht lesbar",
-  media_fetch: "Mediendatei fehlt oder ist leer"
+  media_fetch: "Mediendatei fehlt oder ist leer",
+  fetch: "Verwaltung/Symcon-Antwort ungültig (Bibliothek Build 126?)",
+  unknown: "Snapshot fehlgeschlagen"
 };
 
-function probeImageErrorText(code) {
-  return PROBE_IMAGE_ERROR_TEXT[code] || "Snapshot konnte nicht geladen werden (Symcon prüfen)";
+function probeImageErrorText(code, detail) {
+  const base = PROBE_IMAGE_ERROR_TEXT[code] || PROBE_IMAGE_ERROR_TEXT.unknown;
+  if (detail) return `${base}: ${detail}`;
+  return base;
 }
 
-let probe = { page: "", snapshot: null, probeImageUrls: {}, probeImageErrors: {}, timer: null, lastLive: "" };
+function probeImageStreamUrl(panelId, tileId, bust) {
+  const q = new URLSearchParams({
+    panel: String(panelId),
+    tile: String(tileId),
+    v: String(bust ?? Date.now())
+  });
+  return `probe-image?${q.toString()}`;
+}
+
+let probe = { page: "", snapshot: null, probeImageUrls: {}, probeImageErrors: {}, probeImageErrorDetails: {}, timer: null, lastLive: "" };
 
 function scaleProbeViewport() {
   const viewport = $("probe-viewport");
@@ -2134,6 +2148,7 @@ function updateProbeValuesOnly() {
 async function loadProbeImages(layout, panelId, stateTiles) {
   probe.probeImageUrls = {};
   probe.probeImageErrors = {};
+  probe.probeImageErrorDetails = {};
   const liveById = {};
   for (const st of stateTiles || []) liveById[st.tileId] = st;
   for (const page of layout.pages || []) {
@@ -2142,16 +2157,17 @@ async function loadProbeImages(layout, panelId, stateTiles) {
       try {
         const live = liveById[tile.tileId];
         if (live && live.quality === "empty") continue;
-        const result = await call("probeImage", { id: panelId, tileId: tile.tileId });
-        if (result.ok && result.data) {
-          probe.probeImageUrls[tile.tileId] = {
-            url: `data:${result.mime || "image/jpeg"};base64,${result.data}`
-          };
-        } else if (result.error) {
-          probe.probeImageErrors[tile.tileId] = result.error;
+        const bust = live && (live.cameraSeq != null || live.mediaSeq != null) ? (live.cameraSeq ?? live.mediaSeq) : Date.now();
+        const result = await call("probeImage", { id: panelId, tileId: tile.tileId, meta: true });
+        if (result.ok) {
+          probe.probeImageUrls[tile.tileId] = { url: probeImageStreamUrl(panelId, tile.tileId, bust) };
+        } else {
+          probe.probeImageErrors[tile.tileId] = result.error || "unknown";
+          if (result.detail) probe.probeImageErrorDetails[tile.tileId] = result.detail;
         }
       } catch (error) {
         probe.probeImageErrors[tile.tileId] = "fetch";
+        probe.probeImageErrorDetails[tile.tileId] = error && error.message ? error.message : "";
       }
     }
   }
@@ -2209,7 +2225,8 @@ function renderProbe() {
       mode: "probe",
       stateByTileId: values,
       probeImageUrls: probe.probeImageUrls,
-      probeImageErrors: probe.probeImageErrors
+      probeImageErrors: probe.probeImageErrors,
+      probeImageErrorDetails: probe.probeImageErrorDetails
     });
     element.dataset.tileId = tile.tileId;
     grid.appendChild(element);

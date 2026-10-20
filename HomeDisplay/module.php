@@ -11,7 +11,9 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 21;
+    private const MODULE_BUILD = 22;
+
+    private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
     private const HOOK = '/hook/homedisplay';
     private const CONTRACT = 1;
@@ -1175,7 +1177,7 @@ class HomeDisplay extends IPSModuleStrict
     }
 
     /** Bildbytes für Live-Vorschau (Editor-Entwurf oder veröffentlichte Ansicht). */
-    public function ProbeTileImage(string $TileId, string $TileJson = ''): string
+    public function ProbeTileImage(string $TileId, string $TileJson = '', string $Mode = ''): string
     {
         $tile = null;
         if ($TileJson !== '') {
@@ -1190,7 +1192,11 @@ class HomeDisplay extends IPSModuleStrict
         if ($tile === null) {
             return $this->encode(['ok' => false, 'error' => 'tile']);
         }
-        return $this->encode($this->probeTileImagePayload($tile));
+        $payload = $this->probeTileImagePayload($tile);
+        if (($Mode === 'meta' || $Mode === 'metaOnly') && !empty($payload['ok'])) {
+            unset($payload['data']);
+        }
+        return $this->encode($payload);
     }
 
     /** @param array<string, mixed> $tile @return array<string, mixed> */
@@ -1198,19 +1204,16 @@ class HomeDisplay extends IPSModuleStrict
     {
         $kind = (string) ($tile['kind'] ?? '');
         if ($kind === 'camera') {
-            $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
-            if ($binary !== null && $binary !== '') {
+            $shot = $this->cameraBinaryForTile($tile);
+            if (isset($shot['binary'])) {
+                $binary = $shot['binary'];
                 return ['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)];
             }
-            $url = HomeDisplayMedia::cameraImageUrl($tile);
-            if ($url === '') {
-                return ['ok' => false, 'error' => 'camera'];
+            $payload = ['ok' => false, 'error' => (string) ($shot['error'] ?? 'camera_fetch')];
+            if (!empty($shot['detail'])) {
+                $payload['detail'] = (string) $shot['detail'];
             }
-            $binary = $this->fetchRemoteBinary($url);
-            if ($binary === null || $binary === '') {
-                return ['ok' => false, 'error' => 'camera_fetch'];
-            }
-            return ['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)];
+            return $payload;
         }
         if ($kind === 'image' && (string) ($tile['imageSource'] ?? 'catalog') === 'media') {
             $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
@@ -1220,6 +1223,32 @@ class HomeDisplay extends IPSModuleStrict
             return ['ok' => true, 'mime' => $this->guessImageMime($binary), 'data' => base64_encode($binary)];
         }
         return ['ok' => false, 'error' => 'tile'];
+    }
+
+    /** @param array<string, mixed> $tile @return array{binary?: string, error?: string, detail?: string} */
+    private function cameraBinaryForTile(array $tile): array
+    {
+        $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
+        if ($binary !== null && $binary !== '') {
+            return ['binary' => $binary];
+        }
+        $raw = HomeDisplayMedia::cameraImageUrl($tile);
+        if ($raw === '') {
+            return ['error' => 'camera'];
+        }
+        if (preg_match('#^https?://#i', $raw)) {
+            $binary = $this->fetchRemoteBinary($raw);
+            if ($binary !== null && $binary !== '') {
+                return ['binary' => $binary];
+            }
+            $detail = $this->lastFetchHint !== '' ? $this->lastFetchHint : 'URL von Symcon aus nicht abrufbar';
+            return ['error' => 'camera_fetch', 'detail' => $detail];
+        }
+        $binary = HomeDisplayMedia::readBinaryFromPath($raw);
+        if ($binary !== null && $binary !== '') {
+            return ['binary' => $binary];
+        }
+        return ['error' => 'camera_fetch', 'detail' => 'Pfad/Datei aus Variable nicht lesbar'];
     }
 
     /** @return array<string, mixed> */
@@ -1295,28 +1324,30 @@ class HomeDisplay extends IPSModuleStrict
     {
         $tile = $this->findLayoutTile($device['id'], $tileId);
         if ($tile !== null && (string) ($tile['kind'] ?? '') === 'camera') {
-            $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
-            if ($binary !== null && $binary !== '') {
-                header('Content-Type: ' . $this->guessImageMime($binary));
+            $shot = $this->cameraBinaryForTile($tile);
+            if (isset($shot['binary'])) {
+                header('Content-Type: ' . $this->guessImageMime($shot['binary']));
                 header('Cache-Control: no-store');
-                echo $binary;
+                echo $shot['binary'];
                 return;
             }
+            http_response_code($shot['error'] === 'camera' ? 404 : 502);
+            $this->json(['error' => $shot['error'] ?? 'camera_fetch']);
+            return;
         }
-        $url = $tile !== null ? HomeDisplayMedia::cameraImageUrl($tile) : $this->cameraUrlForTile($device['id'], $tileId);
+        $url = $this->cameraUrlForTile($device['id'], $tileId);
         if ($url === '') {
             http_response_code(404);
             $this->json(['error' => 'camera']);
             return;
         }
-        $binary = $this->fetchRemoteBinary($url);
+        $binary = preg_match('#^https?://#i', $url) ? $this->fetchRemoteBinary($url) : HomeDisplayMedia::readBinaryFromPath($url);
         if ($binary === null || $binary === '') {
             http_response_code(502);
             $this->json(['error' => 'camera_fetch']);
             return;
         }
-        $mime = $this->guessImageMime($binary);
-        header('Content-Type: ' . $mime);
+        header('Content-Type: ' . $this->guessImageMime($binary));
         header('Cache-Control: no-store');
         echo $binary;
     }
@@ -1403,17 +1434,26 @@ class HomeDisplay extends IPSModuleStrict
 
     private function fetchRemoteBinary(string $url): ?string
     {
+        $this->lastFetchHint = '';
         if ($url === '' || !preg_match('#^https?://#i', $url)) {
+            $this->lastFetchHint = 'Keine http(s)-Adresse';
             return null;
         }
-        $binary = $this->fetchRemoteBinaryAttempt($url, true);
-        if ($binary !== null) {
-            return $binary;
+        foreach ([false, true] as $lenient) {
+            foreach ([true, false] as $verifySsl) {
+                $binary = $this->fetchRemoteBinaryAttempt($url, $verifySsl, $lenient);
+                if ($binary !== null) {
+                    return $binary;
+                }
+            }
         }
-        return $this->fetchRemoteBinaryAttempt($url, false);
+        if ($this->lastFetchHint === '') {
+            $this->lastFetchHint = 'Antwort ist kein Bild oder HTTP-Fehler';
+        }
+        return null;
     }
 
-    private function fetchRemoteBinaryAttempt(string $url, bool $verifySsl): ?string
+    private function fetchRemoteBinaryAttempt(string $url, bool $verifySsl, bool $lenient): ?string
     {
         if (function_exists('curl_init')) {
             $ch = curl_init($url);
@@ -1430,10 +1470,23 @@ class HomeDisplay extends IPSModuleStrict
                 ]);
                 $binary = curl_exec($ch);
                 $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $err = curl_error($ch);
                 curl_close($ch);
-                if (is_string($binary) && $binary !== '' && $code >= 200 && $code < 300 && $this->looksLikeImageBinary($binary)) {
+                if (!is_string($binary) || $binary === '') {
+                    if ($err !== '') {
+                        $this->lastFetchHint = $err;
+                    }
+                    return null;
+                }
+                if ($code < 200 || $code >= 300) {
+                    $this->lastFetchHint = 'HTTP ' . $code;
+                    return null;
+                }
+                if ($this->acceptImageBinary($binary, $lenient)) {
                     return $binary;
                 }
+                $this->lastFetchHint = 'Antwort ist kein Bild (HTTP ' . $code . ')';
+                return null;
             }
         }
         $context = stream_context_create([
@@ -1449,10 +1502,22 @@ class HomeDisplay extends IPSModuleStrict
             ],
         ]);
         $binary = @file_get_contents($url, false, $context);
-        if (is_string($binary) && $binary !== '' && $this->looksLikeImageBinary($binary)) {
+        if (!is_string($binary) || $binary === '') {
+            return null;
+        }
+        if ($this->acceptImageBinary($binary, $lenient)) {
             return $binary;
         }
+        $this->lastFetchHint = 'Antwort ist kein Bild';
         return null;
+    }
+
+    private function acceptImageBinary(string $binary, bool $lenient): bool
+    {
+        if ($this->looksLikeImageBinary($binary)) {
+            return true;
+        }
+        return $lenient && $this->looksLikeImageBinaryLenient($binary);
     }
 
     private function looksLikeImageBinary(string $binary): bool
@@ -1474,6 +1539,18 @@ class HomeDisplay extends IPSModuleStrict
             return true;
         }
         return str_starts_with($binary, 'RIFF') && strlen($binary) > 12 && substr($binary, 8, 4) === 'WEBP';
+    }
+
+    private function looksLikeImageBinaryLenient(string $binary): bool
+    {
+        if ($binary === '' || strlen($binary) < 512) {
+            return false;
+        }
+        $head = strtolower(substr($binary, 0, 512));
+        if (str_contains($head, '<html') || str_contains($head, '<!doctype') || str_contains($head, '{"')) {
+            return false;
+        }
+        return true;
     }
 
     private function guessImageMime(string $binary): string

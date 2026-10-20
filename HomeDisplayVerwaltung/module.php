@@ -359,6 +359,10 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
                 $this->sendImage(substr($route, strlen('/images/')));
                 return;
             }
+            if ($method === 'GET' && $route === '/probe-image') {
+                $this->sendProbeImage();
+                return;
+            }
             if ($method === 'POST' && $route === '/api') {
                 $this->json($this->api($this->body()));
                 return;
@@ -465,7 +469,8 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
                     $tileJson = $encoded;
                 }
             }
-            return ['ok' => true, 'result' => $this->decodeCall(HDISP_ProbeTileImage($id, (string) ($body['tileId'] ?? ''), $tileJson))];
+            $mode = !empty($body['meta']) ? 'meta' : '';
+            return ['ok' => true, 'result' => $this->decodeCall(HDISP_ProbeTileImage($id, (string) ($body['tileId'] ?? ''), $tileJson, $mode))];
         }
         if ($method === 'images') {
             return ['ok' => true, 'result' => $this->decodeCall(HDISP_ListImages($panel))];
@@ -542,6 +547,53 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
     private function pageUrl(): string
     {
         return $this->baseUrl() . self::HOOK . '/';
+    }
+
+    private function sendProbeImage(): void
+    {
+        $panel = (int) ($_GET['panel'] ?? 0);
+        $tileId = trim((string) ($_GET['tile'] ?? ''));
+        if ($tileId === '' || !preg_match('/^[A-Za-z0-9_-]{1,40}$/', $tileId)) {
+            http_response_code(400);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo 'Kachel fehlt.';
+            return;
+        }
+        try {
+            $this->panelOrFail($panel);
+        } catch (Throwable $e) {
+            http_response_code(404);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo $e->getMessage();
+            return;
+        }
+        if (!function_exists('HDISP_ProbeTileImage')) {
+            http_response_code(503);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo 'HomeDisplay nicht geladen.';
+            return;
+        }
+        $result = $this->decodeCall(HDISP_ProbeTileImage($panel, $tileId, ''));
+        if (empty($result['ok'])) {
+            http_response_code(502);
+            header('Content-Type: text/plain; charset=utf-8');
+            header('X-HomeDisplay-Error: ' . (string) ($result['error'] ?? 'unknown'));
+            if (!empty($result['detail'])) {
+                header('X-HomeDisplay-Detail: ' . substr((string) $result['detail'], 0, 200));
+            }
+            echo 'Snapshot fehlt.';
+            return;
+        }
+        $binary = base64_decode((string) ($result['data'] ?? ''), true);
+        if (!is_string($binary) || $binary === '') {
+            http_response_code(502);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo 'Snapshot leer.';
+            return;
+        }
+        header('Content-Type: ' . (string) ($result['mime'] ?? 'image/jpeg'));
+        header('Cache-Control: no-store');
+        echo $binary;
     }
 
     private function sendImage(string $id): void

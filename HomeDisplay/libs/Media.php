@@ -130,6 +130,41 @@ final class HomeDisplayMedia
         return trim((string) GetValue($variableId));
     }
 
+    /** Datei unter IPS-Kernel (media/…, absoluter Pfad oder data:image-URL). */
+    public static function readBinaryFromPath(string $raw): ?string
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return null;
+        }
+        if (preg_match('#^data:image/([a-z0-9+.-]+);base64,#i', $raw, $match) === 1) {
+            $pos = strpos($raw, ',');
+            if ($pos === false) {
+                return null;
+            }
+            $binary = base64_decode(substr($raw, $pos + 1), true);
+            return is_string($binary) && $binary !== '' ? $binary : null;
+        }
+        $kernel = rtrim(IPS_GetKernelDir(), '\\/');
+        if (preg_match('#^https?://#i', $raw)) {
+            return null;
+        }
+        if (str_contains($raw, ':') || str_starts_with($raw, '\\\\')) {
+            $path = $raw;
+        } elseif (str_starts_with(str_replace('\\', '/', $raw), '/')) {
+            $path = $kernel . str_replace('/', DIRECTORY_SEPARATOR, $raw);
+        } elseif (preg_match('#^media[/\\\\]#i', $raw)) {
+            $path = $kernel . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $raw);
+        } else {
+            $path = $kernel . DIRECTORY_SEPARATOR . 'media' . DIRECTORY_SEPARATOR . $raw;
+        }
+        if (!is_file($path)) {
+            return null;
+        }
+        $binary = file_get_contents($path);
+        return is_string($binary) && $binary !== '' ? $binary : null;
+    }
+
     public static function mediaBytes(int $mediaId): ?string
     {
         if ($mediaId <= 0 || !function_exists('IPS_MediaExists') || !IPS_MediaExists($mediaId)) {
