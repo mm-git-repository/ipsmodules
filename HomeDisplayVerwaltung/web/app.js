@@ -20,7 +20,72 @@ const DISPLAY_PROFILES = {
   "firebeetle-epd-400x300": { label: "FireBeetle E-Ink 4,2\" (400×300)", width: 400, height: 300, defaultColumns: 3, defaultRows: 4, maxColumns: 3, maxRows: 4 },
   "firebeetle-epd-800x480": { label: "FireBeetle E-Ink 7,5\" (800×480)", width: 800, height: 480, defaultColumns: 4, defaultRows: 6, maxColumns: 4, maxRows: 6 }
 };
-const KIND_NAMES = { value: "Wert", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", system: "Anzeigestatus" };
+const KIND_NAMES = { value: "Wert", display: "Nur Anzeige", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", system: "Anzeigestatus" };
+
+function editorKicker(mode, text) {
+  return mode === "edit" && text ? `<div class="kicker">${text}</div>` : "";
+}
+
+function scaledTileHtml(mainText, iconId, subText) {
+  const icon = iconId ? `<div class="tile-fit-icon">${escapeHtml(iconName(iconId))}</div>` : "";
+  const sub = subText ? `<div class="tile-fit-sub">${escapeHtml(subText)}</div>` : "";
+  return `<div class="tile-fit">${icon}<div class="tile-fit-text">${escapeHtml(mainText || "—")}</div>${sub}</div>`;
+}
+
+function fitTileFitBox(box) {
+  const textEl = box.querySelector(".tile-fit-text");
+  const iconEl = box.querySelector(".tile-fit-icon");
+  if (!textEl) return;
+  const maxW = box.clientWidth - 4;
+  const maxH = box.clientHeight - 4;
+  if (maxW <= 0 || maxH <= 0) return;
+  let iconH = 0;
+  if (iconEl && iconEl.textContent.trim()) {
+    let iLo = 8;
+    let iHi = Math.min(72, Math.floor(maxH * 0.45));
+    iconEl.style.fontSize = `${iLo}px`;
+    while (iLo < iHi) {
+      const mid = Math.ceil((iLo + iHi) / 2);
+      iconEl.style.fontSize = `${mid}px`;
+      if (iconEl.scrollWidth <= maxW && iconEl.scrollHeight <= maxH * 0.45) iLo = mid;
+      else iHi = mid - 1;
+    }
+    iconEl.style.fontSize = `${iLo}px`;
+    iconH = iconEl.offsetHeight + 4;
+  } else if (iconEl) {
+    iconEl.style.fontSize = "";
+  }
+  const textMaxH = maxH - iconH;
+  if (textMaxH <= 0) return;
+  let lo = 8;
+  let hi = Math.min(160, Math.floor(Math.min(maxW, textMaxH) * 0.95));
+  textEl.style.fontSize = `${lo}px`;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    textEl.style.fontSize = `${mid}px`;
+    if (textEl.scrollWidth <= maxW && textEl.scrollHeight <= textMaxH) lo = mid;
+    else hi = mid - 1;
+  }
+  textEl.style.fontSize = `${lo}px`;
+}
+
+function scheduleFitTileText(scope) {
+  requestAnimationFrame(() => {
+    const root = scope && scope.querySelectorAll ? scope : document.getElementById("grid");
+    if (!root) return;
+    const nodes = root.querySelectorAll ? root.querySelectorAll(".tile-fit") : [];
+    for (const box of nodes) fitTileFitBox(box);
+  });
+}
+
+function displayMainText(tile, live) {
+  const source = tile.displaySource || "variable";
+  if (source === "text") return (tile.text || "").trim() || "Text";
+  if (live && live.text) return live.text;
+  const variable = variableById(tile.variableId);
+  const sample = variable && (variable.type === 1 || variable.type === 2) ? "12,3" : "Ein";
+  return tile.unit ? `${sample} ${tile.unit}` : sample;
+}
 const CONTROL_NAMES = { switch: "Schalter", dimSwitch: "Dimmschalter", slider: "Dimmbalken", combo: "Kombischalter", battery: "Batterie" };
 const DIM_CONTROLS = ["dimSwitch", "slider", "combo"];
 const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text"];
@@ -462,6 +527,7 @@ function renderGrid() {
     }
   }
   scheduleEditorTilePreviews();
+  scheduleFitTileText(grid);
 }
 
 function scheduleEditorTilePreviews() {
@@ -603,7 +669,7 @@ function buildTileElement(tile, context) {
   const element = document.createElement("div");
   const spanW = tile.colSpan || 1;
   const spanH = tile.rowSpan || 1;
-  element.className = `tile ${tile.kind}${tile.kind === "label" && tile.size === "large" ? " large" : ""}${mode === "edit" && state.selected === tile.tileId ? " selected" : ""}`;
+  element.className = `tile ${tile.kind}${mode === "edit" && state.selected === tile.tileId ? " selected" : ""}`;
   element.style.gridColumn = `${tile.col + 1} / span ${spanW}`;
   element.style.gridRow = `${tile.row + 1} / span ${spanH}`;
   element.dataset.spanW = String(spanW);
@@ -626,19 +692,20 @@ function buildTileElement(tile, context) {
     const kicker = CONTROL_NAMES[control] || `${iconName(iconId)}${tile.actionId ? " · schaltbar" : ""}`;
     const body = controlMarkup(control, tile);
     const displayText = live && live.text ? live.text : (variable ? "12,3" : "—");
-    element.innerHTML = `<div class="kicker">${kicker}</div><div class="name"></div>${body || `<div class="value">${escapeHtml(displayText)}${tile.unit ? " " + escapeHtml(tile.unit) : ""}</div>`}`;
+    element.innerHTML = `${editorKicker(mode, kicker)}<div class="name"></div>${body || `<div class="value">${escapeHtml(displayText)}${tile.unit ? " " + escapeHtml(tile.unit) : ""}</div>`}`;
     element.querySelector(".name").textContent = tile.title || (variable ? variable.name : "Wert");
     if (mode === "edit") bindControlPreview(element, tile);
   } else if (tile.kind === "nav") {
-    element.innerHTML = `<div class="kicker">${tile.icon ? iconName(tile.icon) + " · " : ""}Seite</div><div class="name"></div>`;
+    element.innerHTML = `${editorKicker(mode, `${tile.icon ? iconName(tile.icon) + " · " : ""}Seite`)}<div class="name"></div>`;
     element.querySelector(".name").textContent = tile.title || pageTitleIn(tile.targetPage);
   } else if (tile.kind === "label") {
-    element.innerHTML = `<div class="text"></div>`;
-    element.querySelector(".text").textContent = tile.text || "Text";
+    element.innerHTML = scaledTileHtml(tile.text || "Text", "", "");
+  } else if (tile.kind === "display") {
+    element.innerHTML = scaledTileHtml(displayMainText(tile, live), tile.icon || "", "");
   } else if (tile.kind === "separator") {
     element.innerHTML = `<div class="line"></div>`;
   } else if (tile.kind === "system") {
-    element.innerHTML = `<div class="kicker">Anzeigestatus</div><div class="name"></div><div class="text">Programm · WLAN · Laufzeit · Datenalter</div>`;
+    element.innerHTML = `${editorKicker(mode, "Anzeigestatus")}<div class="name"></div><div class="text">Programm · WLAN · Laufzeit · Datenalter</div>`;
     element.querySelector(".name").textContent = tile.title || "Anzeige";
   } else if (tile.kind === "image") {
     if ((tile.imageSource || "catalog") === "media") {
@@ -663,13 +730,13 @@ function buildTileElement(tile, context) {
     const fromMedia = (tile.cameraSource || "url") === "media" || Boolean(tile.mediaObjectId) || isMediaPick(variableById(tile.variableId));
     if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
       const src = context.probeImageUrls[tile.tileId].url || context.probeImageUrls[tile.tileId];
-      element.innerHTML = `<div class="kicker">Kamera</div><img src="${src}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1" class="live-preview">`;
+      element.innerHTML = `${editorKicker(mode, "Kamera")}<img src="${src}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1" class="live-preview">`;
       const img = element.querySelector("img.live-preview");
       if (img && mode === "probe") {
         img.addEventListener("error", () => {
           const err = (context.probeImageErrors && context.probeImageErrors[tile.tileId]) || "camera_fetch";
           const detail = context.probeImageErrorDetails && context.probeImageErrorDetails[tile.tileId];
-          paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, tile.title);
+          paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, tile.title, mode === "edit");
         });
       }
     } else {
@@ -686,7 +753,7 @@ function buildTileElement(tile, context) {
           ? (fromMedia ? `IPS-Medien: ${bound}` : "Snapshot über Bild-URL")
           : (fromMedia ? "Medien-Variable oder Medienobjekt wählen" : "Variable mit Bild-URL wählen");
       }
-      element.innerHTML = `<div class="kicker">${fromMedia ? "Kamera · Medien" : "Kamera · Livebild"}</div><div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div>`;
+      element.innerHTML = `${editorKicker(mode, fromMedia ? "Kamera · Medien" : "Kamera · Livebild")}<div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div>`;
       element.querySelector(".name").textContent = tile.title || bound || "Kamera";
     }
   }
@@ -841,7 +908,7 @@ function bindDrop(target, col, row, existing) {
         assignVariable(existing, variable);
         return;
       }
-      if (existing && existing.kind === "value") {
+      if (existing && (existing.kind === "value" || existing.kind === "display")) {
         assignVariable(existing, variable);
         return;
       }
@@ -917,7 +984,13 @@ function addTile(kind, col, row, variable, control) {
     tile.icon = "";
   } else if (kind === "label") {
     tile.text = "Text";
-    tile.size = "small";
+  } else if (kind === "display") {
+    tile.displaySource = "variable";
+    tile.icon = "info";
+    tile.variableId = 0;
+    tile.unit = "";
+    tile.decimals = 0;
+    if (variable) assignVariable(tile, variable, true);
   } else if (kind === "separator") {
     tile.colSpan = Math.max(1, state.layout.columns);
     if (!fits(null, col, row, tile.colSpan, 1, null)) tile.colSpan = 1;
@@ -995,6 +1068,22 @@ function assignVariable(tile, variable, silent) {
   if (!variable) return;
   tile.variableId = variable.id;
   delete tile.mediaObjectId;
+  if (tile.kind === "display") {
+    tile.displaySource = "variable";
+    if (variable.unit) tile.unit = variable.unit;
+    if (variable.decimals != null) tile.decimals = variable.decimals;
+    delete tile.actionId;
+    delete tile.actionKind;
+    tile.confirm = false;
+    if (!tile.title) tile.title = variable.name;
+    tile.icon = tile.icon || guessIcon(variable);
+    if (!silent) {
+      markDirty();
+      renderGrid();
+      renderProperties();
+    }
+    return;
+  }
   if (tile.kind === "camera") {
     if (isMediaPick(variable)) {
       assignCameraMedia(tile, variable, silent);
@@ -1150,7 +1239,23 @@ function renderProperties() {
   fillTargetSelect($("p-target"));
   $("p-target").value = tile.targetPage || "";
   $("p-text").value = tile.text || "";
-  $("p-size").value = tile.size || "small";
+  const displaySource = tile.displaySource || "variable";
+  if ($("p-displaysource")) {
+    $("p-displaysource").value = displaySource;
+    $("p-display-variable").classList.toggle("hidden", displaySource !== "variable");
+    $("p-display-text").classList.toggle("hidden", displaySource !== "text");
+  }
+  if ($("p-display-varpick")) {
+    const dv = variableById(tile.variableId);
+    $("p-display-varpick").value = dv ? `${dv.path ? dv.path + " / " : ""}${dv.name} (${dv.id})` : "";
+  }
+  if ($("p-display-unit")) $("p-display-unit").value = tile.unit || "";
+  if ($("p-display-decimals")) $("p-display-decimals").value = tile.decimals || 0;
+  if ($("p-display-textarea")) $("p-display-textarea").value = tile.text || "";
+  if ($("p-display-icon")) {
+    fillIconSelect($("p-display-icon"), false);
+    $("p-display-icon").value = tile.icon || "";
+  }
   const imgSource = tile.imageSource || "catalog";
   if ($("p-imagesource")) {
     $("p-imagesource").value = imgSource;
@@ -1252,7 +1357,22 @@ function applyProperties() {
   if (tile.kind === "nav") tile.targetPage = $("p-target").value;
   if (tile.kind === "label") {
     tile.text = $("p-text").value;
-    tile.size = $("p-size").value;
+    delete tile.size;
+  }
+  if (tile.kind === "display") {
+    const source = $("p-displaysource") ? $("p-displaysource").value : "variable";
+    tile.displaySource = source;
+    tile.icon = $("p-display-icon") ? $("p-display-icon").value : "";
+    if (source === "text") {
+      tile.text = $("p-display-textarea") ? $("p-display-textarea").value : "";
+      delete tile.variableId;
+      delete tile.unit;
+      delete tile.decimals;
+    } else {
+      tile.unit = $("p-display-unit") ? $("p-display-unit").value : "";
+      tile.decimals = $("p-display-decimals") ? Number($("p-display-decimals").value) || 0 : 0;
+      delete tile.text;
+    }
   }
   if (tile.kind === "image") {
     const source = $("p-imagesource").value || "catalog";
@@ -1291,8 +1411,18 @@ $("p-control").addEventListener("change", () => {
   }
   applyProperties();
 });
-for (const id of ["p-title", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-iconmode", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-size", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel"]) {
+for (const id of ["p-title", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-iconmode", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
+}
+for (const id of ["p-display-textarea"]) {
+  if ($(id)) $(id).addEventListener("input", applyProperties);
+}
+if ($("p-displaysource")) {
+  $("p-displaysource").addEventListener("change", () => {
+    const source = $("p-displaysource").value;
+    $("p-display-variable").classList.toggle("hidden", source !== "variable");
+    $("p-display-text").classList.toggle("hidden", source !== "text");
+  });
 }
 if ($("p-iconmode")) {
   $("p-iconmode").addEventListener("change", () => {
@@ -1431,10 +1561,31 @@ function openDetails(tile) {
     area.rows = 4;
     area.value = tile.text || "";
     fields.text = add("Text", area);
-    const size = document.createElement("select");
-    size.innerHTML = '<option value="small">Klein</option><option value="large">Groß</option>';
-    size.value = tile.size || "small";
-    fields.size = add("Größe", size);
+  }
+  if (tile.kind === "display") {
+    const source = document.createElement("select");
+    source.innerHTML = '<option value="variable">Variable (live)</option><option value="text">Fester Text</option>';
+    source.value = tile.displaySource || "variable";
+    fields.displaySource = add("Quelle", source);
+    const picker = document.createElement("select");
+    picker.innerHTML = '<option value="0">Keine Variable</option>';
+    for (const item of state.variables) {
+      const option = document.createElement("option");
+      option.value = String(item.id);
+      option.textContent = `${item.path ? item.path + " / " : ""}${item.name} (${item.id})`;
+      picker.appendChild(option);
+    }
+    picker.value = String(tile.variableId || 0);
+    fields.variable = add("Variable", picker);
+    fields.unit = add("Einheit", text(tile.unit));
+    fields.decimals = add("Nachkommastellen", number(tile.decimals || 0, 0, 3));
+    const area = document.createElement("textarea");
+    area.rows = 3;
+    area.value = tile.text || "";
+    fields.displayText = add("Text (fest)", area);
+    fields.icon = add("Symbol", document.createElement("select"));
+    fillIconSelect(fields.icon, false);
+    fields.icon.value = tile.icon || "";
   }
   if (tile.kind === "image") {
     fields.image = add("Bild", document.createElement("select"));
@@ -1530,7 +1681,22 @@ function openDetails(tile) {
     if (tile.kind === "nav") tile.targetPage = fields.target.value;
     if (tile.kind === "label") {
       tile.text = fields.text.value;
-      tile.size = fields.size.value;
+      delete tile.size;
+    }
+    if (tile.kind === "display") {
+      tile.displaySource = fields.displaySource.value;
+      tile.icon = fields.icon.value;
+      if (fields.displaySource.value === "text") {
+        tile.text = fields.displayText.value;
+        delete tile.variableId;
+        delete tile.unit;
+        delete tile.decimals;
+      } else {
+        tile.variableId = Number(fields.variable.value) || 0;
+        tile.unit = fields.unit.value;
+        tile.decimals = Number(fields.decimals.value) || 0;
+        delete tile.text;
+      }
     }
     if (tile.kind === "image") tile.imageId = fields.image.value;
     if (tile.kind === "camera") {
@@ -1697,7 +1863,7 @@ function renderVariableTree() {
           assignCameraMedia(tile, variable);
           return;
         }
-        if (tile && tile.kind === "value") {
+        if (tile && (tile.kind === "value" || tile.kind === "display")) {
           assignVariable(tile, variable);
           return;
         }
@@ -1779,6 +1945,11 @@ function validateLayout(layout) {
       }
       if (tile.kind === "nav" && !layout.pages.some((item) => item.id === tile.targetPage)) throw new Error(`Der Seitenwechsler „${tile.title || tile.tileId}“ zeigt auf eine fehlende Seite.`);
       if (tile.kind === "label" && !(tile.text || "").trim()) throw new Error("Eine Textkachel ist leer.");
+      if (tile.kind === "display") {
+        const src = tile.displaySource || "variable";
+        if (src === "text" && !(tile.text || "").trim()) throw new Error(`Die Anzeigekachel „${tile.title || tile.tileId}“ braucht Text.`);
+        if (src === "variable" && !tile.variableId) throw new Error(`Die Anzeigekachel „${tile.title || tile.tileId}“ braucht eine Variable.`);
+      }
       if (tile.kind === "image") {
         if ((tile.imageSource || "catalog") === "media") {
           if (!tile.variableId && !tile.mediaObjectId) throw new Error("Eine Bildkachel (Medien) braucht eine Medien-Variable oder ein Medienobjekt.");
@@ -2131,9 +2302,10 @@ function revokeProbeObjectUrls() {
   }
 }
 
-function paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, title) {
+function paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, title, showKicker) {
   const preview = probeImageErrorText(err || "unknown", detail);
-  element.innerHTML = `<div class="kicker">${fromMedia ? "Kamera · Medien" : "Kamera · Livebild"}</div><div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div>`;
+  const kicker = showKicker ? editorKicker("edit", fromMedia ? "Kamera · Medien" : "Kamera · Livebild") : "";
+  element.innerHTML = `${kicker}<div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div>`;
   element.querySelector(".name").textContent = title || bound || "Kamera";
 }
 
@@ -2156,17 +2328,17 @@ function paintEditorLiveTile(element, tile) {
   const bound = mediaBindingName(tile);
   const fromMedia = (tile.cameraSource || "url") === "media" || Boolean(tile.mediaObjectId) || isMediaPick(variableById(tile.variableId));
   if (url) {
-    element.innerHTML = `<div class="kicker">Kamera</div><img src="${url}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1" class="live-preview">`;
+    element.innerHTML = `${editorKicker("edit", "Kamera")}<img src="${url}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1" class="live-preview">`;
     const img = element.querySelector("img.live-preview");
     if (img) {
       img.addEventListener("error", () => {
-        paintCameraPreviewError(element, tile, "camera_fetch", "Bild im Browser nicht darstellbar", fromMedia, bound, tile.title);
+        paintCameraPreviewError(element, tile, "camera_fetch", "Bild im Browser nicht darstellbar", fromMedia, bound, tile.title, true);
       });
     }
     return;
   }
   if (err) {
-    paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, tile.title);
+    paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, tile.title, true);
   }
 }
 
@@ -2188,14 +2360,22 @@ function updateProbeValuesOnly() {
   if (!probe.snapshot || !probe.snapshot.state) return;
   const values = {};
   for (const tile of probe.snapshot.state.tiles || []) values[tile.tileId] = tile;
+  const layout = probe.snapshot.layout;
+  const page = layout && layout.pages ? layout.pages.find((p) => p.id === probe.page) : null;
+  const tilesById = {};
+  for (const t of (page && page.tiles) || []) tilesById[t.tileId] = t;
   for (const element of $("probe-grid").querySelectorAll(".tile")) {
     const tileId = element.dataset.tileId;
     if (!tileId || !values[tileId]) continue;
     const live = values[tileId];
     const valueEl = element.querySelector(".value");
     if (valueEl && live.text) valueEl.textContent = live.text;
+    const tile = tilesById[tileId];
+    const fitEl = element.querySelector(".tile-fit-text");
+    if (fitEl && live.text && tile && tile.kind === "display") fitEl.textContent = live.text;
     if (live.color) element.style.background = colorForTile(live.color);
   }
+  scheduleFitTileText($("probe-grid"));
 }
 
 async function loadProbeImages(layout, panelId, stateTiles) {
@@ -2313,6 +2493,7 @@ function renderProbe() {
     grid.appendChild(element);
   }
   scaleProbeViewport();
+  scheduleFitTileText(grid);
   probe.lastLive = new Date().toLocaleTimeString("de-DE");
 }
 
@@ -2410,7 +2591,11 @@ $("probe-live").addEventListener("change", () => {
   else stopProbeTimer();
 });
 window.addEventListener("resize", () => {
-  if ($("probe-dialog").open) scaleProbeViewport();
+  scheduleFitTileText($("grid"));
+  if ($("probe-dialog").open) {
+    scaleProbeViewport();
+    scheduleFitTileText($("probe-grid"));
+  }
 });
 
 $("probe-panel").addEventListener("change", () => {

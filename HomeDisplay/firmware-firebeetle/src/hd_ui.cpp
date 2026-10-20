@@ -33,6 +33,39 @@ static JsonObjectConst findStateTile(JsonArrayConst tiles, const char *tileId) {
   return JsonObjectConst();
 }
 
+static uint8_t fitTextSize(const char *text, int16_t w, int16_t h, bool withIcon) {
+  if (!text || !text[0]) return 1;
+  int16_t maxH = withIcon ? (h * 2) / 3 : h;
+  for (uint8_t size = 4; size >= 1; size--) {
+    int16_t tw = static_cast<int16_t>(strlen(text)) * 6 * size;
+    int16_t th = 8 * size;
+    if (tw <= w - 8 && th <= maxH - 4) return size;
+  }
+  return 1;
+}
+
+static void drawFitTile(Adafruit_GFX *gfx, int16_t x, int16_t y, int16_t w, int16_t h, const char *iconLabel, const char *mainText) {
+  gfx->drawRect(x, y, w, h, GxEPD_BLACK);
+  bool hasIcon = iconLabel && iconLabel[0];
+  uint8_t mainSize = fitTextSize(mainText, w, h, hasIcon);
+  int16_t th = 8 * mainSize;
+  int16_t tw = static_cast<int16_t>(strlen(mainText)) * 6 * mainSize;
+  int16_t cy = y + (h - th) / 2;
+  if (hasIcon) {
+    uint8_t iconSize = fitTextSize(iconLabel, w, h / 3, false);
+    int16_t ih = 8 * iconSize;
+    cy = y + ih + (h - ih - th) / 2;
+    gfx->setTextSize(iconSize);
+    gfx->setTextColor(GxEPD_BLACK);
+    int16_t itw = static_cast<int16_t>(strlen(iconLabel)) * 6 * iconSize;
+    gfx->setCursor(x + (w - itw) / 2, y + 4 + ih);
+    gfx->print(iconLabel);
+  }
+  gfx->setTextSize(mainSize);
+  gfx->setCursor(x + (w - tw) / 2, cy);
+  gfx->print(mainText);
+}
+
 static void drawBattery(Adafruit_GFX *gfx, int16_t x, int16_t y, int16_t w, int16_t h, float pct) {
   int16_t bw = w - 8;
   int16_t bh = h / 3;
@@ -142,9 +175,16 @@ static void drawPage(Adafruit_GFX *gfx) {
     if (strcmp(kind, "separator") == 0) {
       gfx->drawFastHLine(x + 2, y + h / 2, w - 4, GxEPD_BLACK);
     } else if (strcmp(kind, "label") == 0) {
-      gfx->setTextSize(strcmp(tile["size"] | "small", "large") == 0 ? 2 : 1);
-      gfx->setCursor(x + 4, y + h / 2);
-      gfx->print(tile["text"] | "");
+      drawFitTile(gfx, x, y, w, h, "", tile["text"] | "");
+    } else if (strcmp(kind, "display") == 0) {
+      const char *source = tile["displaySource"] | "variable";
+      const char *mainText = "—";
+      if (strcmp(source, "text") == 0) {
+        mainText = tile["text"] | "—";
+      } else if (!st.isNull()) {
+        mainText = st["text"] | "—";
+      }
+      drawFitTile(gfx, x, y, w, h, "", mainText);
     } else if (strcmp(kind, "nav") == 0) {
       gfx->drawRect(x, y, w, h, GxEPD_BLACK);
       gfx->setCursor(x + 4, y + h / 2);

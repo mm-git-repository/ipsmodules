@@ -80,6 +80,7 @@
         <div class="palette-item" draggable="true" data-kind="value" data-control="combo">Kombischalter</div>
         <div class="palette-item" draggable="true" data-kind="value" data-control="battery">Batterie</div>
         <div class="palette-item" draggable="true" data-kind="nav">Seitenwechsler</div>
+        <div class="palette-item" draggable="true" data-kind="display">Nur Anzeige</div>
         <div class="palette-item" draggable="true" data-kind="label">Text</div>
         <div class="palette-item" draggable="true" data-kind="image">Bild</div>
         <div class="palette-item" draggable="true" data-kind="camera">Kamera</div>
@@ -187,12 +188,29 @@
         </div>
         <div data-for="label">
           <label>Text <textarea id="p-text" rows="3"></textarea></label>
-          <label>Größe
-            <select id="p-size">
-              <option value="small">Klein</option>
-              <option value="large">Groß</option>
+          <p class="hint">Text wird automatisch auf die Kachelgröße skaliert.</p>
+        </div>
+        <div data-for="display">
+          <label>Quelle
+            <select id="p-displaysource">
+              <option value="variable">Variable (live)</option>
+              <option value="text">Fester Text</option>
             </select>
           </label>
+          <div id="p-display-variable">
+            <label>Variable <input id="p-display-varpick" readonly placeholder="Aus dem Variablenbaum wählen"></label>
+            <div class="row">
+              <label>Einheit <input id="p-display-unit"></label>
+              <label>Nachkommastellen <input id="p-display-decimals" type="number" min="0" max="3" value="0"></label>
+            </div>
+          </div>
+          <div id="p-display-text" class="hidden">
+            <label>Text <textarea id="p-display-textarea" rows="3"></textarea></label>
+          </div>
+          <label>Symbol (optional)
+            <select id="p-display-icon"></select>
+          </label>
+          <p class="hint">Nur Anzeige – ohne Schalten. Wert und Symbol füllen die Kachel.</p>
         </div>
         <div data-for="image">
           <label>Bildquelle

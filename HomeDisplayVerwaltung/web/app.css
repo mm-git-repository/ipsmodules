@@ -96,10 +96,17 @@ label.small { font-size: 12px; color: var(--muted); }
 }
 .cell { border: 1px dashed #35506f; border-radius: 6px; color: #5a7391; display: flex; align-items: center; justify-content: center; font-size: 12px; min-height: 0; }
 .cell.over { background: rgba(255,255,255,.08); border-style: solid; }
-.tile { position: relative; border-radius: 8px; background: #1d3350; color: #f4f7fb; padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; cursor: grab; border: 2px solid transparent; min-height: 0; overflow: hidden; }
+.tile { position: relative; border-radius: 8px; background: #1d3350; color: #f4f7fb; padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; cursor: grab; border: 2px solid transparent; min-height: 0; overflow: hidden; container-type: size; }
+.tile.display, .tile.label { padding: 4px; justify-content: center; align-items: stretch; }
+.tile-fit { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 0; width: 100%; text-align: center; overflow: hidden; gap: 2px; }
+.tile-fit-icon { font-weight: 600; opacity: .85; line-height: 1; white-space: nowrap; max-width: 100%; }
+.tile-fit-text { font-weight: 700; line-height: 1.05; white-space: pre-wrap; word-break: break-word; max-width: 100%; }
+.tile.display { background: #243a58; }
+.tile-fit-sub { font-size: 11px; opacity: .75; line-height: 1.1; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .tile.selected { border-color: #ffb547; }
 .tile.over { outline: 2px solid #ffb547; }
 .tile .kicker { font-size: 11px; opacity: .7; text-transform: uppercase; letter-spacing: .04em; }
+#probe-grid .kicker { display: none !important; }
 .tile .name { font-weight: 600; }
 .tile .value { font-size: 20px; opacity: .85; }
 .tile .ctl { display: flex; align-items: center; gap: 8px; min-height: 28px; }
@@ -114,8 +121,6 @@ label.small { font-size: 12px; color: var(--muted); }
 .tile.dim .name { font-size: 13px; }
 .tile.nav { background: #2a4f7c; align-items: center; justify-content: center; text-align: center; }
 .tile.label { background: transparent; border: 1px solid #35506f; }
-.tile.label .text { white-space: pre-wrap; }
-.tile.label.large .text { font-size: 22px; }
 .tile.separator { background: transparent; justify-content: center; padding: 0 12px; }
 .tile.separator .line { height: 2px; background: #5a7391; width: 100%; }
 .tile.system { background: #16293f; border: 1px dashed #5a7391; }

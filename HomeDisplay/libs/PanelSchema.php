@@ -57,7 +57,7 @@ final class HomeDisplayPanelSchema
     ];
 
     /** system: Diagnosekachel, die das Panel selbst mit Firmware, WLAN, Laufzeit und Datenalter füllt. */
-    public const KINDS = ['value', 'nav', 'label', 'image', 'camera', 'separator', 'system'];
+    public const KINDS = ['value', 'display', 'nav', 'label', 'image', 'camera', 'separator', 'system'];
 
     public const ACTIONS = ['switch', 'dim', 'position'];
 
@@ -208,7 +208,21 @@ final class HomeDisplayPanelSchema
                 }
                 if ($kind === 'label') {
                     $public['text'] = (string) ($tile['text'] ?? '');
-                    $public['size'] = (string) ($tile['size'] ?? 'small');
+                }
+                if ($kind === 'display') {
+                    $source = (string) ($tile['displaySource'] ?? 'variable');
+                    $public['displaySource'] = in_array($source, ['variable', 'text'], true) ? $source : 'variable';
+                    if ($public['displaySource'] === 'text') {
+                        $public['text'] = (string) ($tile['text'] ?? '');
+                    } else {
+                        $public['variableId'] = (int) ($tile['variableId'] ?? 0);
+                        $public['unit'] = (string) ($tile['unit'] ?? '');
+                        $public['decimals'] = max(0, min(3, (int) ($tile['decimals'] ?? 0)));
+                    }
+                    $icon = (string) ($tile['icon'] ?? '');
+                    if ($icon !== '') {
+                        $public['icon'] = $icon;
+                    }
                 }
                 if ($kind === 'image') {
                     $source = (string) ($tile['imageSource'] ?? 'catalog');
@@ -623,6 +637,33 @@ final class HomeDisplayPanelSchema
             }
             if (isset($tile['size']) && !in_array((string) $tile['size'], self::SIZES, true)) {
                 throw new InvalidArgumentException('Unbekannte Textgröße.');
+            }
+            return;
+        }
+        if ($kind === 'display') {
+            $source = (string) ($tile['displaySource'] ?? 'variable');
+            if (!in_array($source, ['variable', 'text'], true)) {
+                throw new InvalidArgumentException('Unbekannte Anzeigequelle.');
+            }
+            $icon = (string) ($tile['icon'] ?? '');
+            if ($icon !== '' && !in_array($icon, self::ICONS, true)) {
+                throw new InvalidArgumentException('Unbekanntes Symbol: ' . $icon);
+            }
+            $decimals = (int) ($tile['decimals'] ?? 0);
+            if ($decimals < 0 || $decimals > 3) {
+                throw new InvalidArgumentException('Nachkommastellen liegen zwischen 0 und 3.');
+            }
+            if (isset($tile['color']) && !in_array((string) $tile['color'], self::COLORS, true)) {
+                throw new InvalidArgumentException('Unbekannte Farbe.');
+            }
+            if ($source === 'text') {
+                if (trim((string) ($tile['text'] ?? '')) === '') {
+                    throw new InvalidArgumentException('Anzeigekachel ohne Text.');
+                }
+                return;
+            }
+            if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) $tile['variableId']))) {
+                throw new InvalidArgumentException('Anzeigekachel ohne Variable.');
             }
             return;
         }
