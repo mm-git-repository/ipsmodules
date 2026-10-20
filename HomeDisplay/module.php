@@ -11,7 +11,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 23;
+    private const MODULE_BUILD = 24;
 
     private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
@@ -1237,27 +1237,33 @@ class HomeDisplay extends IPSModuleStrict
     /** @param array<string, mixed> $tile @return array{binary?: string, error?: string, detail?: string} */
     private function cameraBinaryForTile(array $tile): array
     {
+        $variableId = (int) ($tile['variableId'] ?? 0);
+        if ($variableId > 0) {
+            HomeDisplayMedia::refreshCameraVariable($variableId);
+        }
         $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
         if ($binary !== null && $binary !== '') {
             return ['binary' => $binary];
         }
         $raw = HomeDisplayMedia::cameraImageUrl($tile);
         if ($raw === '') {
-            return ['error' => 'camera'];
+            return ['error' => 'camera', 'detail' => 'Variable leer oder Medien-ID ungültig'];
         }
         if (preg_match('#^https?://#i', $raw)) {
             $binary = $this->fetchRemoteBinary($raw);
             if ($binary !== null && $binary !== '') {
                 return ['binary' => $binary];
             }
-            $detail = $this->lastFetchHint !== '' ? $this->lastFetchHint : 'URL von Symcon aus nicht abrufbar';
+            $host = parse_url($raw, PHP_URL_HOST);
+            $prefix = is_string($host) && $host !== '' ? $host . ' – ' : '';
+            $detail = $prefix . ($this->lastFetchHint !== '' ? $this->lastFetchHint : 'URL von Symcon aus nicht abrufbar');
             return ['error' => 'camera_fetch', 'detail' => $detail];
         }
         $binary = HomeDisplayMedia::readBinaryFromPath($raw);
         if ($binary !== null && $binary !== '') {
             return ['binary' => $binary];
         }
-        return ['error' => 'camera_fetch', 'detail' => 'Pfad/Datei aus Variable nicht lesbar'];
+        return ['error' => 'camera_fetch', 'detail' => 'Pfad/Datei aus Variable nicht lesbar: ' . substr($raw, 0, 80)];
     }
 
     /** @return array<string, mixed> */
@@ -1448,8 +1454,9 @@ class HomeDisplay extends IPSModuleStrict
             $this->lastFetchHint = 'Keine http(s)-Adresse';
             return null;
         }
+        $sslOrder = $this->isPrivateFetchHost($url) ? [false, true] : [true, false];
         foreach ([false, true] as $lenient) {
-            foreach ([true, false] as $verifySsl) {
+            foreach ($sslOrder as $verifySsl) {
                 $binary = $this->fetchRemoteBinaryAttempt($url, $verifySsl, $lenient);
                 if ($binary !== null) {
                     return $binary;
@@ -1462,23 +1469,78 @@ class HomeDisplay extends IPSModuleStrict
         return null;
     }
 
+    /** @return array{url: string, userPwd: string} */
+    private function normalizeFetchUrl(string $url): array
+    {
+        $parts = parse_url($url);
+        if (!is_array($parts) || empty($parts['host'])) {
+            return ['url' => $url, 'userPwd' => ''];
+        }
+        if (empty($parts['user'])) {
+            return ['url' => $url, 'userPwd' => ''];
+        }
+        $userPwd = (string) $parts['user'];
+        if (isset($parts['pass'])) {
+            $userPwd .= ':' . (string) $parts['pass'];
+        }
+        $scheme = (string) ($parts['scheme'] ?? 'http');
+        $port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
+        $path = (string) ($parts['path'] ?? '/');
+        $query = isset($parts['query']) ? '?' . (string) $parts['query'] : '';
+        $fragment = isset($parts['fragment']) ? '#' . (string) $parts['fragment'] : '';
+        $clean = $scheme . '://' . (string) $parts['host'] . $port . $path . $query . $fragment;
+        return ['url' => $clean, 'userPwd' => $userPwd];
+    }
+
+    private function isPrivateFetchHost(string $url): bool
+    {
+        $host = parse_url($url, PHP_URL_HOST);
+        if (!is_string($host) || $host === '') {
+            return false;
+        }
+        if (strcasecmp($host, 'localhost') === 0) {
+            return true;
+        }
+        if (!filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            return false;
+        }
+        $long = ip2long($host);
+        if ($long === false) {
+            return false;
+        }
+        $private = (
+            ($long & 0xFF000000) === 0x0A000000
+            || ($long & 0xFFF00000) === 0xAC100000
+            || ($long & 0xFFFF0000) === 0xC0A80000
+            || ($long & 0xFF000000) === 0x7F000000
+        );
+        return $private;
+    }
+
     private function fetchRemoteBinaryAttempt(string $url, bool $verifySsl, bool $lenient): ?string
     {
+        $normalized = $this->normalizeFetchUrl($url);
         if (function_exists('curl_init')) {
-            $ch = curl_init($url);
+            $ch = curl_init($normalized['url']);
             if ($ch !== false) {
-                curl_setopt_array($ch, [
+                $opts = [
                     CURLOPT_RETURNTRANSFER => true,
                     CURLOPT_FOLLOWLOCATION => true,
-                    CURLOPT_MAXREDIRS => 3,
+                    CURLOPT_MAXREDIRS => 5,
                     CURLOPT_CONNECTTIMEOUT => 8,
-                    CURLOPT_TIMEOUT => 15,
+                    CURLOPT_TIMEOUT => 20,
                     CURLOPT_SSL_VERIFYPEER => $verifySsl,
                     CURLOPT_SSL_VERIFYHOST => $verifySsl ? 2 : 0,
                     CURLOPT_USERAGENT => 'HomeDisplay/1.0',
-                ]);
+                ];
+                if ($normalized['userPwd'] !== '') {
+                    $opts[CURLOPT_USERPWD] = $normalized['userPwd'];
+                    $opts[CURLOPT_HTTPAUTH] = CURLAUTH_ANY;
+                }
+                curl_setopt_array($ch, $opts);
                 $binary = curl_exec($ch);
                 $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $contentType = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
                 $err = curl_error($ch);
                 curl_close($ch);
                 if (!is_string($binary) || $binary === '') {
@@ -1491,7 +1553,7 @@ class HomeDisplay extends IPSModuleStrict
                     $this->lastFetchHint = 'HTTP ' . $code;
                     return null;
                 }
-                if ($this->acceptImageBinary($binary, $lenient)) {
+                if ($this->acceptImageBinary($binary, $lenient) || ($contentType !== '' && preg_match('#^image/#i', $contentType) === 1)) {
                     return $binary;
                 }
                 $this->lastFetchHint = 'Antwort ist kein Bild (HTTP ' . $code . ')';

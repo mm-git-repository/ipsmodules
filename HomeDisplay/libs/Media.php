@@ -149,6 +149,15 @@ final class HomeDisplayMedia
         if (preg_match('#^https?://#i', $raw)) {
             return null;
         }
+        if (ctype_digit($raw)) {
+            $mediaId = (int) $raw;
+            if ($mediaId > 0) {
+                $fromMedia = self::mediaBytes($mediaId);
+                if ($fromMedia !== null && $fromMedia !== '') {
+                    return $fromMedia;
+                }
+            }
+        }
         if (str_contains($raw, ':') || str_starts_with($raw, '\\\\')) {
             $path = $raw;
         } elseif (str_starts_with(str_replace('\\', '/', $raw), '/')) {
@@ -203,6 +212,25 @@ final class HomeDisplayMedia
         }
         $binary = file_get_contents($path);
         return is_string($binary) && $binary !== '' ? $binary : null;
+    }
+
+    /** Bildquelle aktualisieren (Image Grabber / Kamera-Instanz mit Aktion). */
+    public static function refreshCameraVariable(int $variableId): void
+    {
+        if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
+            return;
+        }
+        try {
+            $variable = IPS_GetVariable($variableId);
+            $action = (int) ($variable['VariableAction'] ?? 0);
+            $custom = (int) ($variable['VariableCustomAction'] ?? 0);
+            if ($action > 0 || $custom > 0) {
+                @RequestAction($variableId, true);
+                usleep(300000);
+            }
+        } catch (Throwable $e) {
+            unset($e);
+        }
     }
 
     /** Medien aus Kachel (Objekt-ID oder Integer-Variable), ohne URL-Abruf. */

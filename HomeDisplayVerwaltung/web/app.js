@@ -2103,7 +2103,7 @@ $("open-settings").addEventListener("click", openSettings);
 const PROBE_IMAGE_ERROR_TEXT = {
   tile: "Kachel nicht in der veröffentlichten Ansicht",
   camera: "Variable ohne Bildadresse (http(s), Pfad oder Medien-ID)",
-  camera_fetch: "Snapshot von Symcon aus nicht ladbar",
+  camera_fetch: "Snapshot von Symcon aus nicht ladbar (URL auf dem Symcon-Rechner testen)",
   media: "Medienobjekt nicht lesbar",
   media_fetch: "Mediendatei fehlt oder ist leer",
   fetch: "Verwaltung/Symcon-Antwort ungültig (Bibliothek Build 126?)",
