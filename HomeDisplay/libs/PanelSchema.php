@@ -57,7 +57,7 @@ final class HomeDisplayPanelSchema
     ];
 
     /** system: Diagnosekachel, die das Panel selbst mit Firmware, WLAN, Laufzeit und Datenalter füllt. */
-    public const KINDS = ['value', 'display', 'nav', 'label', 'image', 'camera', 'separator', 'system'];
+    public const KINDS = ['value', 'display', 'energyflow', 'nav', 'label', 'image', 'camera', 'separator', 'system'];
 
     public const ACTIONS = ['switch', 'dim', 'position'];
 
@@ -238,6 +238,14 @@ final class HomeDisplayPanelSchema
                 }
                 if ($kind === 'camera') {
                     $public['cameraFile'] = self::cameraFileName((string) $tile['tileId']);
+                }
+                if ($kind === 'energyflow') {
+                    foreach (['gridVariableId', 'pvVariableId', 'loadVariableId', 'batteryVariableId'] as $flowKey) {
+                        $public[$flowKey] = (int) ($tile[$flowKey] ?? 0);
+                    }
+                    $public['unit'] = (string) ($tile['unit'] ?? 'W');
+                    $public['decimals'] = max(0, min(3, (int) ($tile['decimals'] ?? 0)));
+                    $public['flowThreshold'] = max(0, (float) ($tile['flowThreshold'] ?? 15));
                 }
                 if ($kind === 'value') {
                     $actionId = trim((string) ($tile['actionId'] ?? ''));
@@ -637,6 +645,32 @@ final class HomeDisplayPanelSchema
             }
             if (isset($tile['size']) && !in_array((string) $tile['size'], self::SIZES, true)) {
                 throw new InvalidArgumentException('Unbekannte Textgröße.');
+            }
+            return;
+        }
+        if ($kind === 'energyflow') {
+            $decimals = (int) ($tile['decimals'] ?? 0);
+            if ($decimals < 0 || $decimals > 3) {
+                throw new InvalidArgumentException('Nachkommastellen liegen zwischen 0 und 3.');
+            }
+            $threshold = (float) ($tile['flowThreshold'] ?? 15);
+            if ($threshold < 0 || $threshold > 50000) {
+                throw new InvalidArgumentException('Fluss-Schwellwert liegt zwischen 0 und 50000.');
+            }
+            if ($publish) {
+                $any = false;
+                foreach (['gridVariableId', 'pvVariableId', 'loadVariableId', 'batteryVariableId'] as $flowKey) {
+                    $vid = (int) ($tile[$flowKey] ?? 0);
+                    if ($vid > 0) {
+                        if (!IPS_VariableExists($vid)) {
+                            throw new InvalidArgumentException('Energiefluss: Variable existiert nicht (' . $flowKey . ').');
+                        }
+                        $any = true;
+                    }
+                }
+                if (!$any) {
+                    throw new InvalidArgumentException('Energiefluss-Kachel braucht mindestens eine Variable.');
+                }
             }
             return;
         }

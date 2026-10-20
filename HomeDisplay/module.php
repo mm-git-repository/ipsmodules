@@ -11,7 +11,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 27;
+    private const MODULE_BUILD = 28;
 
     private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
@@ -934,6 +934,10 @@ class HomeDisplay extends IPSModuleStrict
                     ];
                     continue;
                 }
+                if ($kind === 'energyflow') {
+                    $tiles[] = $this->energyFlowStateTile($tile, $tileId, $pending);
+                    continue;
+                }
                 if ($kind !== 'value' && $kind !== 'display') {
                     continue;
                 }
@@ -975,6 +979,58 @@ class HomeDisplay extends IPSModuleStrict
             'seq' => (int) ($runtime[(string) $device['id']]['seq'] ?? 0),
             'now' => time(),
             'tiles' => $tiles,
+        ];
+    }
+
+    /** @param array<string, mixed> $tile @param array<string, mixed> $pending @return array<string, mixed> */
+    private function energyFlowStateTile(array $tile, string $tileId, array $pending): array
+    {
+        $unit = trim((string) ($tile['unit'] ?? 'W'));
+        $decimals = max(0, min(3, (int) ($tile['decimals'] ?? 0)));
+        $map = [
+            'grid' => 'gridVariableId',
+            'pv' => 'pvVariableId',
+            'load' => 'loadVariableId',
+            'battery' => 'batteryVariableId',
+        ];
+        $flows = [];
+        $quality = 'empty';
+        foreach ($map as $key => $prop) {
+            $variableId = (int) ($tile[$prop] ?? 0);
+            $w = null;
+            $text = '—';
+            if ($variableId > 0 && IPS_VariableExists($variableId)) {
+                $raw = GetValue($variableId);
+                if (is_int($raw) || is_float($raw)) {
+                    $w = (float) $raw;
+                    $text = number_format($w, $decimals, ',', '');
+                    if ($unit !== '') {
+                        $text .= ' ' . $unit;
+                    }
+                    $quality = 'ok';
+                } elseif (is_bool($raw)) {
+                    $w = $raw ? 1.0 : 0.0;
+                    $text = $raw ? 'Ein' : 'Aus';
+                    $quality = 'ok';
+                } else {
+                    $text = trim((string) $raw);
+                    if ($text === '') {
+                        $text = '—';
+                    } else {
+                        $quality = 'ok';
+                    }
+                }
+            }
+            $flows[$key] = ['w' => $w, 'text' => $text];
+        }
+        if (isset($pending[$tileId])) {
+            $quality = 'pending';
+        }
+        return [
+            'tileId' => $tileId,
+            'quality' => $quality,
+            'flows' => $flows,
+            'pending' => isset($pending[$tileId]),
         ];
     }
 
@@ -1747,6 +1803,16 @@ class HomeDisplay extends IPSModuleStrict
         $layout = $this->activeLayout($this->InstanceID) ?? [];
         foreach ($layout['pages'] ?? [] as $page) {
             foreach ($page['tiles'] ?? [] as $tile) {
+                $kind = (string) ($tile['kind'] ?? 'value');
+                if ($kind === 'energyflow') {
+                    foreach (['gridVariableId', 'pvVariableId', 'loadVariableId', 'batteryVariableId'] as $flowKey) {
+                        $variableId = (int) ($tile[$flowKey] ?? 0);
+                        if ($variableId > 0 && IPS_VariableExists($variableId)) {
+                            $this->RegisterMessage($variableId, 10603);
+                        }
+                    }
+                    continue;
+                }
                 $variableId = (int) ($tile['variableId'] ?? 0);
                 if ($variableId > 0 && IPS_VariableExists($variableId)) {
                     $this->RegisterMessage($variableId, 10603);

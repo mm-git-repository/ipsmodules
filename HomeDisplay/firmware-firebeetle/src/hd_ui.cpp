@@ -77,6 +77,58 @@ static void drawBattery(Adafruit_GFX *gfx, int16_t x, int16_t y, int16_t w, int1
   if (fill > 0) gfx->fillRect(bx + 2, by + 2, fill, bh - 4, GxEPD_BLACK);
 }
 
+static float flowWatts(JsonObjectConst st, const char *key) {
+  if (st.isNull()) return 0.0f;
+  JsonObjectConst flows = st["flows"];
+  if (flows.isNull()) return 0.0f;
+  JsonObjectConst node = flows[key];
+  if (node.isNull() || !node["w"].is<float>()) return 0.0f;
+  return node["w"].as<float>();
+}
+
+static void drawFlowLine(Adafruit_GFX *gfx, int16_t x1, int16_t y1, int16_t x2, int16_t y2, bool active) {
+  if (!active) return;
+  gfx->drawLine(x1, y1, x2, y2, GxEPD_BLACK);
+  int16_t mx = (x1 + x2) / 2;
+  int16_t my = (y1 + y2) / 2;
+  if (abs(x2 - x1) > abs(y2 - y1)) {
+    gfx->drawLine(mx - 2, my - 2, mx + 2, my, GxEPD_BLACK);
+    gfx->drawLine(mx - 2, my + 2, mx + 2, my, GxEPD_BLACK);
+  } else {
+    gfx->drawLine(mx, my - 2, mx + 2, my + 2, GxEPD_BLACK);
+    gfx->drawLine(mx, my - 2, mx - 2, my + 2, GxEPD_BLACK);
+  }
+}
+
+static void drawEnergyFlowTile(Adafruit_GFX *gfx, JsonObject tile, JsonObjectConst st, int16_t x, int16_t y, int16_t w, int16_t h) {
+  gfx->drawRect(x, y, w, h, GxEPD_BLACK);
+  float threshold = tile["flowThreshold"] | 15.0f;
+  float grid = flowWatts(st, "grid");
+  float pv = flowWatts(st, "pv");
+  float battery = flowWatts(st, "battery");
+  int16_t cx = x + w / 2;
+  int16_t cy = y + h / 2 + 2;
+  int16_t topY = y + 10;
+  int16_t leftX = x + 8;
+  int16_t rightX = x + w - 8;
+  drawFlowLine(gfx, cx, topY + 6, cx, cy - 10, pv > threshold);
+  drawFlowLine(gfx, leftX + 6, cy, cx - 12, cy, grid > threshold);
+  drawFlowLine(gfx, cx - 12, cy, leftX + 6, cy, grid < -threshold);
+  drawFlowLine(gfx, cx + 12, cy, rightX - 6, cy, battery > threshold);
+  drawFlowLine(gfx, rightX - 6, cy, cx + 12, cy, battery < -threshold);
+  gfx->fillCircle(cx, cy, 4, GxEPD_BLACK);
+  gfx->setTextSize(1);
+  gfx->setTextColor(GxEPD_BLACK);
+  gfx->setCursor(cx - 6, topY);
+  gfx->print("PV");
+  gfx->setCursor(leftX, cy + 10);
+  gfx->print("Netz");
+  gfx->setCursor(cx - 10, cy + 12);
+  gfx->print("Haus");
+  gfx->setCursor(rightX - 18, cy + 10);
+  gfx->print("Akku");
+}
+
 static void drawValueTile(Adafruit_GFX *gfx, JsonObject tile, JsonObjectConst st, int16_t x, int16_t y, int16_t w, int16_t h) {
   const char *color = st["color"] | "neutral";
   bool invert = strcmp(color, "warn") == 0 || strcmp(color, "alarm") == 0;
@@ -185,6 +237,8 @@ static void drawPage(Adafruit_GFX *gfx) {
         mainText = st["text"] | "—";
       }
       drawFitTile(gfx, x, y, w, h, "", mainText);
+    } else if (strcmp(kind, "energyflow") == 0) {
+      drawEnergyFlowTile(gfx, tile, st, x, y, w, h);
     } else if (strcmp(kind, "nav") == 0) {
       gfx->drawRect(x, y, w, h, GxEPD_BLACK);
       gfx->setCursor(x + 4, y + h / 2);

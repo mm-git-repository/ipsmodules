@@ -81,6 +81,7 @@
         <div class="palette-item" draggable="true" data-kind="value" data-control="battery">Batterie</div>
         <div class="palette-item" draggable="true" data-kind="nav">Seitenwechsler</div>
         <div class="palette-item" draggable="true" data-kind="display">Nur Anzeige</div>
+        <div class="palette-item" draggable="true" data-kind="energyflow">Energiefluss</div>
         <div class="palette-item" draggable="true" data-kind="label">Text</div>
         <div class="palette-item" draggable="true" data-kind="image">Bild</div>
         <div class="palette-item" draggable="true" data-kind="camera">Kamera</div>
@@ -211,6 +212,26 @@
             <select id="p-display-icon"></select>
           </label>
           <p class="hint">Nur Anzeige – ohne Schalten. Wert und Symbol füllen die Kachel.</p>
+        </div>
+        <div data-for="energyflow">
+          <label>Zuweisen für
+            <select id="p-flow-slot">
+              <option value="grid">Netz (+ Bezug / − Einspeisung)</option>
+              <option value="pv">PV-Erzeugung</option>
+              <option value="load">Hausverbrauch</option>
+              <option value="battery">Batterie (+ Laden / − Entladen)</option>
+            </select>
+          </label>
+          <label>Netz <input id="p-flow-grid" readonly placeholder="Variable aus dem Baum"></label>
+          <label>PV <input id="p-flow-pv" readonly placeholder="Optional"></label>
+          <label>Verbrauch <input id="p-flow-load" readonly placeholder="Optional"></label>
+          <label>Batterie <input id="p-flow-battery" readonly placeholder="Optional"></label>
+          <div class="row">
+            <label>Einheit <input id="p-flow-unit" value="W"></label>
+            <label>Nachkommastellen <input id="p-flow-decimals" type="number" min="0" max="3" value="0"></label>
+          </div>
+          <label>Animation ab (W) <input id="p-flow-threshold" type="number" min="0" value="50"></label>
+          <p class="hint">Kachel am besten 2×2. Pfeile animieren bei Leistung über dem Schwellwert. Im Baum Variable wählen, dann hier Slot wählen und Variable anklicken.</p>
         </div>
         <div data-for="image">
           <label>Bildquelle

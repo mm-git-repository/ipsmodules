@@ -20,10 +20,84 @@ const DISPLAY_PROFILES = {
   "firebeetle-epd-400x300": { label: "FireBeetle E-Ink 4,2\" (400×300)", width: 400, height: 300, defaultColumns: 3, defaultRows: 4, maxColumns: 3, maxRows: 4 },
   "firebeetle-epd-800x480": { label: "FireBeetle E-Ink 7,5\" (800×480)", width: 800, height: 480, defaultColumns: 4, defaultRows: 6, maxColumns: 4, maxRows: 6 }
 };
-const KIND_NAMES = { value: "Wert", display: "Nur Anzeige", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", system: "Anzeigestatus" };
+const KIND_NAMES = { value: "Wert", display: "Nur Anzeige", energyflow: "Energiefluss", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", system: "Anzeigestatus" };
+const FLOW_VAR_KEYS = { grid: "gridVariableId", pv: "pvVariableId", load: "loadVariableId", battery: "batteryVariableId" };
+const FLOW_DEMO = { grid: 850, pv: 3200, load: 2400, battery: -650 };
 
 function editorKicker(mode, text) {
   return mode === "edit" && text ? `<div class="kicker">${text}</div>` : "";
+}
+
+function flowAnimSeconds(w) {
+  const a = Math.abs(Number(w) || 0);
+  if (a < 30) return 2.4;
+  return Math.max(0.35, Math.min(2.4, 3500 / a));
+}
+
+function energyFlowNumbers(tile, live) {
+  const threshold = Number(tile.flowThreshold ?? 50);
+  const out = { grid: 0, pv: 0, load: 0, battery: 0, threshold };
+  for (const [slot, key] of Object.entries(FLOW_VAR_KEYS)) {
+    let w = null;
+    if (live && live.flows && live.flows[slot] && live.flows[slot].w != null && live.flows[slot].w !== "") {
+      w = Number(live.flows[slot].w);
+    }
+    if (w == null || Number.isNaN(w)) {
+      w = tile[key] ? FLOW_DEMO[slot] : 0;
+    }
+    out[slot] = w;
+  }
+  return out;
+}
+
+function energyFlowLabels(tile, live) {
+  const labels = { grid: "—", pv: "—", load: "—", battery: "—" };
+  for (const slot of Object.keys(FLOW_VAR_KEYS)) {
+    if (live && live.flows && live.flows[slot] && live.flows[slot].text) {
+      labels[slot] = live.flows[slot].text;
+    } else if (tile[FLOW_VAR_KEYS[slot]]) {
+      const w = energyFlowNumbers(tile, live)[slot];
+      const dec = tile.decimals ?? 0;
+      const unit = tile.unit ? ` ${tile.unit}` : " W";
+      labels[slot] = `${w.toLocaleString("de-DE", { maximumFractionDigits: dec, minimumFractionDigits: dec })}${unit}`;
+    }
+  }
+  return labels;
+}
+
+function buildEnergyFlowHtml(tile, live, mode) {
+  const n = energyFlowNumbers(tile, live);
+  const labels = energyFlowLabels(tile, live);
+  const t = n.threshold;
+  const paths = [];
+  const path = (d, active, w, extra) => {
+    if (!active) return `<path class="flow-path" d="${d}"/>`;
+    return `<path class="flow-path active${extra ? ` ${extra}` : ""}" d="${d}" style="animation-duration:${flowAnimSeconds(w)}s"/>`;
+  };
+  paths.push(path("M50 23 L50 41", n.pv > t, n.pv));
+  if (n.grid > t) paths.push(path("M23 50 L41 50", true, n.grid));
+  else if (n.grid < -t) paths.push(path("M41 50 L23 50", true, n.grid, "export"));
+  else paths.push(`<path class="flow-path" d="M23 50 L41 50"/>`);
+  if (n.battery > t) paths.push(path("M59 50 L77 50", true, n.battery, "battery"));
+  else if (n.battery < -t) paths.push(path("M77 50 L59 50", true, n.battery, "battery"));
+  else paths.push(`<path class="flow-path" d="M59 50 L77 50"/>`);
+  return `${editorKicker(mode, "Energiefluss")}<div class="energy-flow"><svg viewBox="0 0 100 68" class="flow-svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true">${paths.join("")}<circle cx="50" cy="50" r="9" fill="#1d3350" stroke="#5a7391"/><text class="flow-node" x="50" y="10" text-anchor="middle">PV</text><text class="flow-value" x="50" y="18" text-anchor="middle">${escapeHtml(labels.pv)}</text><text class="flow-node" x="11" y="53" text-anchor="start">Netz</text><text class="flow-value" x="11" y="61" text-anchor="start">${escapeHtml(labels.grid)}</text><text class="flow-node" x="50" y="53" text-anchor="middle">Haus</text><text class="flow-value" x="50" y="61" text-anchor="middle">${escapeHtml(labels.load)}</text><text class="flow-node" x="89" y="53" text-anchor="end">Akku</text><text class="flow-value" x="89" y="61" text-anchor="end">${escapeHtml(labels.battery)}</text></svg></div>`;
+}
+
+function flowVarLabel(variableId) {
+  const v = variableById(variableId);
+  return v ? `${v.path ? v.path + " / " : ""}${v.name} (${v.id})` : "";
+}
+
+function assignFlowVariable(tile, slot, variable, silent) {
+  if (!tile || tile.kind !== "energyflow" || !variable || !FLOW_VAR_KEYS[slot]) return;
+  tile[FLOW_VAR_KEYS[slot]] = variable.id;
+  if (!tile.title && slot === "load") tile.title = "Energiefluss";
+  if (!silent) {
+    markDirty();
+    renderGrid();
+    renderProperties();
+  }
 }
 
 function scaledTileHtml(mainText, iconId, subText) {
@@ -716,6 +790,9 @@ function buildTileElement(tile, context) {
     element.innerHTML = scaledTileHtml(tile.text || "Text", "", "");
   } else if (tile.kind === "display") {
     element.innerHTML = scaledTileHtml(displayMainText(tile, live), tile.icon || "", "");
+  } else if (tile.kind === "energyflow") {
+    element.classList.add("energyflow");
+    element.innerHTML = buildEnergyFlowHtml(tile, live, mode);
   } else if (tile.kind === "separator") {
     element.innerHTML = `<div class="line"></div>`;
   } else if (tile.kind === "system") {
@@ -926,6 +1003,11 @@ function bindDrop(target, col, row, existing) {
         assignVariable(existing, variable);
         return;
       }
+      if (existing && existing.kind === "energyflow") {
+        const slot = $("p-flow-slot") ? $("p-flow-slot").value : "load";
+        assignFlowVariable(existing, slot, variable);
+        return;
+      }
       if (!existing && isMediaPick(variable)) {
         addTile("image", col, row, variable);
         return;
@@ -1005,6 +1087,18 @@ function addTile(kind, col, row, variable, control) {
     tile.unit = "";
     tile.decimals = 0;
     if (variable) assignVariable(tile, variable, true);
+  } else if (kind === "energyflow") {
+    tile.colSpan = Math.min(2, state.layout.columns);
+    tile.rowSpan = Math.min(2, state.layout.rows);
+    tile.unit = "W";
+    tile.decimals = 0;
+    tile.flowThreshold = 50;
+    tile.gridVariableId = 0;
+    tile.pvVariableId = 0;
+    tile.loadVariableId = 0;
+    tile.batteryVariableId = 0;
+    tile.title = tile.title || "Energiefluss";
+    if (variable) assignFlowVariable(tile, "load", variable, true);
   } else if (kind === "separator") {
     tile.colSpan = Math.max(1, state.layout.columns);
     if (!fits(null, col, row, tile.colSpan, 1, null)) tile.colSpan = 1;
@@ -1270,6 +1364,15 @@ function renderProperties() {
     fillIconSelect($("p-display-icon"), false);
     $("p-display-icon").value = tile.icon || "";
   }
+  if (tile.kind === "energyflow") {
+    if ($("p-flow-grid")) $("p-flow-grid").value = flowVarLabel(tile.gridVariableId);
+    if ($("p-flow-pv")) $("p-flow-pv").value = flowVarLabel(tile.pvVariableId);
+    if ($("p-flow-load")) $("p-flow-load").value = flowVarLabel(tile.loadVariableId);
+    if ($("p-flow-battery")) $("p-flow-battery").value = flowVarLabel(tile.batteryVariableId);
+    if ($("p-flow-unit")) $("p-flow-unit").value = tile.unit || "W";
+    if ($("p-flow-decimals")) $("p-flow-decimals").value = tile.decimals ?? 0;
+    if ($("p-flow-threshold")) $("p-flow-threshold").value = tile.flowThreshold ?? 50;
+  }
   const imgSource = tile.imageSource || "catalog";
   if ($("p-imagesource")) {
     $("p-imagesource").value = imgSource;
@@ -1388,6 +1491,11 @@ function applyProperties() {
       delete tile.text;
     }
   }
+  if (tile.kind === "energyflow") {
+    tile.unit = $("p-flow-unit") ? $("p-flow-unit").value : "W";
+    tile.decimals = $("p-flow-decimals") ? Number($("p-flow-decimals").value) || 0 : 0;
+    tile.flowThreshold = $("p-flow-threshold") ? Number($("p-flow-threshold").value) || 0 : 50;
+  }
   if (tile.kind === "image") {
     const source = $("p-imagesource").value || "catalog";
     if (source === "media") {
@@ -1425,7 +1533,7 @@ $("p-control").addEventListener("change", () => {
   }
   applyProperties();
 });
-for (const id of ["p-title", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-iconmode", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon"]) {
+for (const id of ["p-title", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-iconmode", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 for (const id of ["p-display-textarea"]) {
@@ -1881,6 +1989,11 @@ function renderVariableTree() {
           assignVariable(tile, variable);
           return;
         }
+        if (tile && tile.kind === "energyflow") {
+          const slot = $("p-flow-slot") ? $("p-flow-slot").value : "load";
+          assignFlowVariable(tile, slot, variable);
+          return;
+        }
         if (tile && tile.kind === "camera" && (isImageUrlRef(variable) || !isMediaPick(variable))) {
           assignVariable(tile, variable);
           return;
@@ -1963,6 +2076,10 @@ function validateLayout(layout) {
         const src = tile.displaySource || "variable";
         if (src === "text" && !(tile.text || "").trim()) throw new Error(`Die Anzeigekachel „${tile.title || tile.tileId}“ braucht Text.`);
         if (src === "variable" && !tile.variableId) throw new Error(`Die Anzeigekachel „${tile.title || tile.tileId}“ braucht eine Variable.`);
+      }
+      if (tile.kind === "energyflow") {
+        const any = tile.gridVariableId || tile.pvVariableId || tile.loadVariableId || tile.batteryVariableId;
+        if (!any) throw new Error(`Energiefluss „${tile.title || tile.tileId}“ braucht mindestens eine Variable.`);
       }
       if (tile.kind === "image") {
         if ((tile.imageSource || "catalog") === "media") {
@@ -2387,6 +2504,9 @@ function updateProbeValuesOnly() {
     const tile = tilesById[tileId];
     const fitEl = element.querySelector(".tile-fit-text");
     if (fitEl && live.text && tile && tile.kind === "display") fitEl.textContent = live.text;
+    if (tile && tile.kind === "energyflow" && live.flows) {
+      element.innerHTML = buildEnergyFlowHtml(tile, live, "probe");
+    }
     if (live.color) element.style.background = colorForTile(live.color);
   }
   scheduleFitTileText($("probe-grid"));
