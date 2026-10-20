@@ -11,7 +11,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 29;
+    private const MODULE_BUILD = 30;
 
     private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
@@ -120,7 +120,14 @@ class HomeDisplay extends IPSModuleStrict
     {
         $code = strtoupper(trim($this->ReadPropertyString('ClaimCode')));
         if (!preg_match('/^[A-Z0-9]{6}$/', $code)) {
-            return 'Kopplungscode muss sechs Buchstaben oder Ziffern haben.';
+            return 'Kopplungscode muss sechs Buchstaben oder Ziffern haben (exakt wie auf dem Display, ohne Leerzeichen).';
+        }
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return 'Instanz ist deaktiviert – „Aktiv“ setzen und erneut übernehmen.';
+        }
+        $serviceUrl = $this->adapterBaseUrl();
+        if ($serviceUrl === '') {
+            return 'Kein Dienst unter /hook/homedisplay – zuerst Instanz „Hausanzeige Verwaltung“ anlegen, Passwort setzen und übernehmen.';
         }
         foreach ($this->siblingIds() as $id) {
             if ($id === $this->InstanceID) {
@@ -132,12 +139,15 @@ class HomeDisplay extends IPSModuleStrict
                 return 'Dieser Code ist bereits einer anderen Anzeige zugeordnet.';
             }
         }
+        IPS_SetProperty($this->InstanceID, 'ClaimCode', $code);
         if ($this->ReadPropertyString('DeviceToken') === '') {
             IPS_SetProperty($this->InstanceID, 'DeviceToken', bin2hex(random_bytes(16)));
         }
         IPS_ApplyChanges($this->InstanceID);
         $this->refreshPairingLabel();
-        return 'Code übernommen. Die Anzeige erhält den Schlüssel beim nächsten Abruf.';
+        return 'Code übernommen. Status „Wartet auf Anzeige …“ ist normal, bis das Gerät sich meldet (alle ca. 3 s, wenn WLAN und Dienstadresse am Display stimmen). Dienst: '
+            . $serviceUrl
+            . ' – am Display muss dieselbe Hook-URL eingetragen sein (https://…:3777/hook/homedisplay). Nach Reset am Display erscheint ein neuer Code; dann hier erneut eintragen und übernehmen.';
     }
 
     public function Unpair(): string
@@ -169,6 +179,17 @@ class HomeDisplay extends IPSModuleStrict
                 'layoutVersion' => is_array($active) ? (int) ($active['version'] ?? 0) : 0,
             ],
         ]);
+    }
+
+    /** Live-Werte für eine beliebige Ansicht (Editor-Entwurf), unabhängig vom Display-Profil der Hardware. */
+    public function PreviewLayoutState(string $LayoutJson): string
+    {
+        $layout = json_decode($LayoutJson, true);
+        if (!is_array($layout)) {
+            return $this->encode(['ok' => false, 'error' => 'Ansicht konnte nicht gelesen werden.']);
+        }
+        $state = $this->stateForLayout($layout, $this->InstanceID, -1);
+        return $this->encode(['ok' => true, 'tiles' => $state['tiles'] ?? []]);
     }
 
     /** Führt eine freigegebene Kachelaktion dieser Anzeige aus. Leerer Wert schaltet um. */
@@ -735,6 +756,7 @@ class HomeDisplay extends IPSModuleStrict
             $token = (string) IPS_GetProperty($id, 'DeviceToken');
             if ($claim === $code && $token !== '') {
                 $this->rememberDeviceReport($id, $body);
+                $this->markPanelHello($id, $body);
                 return [
                     'status' => 'paired',
                     'token' => $token,
@@ -886,11 +908,32 @@ class HomeDisplay extends IPSModuleStrict
                 'tiles' => [],
             ];
         }
-        $pending = $runtime[(string) $device['id']]['pending'] ?? [];
+        $state = $this->stateForLayout(is_array($layout) ? $layout : [], $device['id'], $since);
+        $state['seq'] = $seq;
+        return $state;
+    }
+
+    /**
+     * @param array<string, mixed> $layout
+     * @return array<string, mixed>
+     */
+    private function stateForLayout(array $layout, int $instanceId, int $since): array
+    {
+        $runtime = $this->runtime();
+        $seq = (int) ($runtime[(string) $instanceId]['seq'] ?? 0);
+        if ($since >= 0 && $since >= $seq) {
+            return [
+                'contract' => self::CONTRACT,
+                'seq' => $seq,
+                'now' => time(),
+                'unchanged' => true,
+                'tiles' => [],
+            ];
+        }
+        $pending = $runtime[(string) $instanceId]['pending'] ?? [];
         $pending = is_array($pending) ? $pending : [];
         $tiles = [];
-        $pages = is_array($layout) ? ($layout['pages'] ?? []) : [];
-        foreach ($pages as $page) {
+        foreach ($layout['pages'] ?? [] as $page) {
             if (!is_array($page)) {
                 continue;
             }
@@ -901,35 +944,35 @@ class HomeDisplay extends IPSModuleStrict
                 $kind = (string) ($tile['kind'] ?? 'value');
                 $tileId = (string) ($tile['tileId']);
                 if ($kind === 'camera') {
-                    $seq = 0;
+                    $camSeq = 0;
                     $quality = 'empty';
                     $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
                     $url = $mediaId > 0 ? '' : HomeDisplayMedia::cameraImageUrl($tile);
                     if ($mediaId > 0 || $url !== '') {
-                        $interval = max(10, (int) IPS_GetProperty($device['id'], 'StateIntervalSec'));
+                        $interval = max(10, (int) IPS_GetProperty($instanceId, 'StateIntervalSec'));
                         $stamp = $mediaId > 0 ? (string) $mediaId : $url;
-                        $seq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32($stamp));
+                        $camSeq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32($stamp));
                         $quality = 'ok';
                     }
                     $tiles[] = [
                         'tileId' => $tileId,
-                        'cameraSeq' => $seq,
+                        'cameraSeq' => $camSeq,
                         'quality' => $quality,
                     ];
                     continue;
                 }
                 if ($kind === 'image' && (string) ($tile['imageSource'] ?? 'catalog') === 'media') {
-                    $seq = 0;
+                    $mediaSeq = 0;
                     $quality = 'empty';
                     $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
                     if ($mediaId > 0) {
-                        $interval = max(10, (int) IPS_GetProperty($device['id'], 'StateIntervalSec'));
-                        $seq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32((string) $mediaId));
+                        $interval = max(10, (int) IPS_GetProperty($instanceId, 'StateIntervalSec'));
+                        $mediaSeq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32((string) $mediaId));
                         $quality = 'ok';
                     }
                     $tiles[] = [
                         'tileId' => $tileId,
-                        'mediaSeq' => $seq,
+                        'mediaSeq' => $mediaSeq,
                         'quality' => $quality,
                     ];
                     continue;
@@ -976,7 +1019,7 @@ class HomeDisplay extends IPSModuleStrict
         }
         return [
             'contract' => self::CONTRACT,
-            'seq' => (int) ($runtime[(string) $device['id']]['seq'] ?? 0),
+            'seq' => $seq,
             'now' => time(),
             'tiles' => $tiles,
         ];
@@ -1787,6 +1830,26 @@ class HomeDisplay extends IPSModuleStrict
             return;
         }
         $this->SetValue('PairingState', 'Code von der Anzeige eintragen');
+    }
+
+    /** @param array<string, mixed> $body */
+    private function markPanelHello(int $instanceId, array $body): void
+    {
+        $runtime = $this->runtime();
+        $key = (string) $instanceId;
+        $runtime[$key]['lastCheck'] = time();
+        $this->saveRuntime($runtime);
+        $label = 'Gekoppelt';
+        if (isset($body['firmware']) && (string) $body['firmware'] !== '') {
+            $label .= ' · Programm ' . (string) $body['firmware'];
+        }
+        $pairingId = @IPS_GetObjectIDByIdent('PairingState', $instanceId);
+        if (is_int($pairingId) && $pairingId > 0) {
+            IPS_SetValue($pairingId, $label);
+        }
+        if (function_exists('HDISP_SetPanelStatus')) {
+            HDISP_SetPanelStatus($instanceId, $label);
+        }
     }
 
     public function ApplyPreset(string $Name): string

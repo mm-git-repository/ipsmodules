@@ -86,6 +86,7 @@ void hdConfigClearDeviceToken(HdDeviceConfig &cfg) {
   Preferences prefs;
   if (prefsOpen(prefs, false)) {
     prefs.putString("token", "");
+    prefs.remove("pair_code");
     prefs.remove("layout_sha");
     prefs.remove("config_sha");
     prefs.end();

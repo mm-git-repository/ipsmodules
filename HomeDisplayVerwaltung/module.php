@@ -422,6 +422,26 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             }
             return ['ok' => true, 'result' => $this->decodeCall(HDISP_Inspect($id))];
         }
+        if ($method === 'previewLayout') {
+            $id = (int) ($body['id'] ?? 0);
+            try {
+                $this->panelOrFail($id);
+            } catch (Throwable $e) {
+                return ['ok' => false, 'error' => $e->getMessage()];
+            }
+            $layout = $body['layout'] ?? null;
+            if (!is_array($layout)) {
+                return ['ok' => false, 'error' => 'Ansicht fehlt.'];
+            }
+            if (!function_exists('HDISP_PreviewLayoutState')) {
+                return ['ok' => false, 'error' => 'HomeDisplay ist nicht geladen (Bibliothek aktualisieren).'];
+            }
+            $json = json_encode($layout, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if (!is_string($json)) {
+                return ['ok' => false, 'error' => 'Ansicht konnte nicht gelesen werden.'];
+            }
+            return ['ok' => true, 'result' => $this->decodeCall(HDISP_PreviewLayoutState($id, $json))];
+        }
         if ($method === 'simulateAction') {
             $id = (int) ($body['id'] ?? 0);
             try {

@@ -66,6 +66,7 @@
     <label>Display-Profil
       <select id="display-profile"></select>
     </label>
+    <span id="display-profile-meta" class="hint"></span>
     <label><input id="show-tabs" type="checkbox" checked> Reiterleiste an der Anzeige</label>
   </div>
 
@@ -105,7 +106,11 @@
         </label>
       </div>
       <div id="grid-wrap">
-        <div id="grid"></div>
+        <div id="editor-viewport">
+          <div id="editor-screen">
+            <div id="grid"></div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -323,7 +328,7 @@
   <dialog id="images-dialog">
     <form method="dialog">
       <h3>Bilder</h3>
-      <p class="hint">PNG oder JPEG hochladen. Bilder werden auf höchstens 1024 × 600 Bildpunkte verkleinert und von der Anzeige in den Speicher geladen.</p>
+      <p class="hint">PNG oder JPEG hochladen. Bilder werden auf höchstens 1024×600 Bildpunkte verkleinert (größtes Profil). Kleinere Displays skalieren beim Rendern.</p>
       <input id="image-file" type="file" accept="image/png,image/jpeg">
       <div id="image-list"></div>
       <div class="row right">
@@ -357,8 +362,13 @@
   <dialog id="probe-dialog">
     <form method="dialog">
       <h3>Prüfen</h3>
-      <p class="hint">Live-Vorschau wie auf der Anzeige. Eine Aktion wird in IP-Symcon wirklich ausgeführt.</p>
-      <label>Anzeige <select id="probe-panel"></select></label>
+      <p class="hint">Live-Vorschau im gewählten Display-Profil (Auflösung wie Waveshare oder FireBeetle E-Ink). Aktionen werden in IP-Symcon wirklich ausgeführt.</p>
+      <fieldset class="probe-source">
+        <legend>Quelle</legend>
+        <label class="inline"><input type="radio" name="probe-source" value="draft" checked> Editor-Entwurf (Display-Profil der Ansicht)</label>
+        <label class="inline"><input type="radio" name="probe-source" value="device"> Anzeige (veröffentlicht / Geräte-Vorschau)</label>
+      </fieldset>
+      <label>Anzeige (Variablen &amp; Aktionen) <select id="probe-panel"></select></label>
       <p id="probe-meta" class="hint"></p>
       <label class="small"><input id="probe-live" type="checkbox" checked> Live (Intervall aus Anzeige-Konfiguration)</label>
       <div id="probe-pages" class="probe-pages"></div>

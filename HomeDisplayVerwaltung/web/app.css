@@ -81,19 +81,26 @@ label.small { font-size: 12px; color: var(--muted); }
 #page-tabs button { padding: 7px 14px; border: 1px solid var(--line); border-bottom: 0; background: #dde3ea; border-radius: 6px 6px 0 0; }
 #page-tabs button.active { background: #102033; color: white; border-color: #102033; }
 #page-tabs button.add { background: transparent; border-style: dashed; }
-#grid-wrap { flex: 1; padding: 0 12px 12px; min-height: 0; display: flex; }
-#grid {
-  flex: 1;
-  aspect-ratio: var(--display-aspect, 1024 / 600);
-  max-height: 100%;
-  margin: 0 auto;
-  display: grid;
-  gap: 6px;
-  padding: 10px;
+#grid-wrap { flex: 1; padding: 0 12px 12px; min-height: 0; display: flex; min-width: 0; }
+#editor-viewport { flex: 1; overflow: auto; display: flex; justify-content: center; align-items: flex-start; min-height: 0; min-width: 0; }
+#editor-screen {
+  flex: none;
+  transform-origin: top center;
+  display: flex;
+  flex-direction: column;
   background: #102033;
   border-radius: 0 8px 8px 8px;
   box-shadow: inset 0 0 0 1px #223650;
 }
+#grid {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+#display-profile-meta { margin-left: 4px; white-space: nowrap; }
 .cell { border: 1px dashed #35506f; border-radius: 6px; color: #5a7391; display: flex; align-items: center; justify-content: center; font-size: 12px; min-height: 0; }
 .cell.over { background: rgba(255,255,255,.08); border-style: solid; }
 .tile { position: relative; border-radius: 8px; background: #1d3350; color: #f4f7fb; padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; cursor: grab; border: 2px solid transparent; min-height: 0; overflow: hidden; container-type: size; }
@@ -181,7 +188,10 @@ dialog button[value=ok], dialog button[value=publish] { background: var(--accent
 .probe-pages { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
 .probe-pages button.active { background: var(--accent); color: white; border-color: var(--accent); }
 #probe-viewport { width: 100%; overflow: auto; display: flex; justify-content: center; padding: 8px 0; }
-#probe-screen { width: 1024px; height: 600px; transform-origin: top center; background: #102033; border-radius: 8px; box-shadow: inset 0 0 0 1px #223650; display: flex; flex-direction: column; flex: none; }
+#probe-screen { transform-origin: top center; background: #102033; border-radius: 8px; box-shadow: inset 0 0 0 1px #223650; display: flex; flex-direction: column; flex: none; }
+.probe-source { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
+.probe-source legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.probe-source label.inline { display: block; margin: 4px 0; font-size: 13px; }
 #probe-tabs { display: flex; gap: 2px; padding: 8px 10px 0; flex: none; }
 #probe-tabs button { padding: 6px 12px; border: 1px solid #35506f; border-bottom: 0; background: #1d3350; color: #f4f7fb; border-radius: 6px 6px 0 0; font-size: 12px; }
 #probe-tabs button.active { background: #102033; border-color: #223650; }

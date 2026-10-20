@@ -88,37 +88,76 @@ static void makePairingCode() {
   pairingCode[6] = '\0';
 }
 
-static void pairLoop() {
+static void ensurePairingCode() {
+  if (pairingCode[0] != '\0') return;
+  Preferences prefs;
+  if (prefs.begin("homedisplay_fb", true)) {
+    String stored = prefs.getString("pair_code", "");
+    prefs.end();
+    if (stored.length() == 6) {
+      stored.toCharArray(pairingCode, sizeof(pairingCode));
+      return;
+    }
+  }
   makePairingCode();
+  if (prefs.begin("homedisplay_fb", false)) {
+    prefs.putString("pair_code", pairingCode);
+    prefs.end();
+  }
+}
+
+static void showPairingScreen() {
+  ensurePairingCode();
   char line[64];
   snprintf(line, sizeof(line), "Kopplungscode\n%s", pairingCode);
-  epaperShowStatus(line, "In IPS eintragen");
-  while (gCfg->deviceToken.isEmpty()) {
-    if (!WiFi.isConnected()) {
-      delay(2000);
-      continue;
-    }
-    char body[96];
-    snprintf(body, sizeof(body), "{\"code\":\"%s\",\"firmware\":\"%s\"}", pairingCode, HOMEDISPLAY_FB_FIRMWARE_VERSION);
-    String response;
-    if (hdClientHttpJson("/v1/hello", "POST", body, response)) {
-      JsonDocument doc;
-      if (deserializeJson(doc, response) == DeserializationError::Ok) {
-        const char *status = doc["status"];
-        const char *token = doc["token"];
-        if (status && strcmp(status, "paired") == 0 && token) {
-          gCfg->deviceToken = token;
-          Preferences prefs;
-          if (prefs.begin("homedisplay_fb", false)) {
-            prefs.putString("token", gCfg->deviceToken);
-            prefs.end();
-          }
-        }
-      }
-    }
-    delay(3000);
+  if (WiFi.isConnected()) {
+    epaperShowStatus(line, "In IPS eintragen");
+  } else {
+    epaperShowStatus(line, "WLAN verbinden …");
   }
-  epaperShowStatus("Verbunden", "Hausanzeige");
+}
+
+static unsigned long lastPairPostMs = 0;
+
+static void pairTick() {
+  if (!gCfg || !gCfg->deviceToken.isEmpty()) return;
+  ensurePairingCode();
+  static unsigned long lastScreenMs = 0;
+  unsigned long now = millis();
+  if (now - lastScreenMs > 15000) {
+    showPairingScreen();
+    lastScreenMs = now;
+  }
+  if (!WiFi.isConnected()) return;
+  if (gCfg->serviceUrl.isEmpty()) {
+    epaperShowStatus("Dienstadresse fehlt", "Serial: m+Enter");
+    return;
+  }
+  if (now - lastPairPostMs < 3000) return;
+  lastPairPostMs = now;
+  char body[96];
+  snprintf(body, sizeof(body), "{\"code\":\"%s\",\"firmware\":\"%s\"}", pairingCode, HOMEDISPLAY_FB_FIRMWARE_VERSION);
+  String response;
+  if (!hdClientHttpJson("/v1/hello", "POST", body, response)) {
+    Serial.println(F("[pair] hello fehlgeschlagen (URL/WLAN/HTTPS?)"));
+    return;
+  }
+  JsonDocument doc;
+  if (deserializeJson(doc, response) != DeserializationError::Ok) return;
+  const char *status = doc["status"];
+  const char *token = doc["token"];
+  if (status && strcmp(status, "paired") == 0 && token) {
+    gCfg->deviceToken = token;
+    Preferences prefs;
+    if (prefs.begin("homedisplay_fb", false)) {
+      prefs.putString("token", gCfg->deviceToken);
+      prefs.remove("pair_code");
+      prefs.end();
+    }
+    pairingCode[0] = '\0';
+    epaperShowStatus("Verbunden", "Hausanzeige");
+    Serial.println(F("[pair] Token erhalten"));
+  }
 }
 
 static bool writeFile(const char *path, const String &content) {
@@ -240,7 +279,7 @@ void hdClientBegin(HdDeviceConfig &cfg) {
   loadMeta();
   String cachedCfg = readFile("/config.json");
   if (cachedCfg.length()) applyConfig(cachedCfg);
-  if (cfg.deviceToken.isEmpty()) pairLoop();
+  if (cfg.deviceToken.isEmpty()) showPairingScreen();
   nextManifestMs = 0;
   nextStateMs = 0;
 }
@@ -251,7 +290,10 @@ void hdClientSetRefreshCallback(HdClientRefreshFn fn) {
 
 void hdClientTick() {
   if (!gCfg) return;
-  if (gCfg->deviceToken.isEmpty()) pairLoop();
+  if (gCfg->deviceToken.isEmpty()) {
+    pairTick();
+    return;
+  }
   unsigned long now = millis();
   if (now >= nextManifestMs) {
     pullManifest();

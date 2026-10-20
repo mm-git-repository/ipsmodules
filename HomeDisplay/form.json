@@ -11,7 +11,7 @@
         },
         {
             "type": "Label",
-            "caption": "Kopplung: Den Code von der Anzeige eintragen und übernehmen. Die Anzeige erhält den Schlüssel beim nächsten Abruf."
+            "caption": "Kopplung: Code vom Display ablesen, hier eintragen, Instanz übernehmen, dann „Kopplungscode übernehmen“. Das Display fragt alle 3 s den Dienst ab – WLAN und Hook-URL müssen am Gerät stimmen (https://IP:3777/hook/homedisplay). Nach Neustart des Displays ist der Code neu."
         },
         {
             "type": "ValidationTextBox",

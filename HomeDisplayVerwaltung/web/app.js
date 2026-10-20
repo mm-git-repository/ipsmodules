@@ -373,6 +373,41 @@ function layoutProfile(layout) {
   return DISPLAY_PROFILES[id] || DISPLAY_PROFILES[defaultProfileId()];
 }
 
+function profileLabel(profileId) {
+  const meta = DISPLAY_PROFILES[profileId];
+  return meta ? meta.label : (profileId || "–");
+}
+
+function scaleDisplayScreen(viewportEl, screenEl, profile) {
+  if (!viewportEl || !screenEl || !profile) return;
+  screenEl.style.width = `${profile.width}px`;
+  screenEl.style.height = `${profile.height}px`;
+  const scaleW = (viewportEl.clientWidth - 8) / profile.width;
+  const scaleH = viewportEl.clientHeight > 0 ? (viewportEl.clientHeight - 8) / profile.height : scaleW;
+  const scale = Math.min(1, scaleW, scaleH);
+  screenEl.style.transform = scale < 1 ? `scale(${scale})` : "";
+  screenEl.style.marginBottom = scale < 1 ? `${-(profile.height * (1 - scale))}px` : "";
+}
+
+function scaleEditorViewport() {
+  scaleDisplayScreen($("editor-viewport"), $("editor-screen"), state.layout ? layoutProfile(state.layout) : null);
+}
+
+function probeSourceMode() {
+  const picked = document.querySelector('input[name="probe-source"]:checked');
+  return picked ? picked.value : "draft";
+}
+
+function editorLayoutSnapshot() {
+  if (!state.layout) return null;
+  const layout = JSON.parse(JSON.stringify(state.layout));
+  layout.columns = Number($("columns").value) || layout.columns;
+  layout.rows = Number($("rows").value) || layout.rows;
+  layout.showTabs = $("show-tabs").checked;
+  layout.displayProfile = $("display-profile").value || layout.displayProfile;
+  return layout;
+}
+
 function fillProfileSelect(select, value) {
   select.innerHTML = "";
   for (const [id, meta] of Object.entries(DISPLAY_PROFILES)) {
@@ -393,6 +428,9 @@ function applyGridAspect() {
   $("rows").max = maxRow;
   $("p-colspan").max = state.layout ? state.layout.columns : maxCol;
   $("p-rowspan").max = state.layout ? state.layout.rows : maxRow;
+  const meta = $("display-profile-meta");
+  if (meta) meta.textContent = `${profile.label} · ${profile.width}×${profile.height} px`;
+  scaleEditorViewport();
 }
 
 function tilePreviewStyle(tile) {
@@ -679,6 +717,7 @@ function renderGrid() {
   }
   scheduleEditorTilePreviews();
   scheduleFitTileText(grid);
+  scaleEditorViewport();
 }
 
 function scheduleEditorTilePreviews() {
@@ -1669,6 +1708,9 @@ $("display-profile").addEventListener("change", () => {
   state.layout.displayProfile = $("display-profile").value;
   applyGridAspect();
   markDirty();
+  if ($("probe-dialog").open && probeSourceMode() === "draft") {
+    loadProbe(true).catch((error) => setStatus(error.message));
+  }
 });
 $("p-details").addEventListener("click", () => {
   const tile = selectedTile();
@@ -2556,18 +2598,11 @@ function paintEditorLiveTile(element, tile) {
   }
 }
 
-let probe = { page: "", snapshot: null, probeImageUrls: {}, probeImageErrors: {}, probeImageErrorDetails: {}, timer: null, lastLive: "" };
+let probe = { page: "", snapshot: null, panels: [], probeImageUrls: {}, probeImageErrors: {}, probeImageErrorDetails: {}, timer: null, lastLive: "" };
 
 function scaleProbeViewport() {
-  const viewport = $("probe-viewport");
-  const screen = $("probe-screen");
-  if (!viewport || !screen) return;
   const profile = probe.snapshot && probe.snapshot.layout ? layoutProfile(probe.snapshot.layout) : DISPLAY_PROFILES[defaultProfileId()];
-  screen.style.width = `${profile.width}px`;
-  screen.style.height = `${profile.height}px`;
-  const scale = Math.min(1, (viewport.clientWidth - 8) / profile.width);
-  screen.style.transform = scale < 1 ? `scale(${scale})` : "";
-  screen.style.marginBottom = scale < 1 ? `${-(profile.height * (1 - scale))}px` : "";
+  scaleDisplayScreen($("probe-viewport"), $("probe-screen"), profile);
 }
 
 function updateProbeValuesOnly() {
@@ -2657,15 +2692,26 @@ function renderProbe() {
   const values = {};
   for (const tile of (probe.snapshot.state && probe.snapshot.state.tiles) || []) values[tile.tileId] = tile;
   const profile = layoutProfile({ displayProfile: layout.displayProfile });
-  let metaText = `Panel-Vorschau · ${profile.width}×${profile.height}`;
   const probeInfo = probe.snapshot && probe.snapshot.probe;
-  if (probeInfo && probeInfo.previewActive) {
-    metaText += " · Geräte-Vorschau (zeitlich begrenzt) aktiv";
+  let metaText;
+  if (probeInfo && probeInfo.draft) {
+    metaText = `Editor-Vorschau · ${profile.label} · ${profile.width}×${profile.height}`;
+    if (state.dirty) metaText += " · ungespeicherte Änderungen";
   } else {
-    metaText += " · veröffentlichte Ansicht der Instanz";
+    metaText = `Anzeige-Vorschau · ${profile.label} · ${profile.width}×${profile.height}`;
+    if (probeInfo && probeInfo.previewActive) {
+      metaText += " · Geräte-Vorschau (zeitlich begrenzt) aktiv";
+    } else {
+      metaText += " · veröffentlichte Ansicht der Instanz";
+    }
+    if (state.dirty && state.layout && probeInfo && state.layout.id === probeInfo.layoutId) {
+      metaText += " · Editor-Entwurf ist noch nicht veröffentlicht";
+    }
   }
-  if (state.dirty && state.layout && probeInfo && state.layout.id === probeInfo.layoutId) {
-    metaText += " · Editor-Entwurf ist noch nicht veröffentlicht";
+  const panelId = Number($("probe-panel").value);
+  const panel = (probe.panels || []).find((item) => item.id === panelId);
+  if (panel && panel.displayProfile && layout.displayProfile && panel.displayProfile !== layout.displayProfile) {
+    metaText += ` · Anzeige-Hardware: ${profileLabel(panel.displayProfile)}`;
   }
   $("probe-meta").textContent = metaText;
   if (layout.showTabs) {
@@ -2715,8 +2761,42 @@ function renderProbe() {
   probe.lastLive = new Date().toLocaleTimeString("de-DE");
 }
 
+async function loadProbeDraft(id) {
+  const layout = editorLayoutSnapshot();
+  if (!layout) {
+    probe.snapshot = null;
+    renderProbe();
+    return;
+  }
+  let config = {};
+  let stateTiles = [];
+  if (id) {
+    const preview = await call("previewLayout", { id, layout });
+    if (preview.ok === false) throw new Error(preview.error || "Live-Vorschau fehlgeschlagen");
+    stateTiles = preview.tiles || [];
+    try {
+      const inspect = await call("inspect", { id });
+      config = inspect.config || {};
+    } catch (error) {
+      /* optional */
+    }
+  }
+  probe.snapshot = {
+    layout,
+    state: { tiles: stateTiles },
+    config,
+    probe: { draft: true, layoutId: layout.id || "", previewActive: false }
+  };
+  await loadProbeImages(layout, id, stateTiles);
+  renderProbe();
+}
+
 async function loadProbe(fullRender) {
   const id = Number($("probe-panel").value);
+  if (probeSourceMode() === "draft") {
+    await loadProbeDraft(id);
+    return;
+  }
   if (!id) {
     probe.snapshot = null;
     renderProbe();
@@ -2780,13 +2860,16 @@ async function openProbe() {
   const select = $("probe-panel");
   try {
     const settings = await call("settings");
+    probe.panels = settings.panels || [];
     select.innerHTML = "";
-    for (const panel of settings.panels || []) {
+    for (const panel of probe.panels) {
       const option = document.createElement("option");
       option.value = String(panel.id);
-      option.textContent = `${panel.name} (${panel.id})`;
+      const hw = profileLabel(panel.displayProfile);
+      option.textContent = `${panel.name} (${panel.id}) · ${hw}`;
       select.appendChild(option);
     }
+    if (probe.panels[0]) state.previewPanelId = probe.panels[0].id;
     if (!select.options.length) {
       setStatus("Noch keine Anzeige-Instanz angelegt.");
       return;
@@ -2809,12 +2892,19 @@ $("probe-live").addEventListener("change", () => {
   else stopProbeTimer();
 });
 window.addEventListener("resize", () => {
+  scaleEditorViewport();
   scheduleFitTileText($("grid"));
   if ($("probe-dialog").open) {
     scaleProbeViewport();
     scheduleFitTileText($("probe-grid"));
   }
 });
+
+for (const input of document.querySelectorAll('input[name="probe-source"]')) {
+  input.addEventListener("change", () => {
+    if ($("probe-dialog").open) loadProbe(true).catch((error) => setStatus(error.message));
+  });
+}
 
 $("probe-panel").addEventListener("change", () => {
   probe.page = "";
