@@ -270,6 +270,7 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
                 'pairing' => $this->variableText($id, 'PairingState'),
                 'status' => $this->variableText($id, 'PanelStatus'),
                 'serves' => $id === $instance,
+                'displayProfile' => (string) $this->panelProperty($id, 'DisplayProfile', 'waveshare-5b-1024x600'),
             ];
         }
         return [
@@ -444,7 +445,20 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             return ['ok' => true, 'result' => $this->decodeCall(HDISP_ListVariables($panel))];
         }
         if ($method === 'template') {
-            return ['ok' => true, 'result' => $this->decodeCall(HDISP_LayoutTemplate($panel, (string) ($body['name'] ?? 'Übersicht')))];
+            $profile = (string) ($body['displayProfile'] ?? '');
+            return ['ok' => true, 'result' => $this->decodeCall(HDISP_LayoutTemplate($panel, (string) ($body['name'] ?? 'Übersicht'), $profile))];
+        }
+        if ($method === 'probeImage') {
+            $id = (int) ($body['id'] ?? 0);
+            try {
+                $this->panelOrFail($id);
+            } catch (Throwable $e) {
+                return ['ok' => false, 'error' => $e->getMessage()];
+            }
+            if (!function_exists('HDISP_ProbeTileImage')) {
+                return ['ok' => false, 'error' => 'HomeDisplay ist nicht geladen.'];
+            }
+            return ['ok' => true, 'result' => $this->decodeCall(HDISP_ProbeTileImage($id, (string) ($body['tileId'] ?? '')))];
         }
         if ($method === 'images') {
             return ['ok' => true, 'result' => $this->decodeCall(HDISP_ListImages($panel))];

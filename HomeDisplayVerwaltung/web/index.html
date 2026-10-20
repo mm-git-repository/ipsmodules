@@ -28,6 +28,12 @@
         <button type="button" id="edit-details">Details der Kachel …</button>
         <button type="button" id="edit-delete">Kachel entfernen</button>
         <hr>
+        <button type="button" id="resize-1x1">Größe 1×1</button>
+        <button type="button" id="resize-2x1">Größe 2×1</button>
+        <button type="button" id="resize-1x2">Größe 1×2</button>
+        <button type="button" id="resize-2x2">Größe 2×2</button>
+        <button type="button" id="resize-full-width">Volle Breite</button>
+        <hr>
         <button type="button" id="edit-layout">Eigenschaften der Ansicht …</button>
       </div>
     </div>
@@ -57,11 +63,15 @@
     <span class="sep"></span>
     <label>Spalten <input id="columns" type="number" min="1" max="4" value="2"></label>
     <label>Zeilen <input id="rows" type="number" min="1" max="6" value="4"></label>
+    <label>Display-Profil
+      <select id="display-profile"></select>
+    </label>
     <label><input id="show-tabs" type="checkbox" checked> Reiterleiste an der Anzeige</label>
   </div>
 
   <div id="workspace">
     <aside id="palette">
+      <div id="palette-tools">
       <h2>Elemente</h2>
       <div class="palette-items">
         <div class="palette-item" draggable="true" data-kind="value">Wert</div>
@@ -76,10 +86,13 @@
         <div class="palette-item" draggable="true" data-kind="separator">Trennlinie</div>
         <div class="palette-item" draggable="true" data-kind="system">Anzeigestatus</div>
       </div>
+      </div>
+      <div id="variable-scroll">
       <h2>Variablen</h2>
       <input id="variable-search" type="search" placeholder="Suchen nach Name, Pfad oder ID">
       <label class="small"><input id="only-actions" type="checkbox"> Nur schaltbare</label>
       <div id="variable-tree"></div>
+      </div>
     </aside>
 
     <section id="canvas">
@@ -109,9 +122,25 @@
           <label>Höhe <input id="p-rowspan" type="number" min="1" max="6" value="1"></label>
         </div>
         <div data-for="value nav">
-          <label>Symbol
-            <select id="p-icon"></select>
+          <label>Symbolmodus
+            <select id="p-iconmode">
+              <option value="static">Fest</option>
+              <option value="toggle">Wechsel (Ein–Aus)</option>
+            </select>
           </label>
+          <div id="p-icon-static">
+            <label>Symbol
+              <select id="p-icon"></select>
+            </label>
+          </div>
+          <div id="p-icon-toggle" class="hidden">
+            <label>Symbol Ein
+              <select id="p-iconon"></select>
+            </label>
+            <label>Symbol Aus
+              <select id="p-iconoff"></select>
+            </label>
+          </div>
         </div>
         <div data-for="value camera">
           <label>Variable <input id="p-variable" readonly placeholder="Aus dem Variablenbaum wählen"></label>
@@ -130,6 +159,18 @@
               <option value="battery">Batterie (Ladestand)</option>
             </select>
           </label>
+          <div data-for="value" id="p-battery-wrap" class="hidden">
+            <label>Ränder (px) <input id="p-batterypad" type="number" min="0" max="48" value="8"></label>
+            <label>Prozent-Anzeige
+              <select id="p-batterylabel">
+                <option value="inside">In der Kachel</option>
+                <option value="left">Links</option>
+                <option value="right">Rechts</option>
+                <option value="top">Oben</option>
+                <option value="bottom">Unten</option>
+              </select>
+            </label>
+          </div>
           <p id="p-control-hint" class="hint hidden"></p>
           <label><input id="p-action" type="checkbox"> Schaltbar</label>
           <label><input id="p-confirm" type="checkbox"> Bestätigung an der Anzeige</label>
@@ -154,8 +195,20 @@
           </label>
         </div>
         <div data-for="image">
-          <label>Bild <select id="p-image"></select></label>
-          <img id="p-image-preview" alt="">
+          <label>Bildquelle
+            <select id="p-imagesource">
+              <option value="catalog">Katalog (hochgeladen)</option>
+              <option value="media">IPS-Medien-Variable</option>
+            </select>
+          </label>
+          <div id="p-image-catalog">
+            <label>Bild <select id="p-image"></select></label>
+            <img id="p-image-preview" alt="">
+          </div>
+          <div id="p-image-media" class="hidden">
+            <label>Medien-Variable <input id="p-image-variable" readonly placeholder="Aus dem Variablenbaum (Typ Medien)"></label>
+            <p class="hint">Die Variable liefert eine Media-ID; IP-Symcon stellt das Bild für die Anzeige bereit.</p>
+          </div>
         </div>
         <div data-for="camera">
           <p class="hint">Die Variable liefert eine http- oder https-Adresse zu einem Kamerabild (JPEG/PNG). IP-Symcon holt das Bild zentral ab; die Anzeige aktualisiert es im Abrufintervall. Mindestens 2×2 Zellen empfohlen.</p>
@@ -188,6 +241,7 @@
     <form method="dialog">
       <h3>Ansicht</h3>
       <label>Name <input id="l-name"></label>
+      <label>Display-Profil <select id="l-display-profile"></select></label>
       <div class="row">
         <label>Spalten <input id="l-columns" type="number" min="1" max="4"></label>
         <label>Zeilen <input id="l-rows" type="number" min="1" max="6"></label>
@@ -239,13 +293,32 @@
   <dialog id="probe-dialog">
     <form method="dialog">
       <h3>Prüfen</h3>
-      <p class="hint">Dieselbe Ansicht und dieselben Werte, die die Anzeige abruft. Eine Aktion wird in IP-Symcon wirklich ausgeführt.</p>
+      <p class="hint">Live-Vorschau wie auf der Anzeige. Eine Aktion wird in IP-Symcon wirklich ausgeführt.</p>
       <label>Anzeige <select id="probe-panel"></select></label>
+      <p id="probe-meta" class="hint"></p>
+      <label class="small"><input id="probe-live" type="checkbox" checked> Live (Intervall aus Anzeige-Konfiguration)</label>
       <div id="probe-pages" class="probe-pages"></div>
-      <div id="probe-stage"></div>
+      <div id="probe-viewport">
+        <div id="probe-screen">
+          <div id="probe-tabs" class="hidden"></div>
+          <div id="probe-grid"></div>
+        </div>
+      </div>
       <div class="row right">
         <button type="button" id="probe-refresh">Aktualisieren</button>
         <button value="close">Schließen</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="template-dialog">
+    <form method="dialog">
+      <h3>Neu aus Vorlage</h3>
+      <label>Name <input id="t-name" value="Übersicht"></label>
+      <label>Display-Profil <select id="t-display-profile"></select></label>
+      <div class="row right">
+        <button value="cancel">Abbrechen</button>
+        <button value="ok">Anlegen</button>
       </div>
     </form>
   </dialog>

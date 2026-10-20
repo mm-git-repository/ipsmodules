@@ -36,6 +36,12 @@ typedef struct {
     lv_obj_t *battery_shell;
     lv_obj_t *battery_fill;
     lv_obj_t *camera_img;
+    lv_obj_t *image_img;
+    lv_obj_t *icon_label;
+    char icon_mode[12];
+    char icon_on[24];
+    char icon_off[24];
+    int battery_pad;
 } tile_view_t;
 
 static lv_obj_t *status_label;
@@ -94,6 +100,18 @@ static const char *icon_symbol(const char *icon)
     if (strcmp(icon, "home") == 0) return LV_SYMBOL_HOME;
     if (strcmp(icon, "clock") == 0) return LV_SYMBOL_BELL;
     if (strcmp(icon, "info") == 0) return LV_SYMBOL_LIST;
+    if (strcmp(icon, "lightOn") == 0) return LV_SYMBOL_EYE_OPEN;
+    if (strcmp(icon, "lightOff") == 0) return LV_SYMBOL_EYE_CLOSE;
+    if (strcmp(icon, "humidity") == 0 || strcmp(icon, "water") == 0) return LV_SYMBOL_TINT;
+    if (strcmp(icon, "sun") == 0 || strcmp(icon, "heat") == 0 || strcmp(icon, "batteryIcon") == 0) return LV_SYMBOL_CHARGE;
+    if (strcmp(icon, "moon") == 0) return LV_SYMBOL_AUDIO;
+    if (strcmp(icon, "cool") == 0) return LV_SYMBOL_DOWN;
+    if (strcmp(icon, "fan") == 0) return LV_SYMBOL_REFRESH;
+    if (strcmp(icon, "door") == 0) return LV_SYMBOL_RIGHT;
+    if (strcmp(icon, "lock") == 0) return LV_SYMBOL_SETTINGS;
+    if (strcmp(icon, "plug") == 0) return LV_SYMBOL_POWER;
+    if (strcmp(icon, "wifi") == 0) return LV_SYMBOL_WIFI;
+    if (strcmp(icon, "car") == 0) return LV_SYMBOL_DRIVE;
     return LV_SYMBOL_MINUS;
 }
 
@@ -304,10 +322,13 @@ static void place_battery(tile_view_t *tile, int value)
     tile->value = value;
 }
 
-static void build_battery(tile_view_t *view)
+static void build_battery(tile_view_t *view, int pad)
 {
+    int card_w = lv_obj_get_width(view->card);
+    int shell_w = card_w > pad * 2 + 40 ? card_w - pad * 2 - 16 : 78;
+    if (shell_w < 48) shell_w = 48;
     view->battery_shell = lv_obj_create(view->card);
-    lv_obj_set_size(view->battery_shell, 78, 38);
+    lv_obj_set_size(view->battery_shell, shell_w, 38);
     lv_obj_set_style_bg_color(view->battery_shell, lv_color_hex(0x0B1626), 0);
     lv_obj_set_style_radius(view->battery_shell, 6, 0);
     lv_obj_set_style_border_width(view->battery_shell, 2, 0);
@@ -474,13 +495,15 @@ static void show_page(int index)
         }
         if (strcmp(kind, "image") == 0) {
             const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageFile"));
+            if (!file || !file[0]) file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "mediaFile"));
             lv_obj_set_style_bg_color(view->card, lv_color_hex(0x0B1626), 0);
             lv_obj_set_style_pad_all(view->card, 0, 0);
-            lv_obj_t *image = lv_img_create(view->card);
+            view->image_img = lv_img_create(view->card);
             char path[80];
             snprintf(path, sizeof(path), "S:/%s", file ? file : "");
-            lv_img_set_src(image, path);
-            lv_obj_center(image);
+            lv_img_set_src(view->image_img, path);
+            lv_obj_set_size(view->image_img, lv_obj_get_width(view->card) - 8, lv_obj_get_height(view->card) - 8);
+            lv_obj_center(view->image_img);
             continue;
         }
         if (strcmp(kind, "camera") == 0) {
@@ -511,17 +534,26 @@ static void show_page(int index)
         bool slider = strcmp(view->control, "slider") == 0;
         bool combo = strcmp(view->control, "combo") == 0;
         if (battery) {
+            view->battery_pad = json_int(tile, "batteryPad", 8);
+            if (view->battery_pad < 0) view->battery_pad = 0;
+            if (view->battery_pad > 48) view->battery_pad = 48;
+            lv_obj_set_style_pad_all(view->card, view->battery_pad, 0);
             lv_obj_t *name = lv_label_create(view->card);
             lv_label_set_text(name, view->title);
             lv_obj_align(name, LV_ALIGN_TOP_LEFT, 8, 8);
-            build_battery(view);
+            build_battery(view, view->battery_pad);
             view->label = lv_label_create(view->card);
             lv_label_set_text(view->label, "—");
             lv_obj_set_style_text_font(view->label, &lv_font_montserrat_28, 0);
             lv_obj_align(view->label, LV_ALIGN_TOP_RIGHT, -8, 8);
             continue;
         }
+        const char *icon_mode = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconMode"));
+        snprintf(view->icon_mode, sizeof(view->icon_mode), "%s", icon_mode ? icon_mode : "static");
+        snprintf(view->icon_on, sizeof(view->icon_on), "%s", cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOn")) ? cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOn")) : "lightOn");
+        snprintf(view->icon_off, sizeof(view->icon_off), "%s", cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOff")) ? cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOff")) : "lightOff");
         lv_obj_t *symbol = lv_label_create(view->card);
+        view->icon_label = symbol;
         lv_label_set_text(symbol, icon_symbol(icon));
         lv_obj_align(symbol, LV_ALIGN_TOP_LEFT, 8, 8);
         lv_obj_t *name = lv_label_create(view->card);
@@ -817,6 +849,10 @@ void homedisplay_ui_apply_state(const char *json)
                     if (number > tiles[index].value_min) lv_obj_add_state(tiles[index].power, LV_STATE_CHECKED);
                     else lv_obj_clear_state(tiles[index].power, LV_STATE_CHECKED);
                 }
+                if (tiles[index].icon_label && strcmp(tiles[index].icon_mode, "toggle") == 0) {
+                    bool on = number > tiles[index].value_min;
+                    lv_label_set_text(tiles[index].icon_label, icon_symbol(on ? tiles[index].icon_on : tiles[index].icon_off));
+                }
             }
             tiles[index].applying = false;
         }
@@ -834,6 +870,21 @@ void homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
     for (int index = 0; index < tile_count; index++) {
         if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].camera_img) {
             lv_img_set_src(tiles[index].camera_img, path);
+            break;
+        }
+    }
+    lvgl_port_unlock();
+}
+
+void homedisplay_ui_refresh_image(const char *tile_id, const char *file)
+{
+    if (!tile_id || !tile_id[0] || !file || !file[0]) return;
+    char path[96];
+    snprintf(path, sizeof(path), "S:/%s", file);
+    lvgl_port_lock(0);
+    for (int index = 0; index < tile_count; index++) {
+        if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].image_img) {
+            lv_img_set_src(tiles[index].image_img, path);
             break;
         }
     }

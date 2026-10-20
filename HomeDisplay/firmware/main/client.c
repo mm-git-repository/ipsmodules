@@ -503,6 +503,102 @@ static void sync_cameras_from_state(const char *state_json)
     cJSON_Delete(state);
 }
 
+static cam_stamp_entry_t media_stamps[CAM_STAMP_MAX];
+
+static bool media_stamp_unchanged(const char *tile_id, int stamp)
+{
+    for (int index = 0; index < CAM_STAMP_MAX; index++) {
+        if (media_stamps[index].id[0] && strcmp(media_stamps[index].id, tile_id) == 0) {
+            if (media_stamps[index].stamp == stamp) return true;
+            media_stamps[index].stamp = stamp;
+            return false;
+        }
+    }
+    for (int index = 0; index < CAM_STAMP_MAX; index++) {
+        if (!media_stamps[index].id[0]) {
+            snprintf(media_stamps[index].id, sizeof(media_stamps[index].id), "%s", tile_id);
+            media_stamps[index].stamp = stamp;
+            return false;
+        }
+    }
+    return false;
+}
+
+static const char *media_file_for_tile(cJSON *layout_root, const char *tile_id)
+{
+    cJSON *page = NULL;
+    cJSON_ArrayForEach(page, cJSON_GetObjectItem(layout_root, "pages")) {
+        cJSON *tile = NULL;
+        cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
+            const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
+            const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
+            const char *source = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageSource"));
+            if (kind && strcmp(kind, "image") == 0 && source && strcmp(source, "media") == 0 && id && tile_id && strcmp(id, tile_id) == 0) {
+                return cJSON_GetStringValue(cJSON_GetObjectItem(tile, "mediaFile"));
+            }
+        }
+    }
+    return NULL;
+}
+
+static void fetch_one_media(const char *tile_id, const char *file)
+{
+    if (!tile_id || !tile_id[0] || !file || !file[0]) return;
+    char target[96];
+    snprintf(target, sizeof(target), "/storage/%s", file);
+    char path[80];
+    snprintf(path, sizeof(path), "/v1/media/%s", tile_id);
+    homedisplay_ui_status("Lade Medien");
+    if (download_to_file(path, target) != ESP_OK) {
+        ESP_LOGW(TAG, "Medien %s konnte nicht geladen werden", tile_id);
+        return;
+    }
+    homedisplay_ui_refresh_image(tile_id, file);
+}
+
+static void fetch_layout_media(const char *layout_json)
+{
+    cJSON *root = cJSON_Parse(layout_json);
+    if (!root) return;
+    cJSON *page = NULL;
+    cJSON_ArrayForEach(page, cJSON_GetObjectItem(root, "pages")) {
+        cJSON *tile = NULL;
+        cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
+            const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
+            const char *source = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageSource"));
+            if (!kind || strcmp(kind, "image") != 0 || !source || strcmp(source, "media") != 0) continue;
+            fetch_one_media(
+                cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId")),
+                cJSON_GetStringValue(cJSON_GetObjectItem(tile, "mediaFile")));
+        }
+    }
+    cJSON_Delete(root);
+}
+
+static void sync_media_from_state(const char *state_json)
+{
+    cJSON *state = cJSON_Parse(state_json);
+    if (!state) return;
+    if (cJSON_IsTrue(cJSON_GetObjectItem(state, "unchanged"))) {
+        cJSON_Delete(state);
+        return;
+    }
+    cJSON *layout = read_layout_cache();
+    cJSON *tile = NULL;
+    cJSON_ArrayForEach(tile, cJSON_GetObjectItem(state, "tiles")) {
+        cJSON *stamp_item = cJSON_GetObjectItem(tile, "mediaSeq");
+        if (!stamp_item || !cJSON_IsNumber(stamp_item)) continue;
+        const char *tile_id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
+        int stamp = stamp_item->valueint;
+        if (!tile_id || stamp <= 0) continue;
+        if (media_stamp_unchanged(tile_id, stamp)) continue;
+        const char *file = layout ? media_file_for_tile(layout, tile_id) : NULL;
+        if (file) fetch_one_media(tile_id, file);
+    }
+    if (layout) cJSON_Delete(layout);
+    cJSON_Delete(state);
+}
+
 static void apply_config_document(const char *json)
 {
     homedisplay_ui_apply_config(json);
@@ -590,6 +686,7 @@ static void pull_manifest(char *response, size_t length)
     if (!layout_held && next_layout[0] && strcmp(next_layout, layout_sha) != 0 && request("/v1/layout", "GET", NULL, response, length) == ESP_OK) {
         fetch_images(response);
         fetch_layout_cameras(response);
+        fetch_layout_media(response);
         snprintf(layout_sha, sizeof(layout_sha), "%s", next_layout);
         homedisplay_ui_apply_layout(response);
         write_cache(LAYOUT_CACHE, response);
@@ -736,6 +833,7 @@ static void client_task(void *argument)
             if (root) remember_time(root);
             if (root) cJSON_Delete(root);
             sync_cameras_from_state(response);
+            sync_media_from_state(response);
             homedisplay_ui_apply_state(response);
             if (!unchanged) write_cache(STATE_CACHE, response);
             set_online(true);

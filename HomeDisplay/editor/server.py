@@ -149,7 +149,10 @@ def api(incoming):
     if method == "variables":
         return ips_call("HDISP_ListVariables", [panel])
     if method == "template":
-        return ips_call("HDISP_LayoutTemplate", [panel, str(incoming.get("name", "Übersicht"))])
+        return ips_call(
+            "HDISP_LayoutTemplate",
+            [panel, str(incoming.get("name", "Übersicht")), str(incoming.get("displayProfile", ""))],
+        )
     if method == "images":
         return ips_call("HDISP_ListImages", [panel])
     if method == "uploadImage":

@@ -25,6 +25,14 @@
             "options": []
         },
         {
+            "type": "Select",
+            "name": "DisplayProfile",
+            "caption": "Display-Profil (Hardware)",
+            "options": [
+                {"caption": "Waveshare 5B (1024×600)", "value": "waveshare-5b-1024x600"}
+            ]
+        },
+        {
             "type": "Label",
             "caption": "Die Liste gilt, wenn keine veröffentlichte Ansicht mit Kacheln gewählt ist. Die Position sortiert die Zeilen. Eine freie Platzierung gibt es nicht."
         },

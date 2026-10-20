@@ -10,12 +10,19 @@ const PAGES = [
 ];
 const ICONS = [
   ["energy", "Energie"], ["temperature", "Temperatur"], ["light", "Licht"], ["shutter", "Rollladen"],
-  ["pump", "Pumpe"], ["valve", "Ventil"], ["alarm", "Alarm"], ["home", "Haus"], ["clock", "Uhr"], ["info", "Info"]
+  ["pump", "Pumpe"], ["valve", "Ventil"], ["alarm", "Alarm"], ["home", "Haus"], ["clock", "Uhr"], ["info", "Info"],
+  ["lightOn", "Lampe an"], ["lightOff", "Lampe aus"], ["humidity", "Feuchte"], ["sun", "Sonne"], ["moon", "Nacht"],
+  ["water", "Wasser"], ["heat", "Heizung"], ["cool", "Kühlen"], ["fan", "Lüftung"], ["door", "Tür"], ["lock", "Schloss"],
+  ["plug", "Steckdose"], ["batteryIcon", "Akku"], ["wifi", "WLAN"], ["car", "Auto"]
 ];
+const DISPLAY_PROFILES = {
+  "waveshare-5b-1024x600": { label: "Waveshare 5B (1024×600)", width: 1024, height: 600, defaultColumns: 3, defaultRows: 4, maxColumns: 4, maxRows: 6 }
+};
 const KIND_NAMES = { value: "Wert", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", system: "Anzeigestatus" };
 const CONTROL_NAMES = { switch: "Schalter", dimSwitch: "Dimmschalter", slider: "Dimmbalken", combo: "Kombischalter", battery: "Batterie" };
 const DIM_CONTROLS = ["dimSwitch", "slider", "combo"];
-const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text"];
+const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text", "", "", "Medien"];
+const MEDIA_TYPE = 6;
 
 const state = {
   catalog: { layouts: [], configs: [] },
@@ -25,7 +32,11 @@ const state = {
   page: "start",
   selected: null,
   dirty: false,
-  pickedVariable: null
+  pickedVariable: null,
+  variableTreeOpen: {},
+  variableTreeScroll: 0,
+  editorIconDemo: {},
+  panelProfiles: {}
 };
 
 const $ = (id) => document.getElementById(id);
@@ -58,6 +69,64 @@ function setHint(text) {
 function pageTitle(id) {
   const found = PAGES.find((item) => item[0] === id);
   return found ? found[1] : id;
+}
+
+function defaultProfileId() {
+  return "waveshare-5b-1024x600";
+}
+
+function layoutProfile(layout) {
+  const id = (layout && layout.displayProfile) || defaultProfileId();
+  return DISPLAY_PROFILES[id] || DISPLAY_PROFILES[defaultProfileId()];
+}
+
+function fillProfileSelect(select, value) {
+  select.innerHTML = "";
+  for (const [id, meta] of Object.entries(DISPLAY_PROFILES)) {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = meta.label;
+    select.appendChild(option);
+  }
+  if (value) select.value = value;
+}
+
+function applyGridAspect() {
+  const profile = state.layout ? layoutProfile(state.layout) : DISPLAY_PROFILES[defaultProfileId()];
+  document.documentElement.style.setProperty("--display-aspect", `${profile.width} / ${profile.height}`);
+  const maxCol = profile.maxColumns;
+  const maxRow = profile.maxRows;
+  $("columns").max = maxCol;
+  $("rows").max = maxRow;
+  $("p-colspan").max = state.layout ? state.layout.columns : maxCol;
+  $("p-rowspan").max = state.layout ? state.layout.rows : maxRow;
+}
+
+function tilePreviewStyle(tile) {
+  const sw = tile.colSpan || 1;
+  const sh = tile.rowSpan || 1;
+  return { "--span-w": sw, "--span-h": sh };
+}
+
+function effectiveIcon(tile, liveValue, demoOn) {
+  if (tile.kind !== "value" || tile.control === "battery") return tile.icon || "energy";
+  if ((tile.iconMode || "static") === "toggle") {
+    let on = demoOn;
+    if (on === undefined && liveValue !== undefined && liveValue !== null) {
+      if (typeof liveValue === "boolean") on = liveValue;
+      else if (typeof liveValue === "number") on = liveValue > (tile.valueMin ?? 0);
+      else on = Boolean(liveValue);
+    }
+    return on ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff");
+  }
+  return tile.icon || "energy";
+}
+
+function colorForTile(color) {
+  if (color === "ok") return "#1e6b3a";
+  if (color === "warn") return "#8a6a12";
+  if (color === "alarm") return "#8a2424";
+  return "#1d3350";
 }
 
 function currentPage() {
@@ -118,8 +187,10 @@ function renderLayoutSelect() {
 function selectLayout(layout) {
   state.layout = JSON.parse(JSON.stringify(layout));
   state.layout.baseVersion = layout.version || 0;
-  state.layout.columns = state.layout.columns || 2;
-  state.layout.rows = state.layout.rows || 4;
+  state.layout.displayProfile = state.layout.displayProfile || defaultProfileId();
+  const prof = layoutProfile(state.layout);
+  state.layout.columns = state.layout.columns || prof.defaultColumns;
+  state.layout.rows = state.layout.rows || prof.defaultRows;
   if (state.layout.showTabs === undefined) state.layout.showTabs = true;
   state.layout.pages = (state.layout.pages || []).filter((page) => PAGES.some((item) => item[0] === page.id));
   if (!state.layout.pages.length) state.layout.pages = [{ id: "start", title: "Start", tiles: [] }];
@@ -133,6 +204,8 @@ function selectLayout(layout) {
   $("columns").value = state.layout.columns;
   $("rows").value = state.layout.rows;
   $("show-tabs").checked = state.layout.showTabs;
+  fillProfileSelect($("display-profile"), state.layout.displayProfile);
+  applyGridAspect();
   renderLayoutSelect();
   renderPageTabs();
   renderGrid();
@@ -141,7 +214,12 @@ function selectLayout(layout) {
 }
 
 function newLayout(name) {
-  selectLayout({ id: "", name: name || "Neue Ansicht", version: 0, published: false, columns: 2, rows: 4, showTabs: true, pages: [{ id: "start", title: "Start", tiles: [] }] });
+  const prof = DISPLAY_PROFILES[defaultProfileId()];
+  selectLayout({
+    id: "", name: name || "Neue Ansicht", version: 0, published: false,
+    displayProfile: defaultProfileId(), columns: prof.defaultColumns, rows: prof.defaultRows,
+    showTabs: true, pages: [{ id: "start", title: "Start", tiles: [] }]
+  });
   markDirty();
 }
 
@@ -273,7 +351,8 @@ function renderGrid() {
       bindDrop(cell, col, row);
       cell.addEventListener("click", () => {
         if (state.pickedVariable) {
-          addTile("value", col, row, state.pickedVariable);
+          if (state.pickedVariable.type === MEDIA_TYPE) addTile("image", col, row, state.pickedVariable);
+          else addTile("value", col, row, state.pickedVariable);
           return;
         }
         state.selected = null;
@@ -285,23 +364,128 @@ function renderGrid() {
   }
 }
 
-function renderTile(tile) {
+function gridCellFromPointer(grid, clientX, clientY) {
+  const rect = grid.getBoundingClientRect();
+  const col = Math.min(state.layout.columns - 1, Math.max(0, Math.floor(((clientX - rect.left) / rect.width) * state.layout.columns)));
+  const row = Math.min(state.layout.rows - 1, Math.max(0, Math.floor(((clientY - rect.top) / rect.height) * state.layout.rows)));
+  return { col, row };
+}
+
+function applyTileSpan(tile, col, row, colSpan, rowSpan) {
+  if (!fits(tile, col, row, colSpan, rowSpan, tile.tileId)) return false;
+  tile.col = col;
+  tile.row = row;
+  tile.colSpan = colSpan;
+  tile.rowSpan = rowSpan;
+  return true;
+}
+
+function resizeTilePreset(colSpan, rowSpan) {
+  const tile = selectedTile();
+  if (!tile) return;
+  if (applyTileSpan(tile, tile.col, tile.row, colSpan, rowSpan)) {
+    markDirty();
+    renderGrid();
+    renderProperties();
+  } else setStatus("Diese Größe passt nicht ins Raster.");
+}
+
+function bindResizeHandles(element, tile) {
+  const modes = [
+    ["se", (cell) => ({ col: tile.col, row: tile.row, colSpan: cell.col - tile.col + 1, rowSpan: cell.row - tile.row + 1 })],
+    ["e", (cell) => ({ col: tile.col, row: tile.row, colSpan: cell.col - tile.col + 1, rowSpan: tile.rowSpan || 1 })],
+    ["s", (cell) => ({ col: tile.col, row: tile.row, colSpan: tile.colSpan || 1, rowSpan: cell.row - tile.row + 1 })],
+    ["w", (cell) => ({ col: cell.col, row: tile.row, colSpan: tile.col + (tile.colSpan || 1) - cell.col, rowSpan: tile.rowSpan || 1 })],
+    ["n", (cell) => ({ col: tile.col, row: cell.row, colSpan: tile.colSpan || 1, rowSpan: tile.row + (tile.rowSpan || 1) - cell.row })]
+  ];
+  const grid = $("grid");
+  for (const [mode, calc] of modes) {
+    const handle = document.createElement("div");
+    handle.className = `resize-handle resize-${mode}`;
+    handle.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
+      event.preventDefault();
+      element.draggable = false;
+      handle.setPointerCapture(event.pointerId);
+      let preview = grid.querySelector(".grid-resize-preview");
+      if (!preview) {
+        preview = document.createElement("div");
+        preview.className = "grid-resize-preview";
+        grid.appendChild(preview);
+      }
+      const move = (moveEvent) => {
+        const cell = gridCellFromPointer(grid, moveEvent.clientX, moveEvent.clientY);
+        let { col, row, colSpan, rowSpan } = calc(cell);
+        if (event.shiftKey && mode === "se") {
+          const side = Math.max(colSpan, rowSpan);
+          colSpan = side;
+          rowSpan = side;
+        }
+        colSpan = Math.max(1, colSpan);
+        rowSpan = Math.max(1, rowSpan);
+        if (!fits(tile, col, row, colSpan, rowSpan, tile.tileId)) return;
+        preview.style.gridColumn = `${col + 1} / span ${colSpan}`;
+        preview.style.gridRow = `${row + 1} / span ${rowSpan}`;
+      };
+      const end = (endEvent) => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", end);
+        element.draggable = true;
+        if (preview.parentElement) preview.remove();
+        const cell = gridCellFromPointer(grid, endEvent.clientX, endEvent.clientY);
+        let { col, row, colSpan, rowSpan } = calc(cell);
+        if (event.shiftKey && mode === "se") {
+          const side = Math.max(colSpan, rowSpan);
+          colSpan = side;
+          rowSpan = side;
+        }
+        colSpan = Math.max(1, colSpan);
+        rowSpan = Math.max(1, rowSpan);
+        if (applyTileSpan(tile, col, row, colSpan, rowSpan)) {
+          markDirty();
+          renderGrid();
+          renderProperties();
+        } else setStatus("Größe passt nicht – Überlappung oder außerhalb des Rasters.");
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", end);
+    });
+    element.appendChild(handle);
+  }
+}
+
+function buildTileElement(tile, context) {
+  const mode = context.mode || "edit";
+  const live = context.stateByTileId ? context.stateByTileId[tile.tileId] : null;
+  const demoOn = state.editorIconDemo[tile.tileId];
   const element = document.createElement("div");
-  element.className = `tile ${tile.kind}${tile.kind === "label" && tile.size === "large" ? " large" : ""}${state.selected === tile.tileId ? " selected" : ""}`;
-  element.style.gridColumn = `${tile.col + 1} / span ${tile.colSpan || 1}`;
-  element.style.gridRow = `${tile.row + 1} / span ${tile.rowSpan || 1}`;
-  element.draggable = true;
-  element.title = `${KIND_NAMES[tile.kind]} – Doppelklick für Details`;
+  const spanW = tile.colSpan || 1;
+  const spanH = tile.rowSpan || 1;
+  element.className = `tile ${tile.kind}${tile.kind === "label" && tile.size === "large" ? " large" : ""}${mode === "edit" && state.selected === tile.tileId ? " selected" : ""}`;
+  element.style.gridColumn = `${tile.col + 1} / span ${spanW}`;
+  element.style.gridRow = `${tile.row + 1} / span ${spanH}`;
+  element.dataset.spanW = String(spanW);
+  element.dataset.spanH = String(spanH);
+  Object.entries(tilePreviewStyle(tile)).forEach(([key, val]) => element.style.setProperty(key, val));
+  if (live && live.color) element.style.background = colorForTile(live.color);
+  element.draggable = mode === "edit";
+  element.title = mode === "edit" ? `${KIND_NAMES[tile.kind]} – Doppelklick für Details` : "";
   if (tile.kind === "value") {
     const variable = variableById(tile.variableId);
     const control = tile.control || "switch";
     if (DIM_CONTROLS.includes(control)) element.classList.add("dim");
-    if (control === "battery") element.classList.add("battery");
-    const kicker = CONTROL_NAMES[control] || `${iconName(tile.icon)}${tile.actionId ? " · schaltbar" : ""}`;
-    const body = controlMarkup(control);
-    element.innerHTML = `<div class="kicker">${kicker}</div><div class="name"></div>${body || `<div class="value">${variable ? "12,3" : "—"}${tile.unit ? " " + escapeHtml(tile.unit) : ""}</div>`}`;
+    if (control === "battery") {
+      element.classList.add("battery");
+      const labelPos = tile.batteryLabel || "inside";
+      if (labelPos !== "inside") element.classList.add(`label-${labelPos}`, "label-outside");
+    }
+    const iconId = effectiveIcon(tile, live ? live.value : undefined, demoOn);
+    const kicker = CONTROL_NAMES[control] || `${iconName(iconId)}${tile.actionId ? " · schaltbar" : ""}`;
+    const body = controlMarkup(control, tile);
+    const displayText = live && live.text ? live.text : (variable ? "12,3" : "—");
+    element.innerHTML = `<div class="kicker">${kicker}</div><div class="name"></div>${body || `<div class="value">${escapeHtml(displayText)}${tile.unit ? " " + escapeHtml(tile.unit) : ""}</div>`}`;
     element.querySelector(".name").textContent = tile.title || (variable ? variable.name : "Wert");
-    bindControlPreview(element);
+    if (mode === "edit") bindControlPreview(element, tile);
   } else if (tile.kind === "nav") {
     element.innerHTML = `<div class="kicker">${tile.icon ? iconName(tile.icon) + " · " : ""}Seite</div><div class="name"></div>`;
     element.querySelector(".name").textContent = tile.title || pageTitleIn(tile.targetPage);
@@ -314,45 +498,93 @@ function renderTile(tile) {
     element.innerHTML = `<div class="kicker">Anzeigestatus</div><div class="name"></div><div class="text">Programm · WLAN · Laufzeit · Datenalter</div>`;
     element.querySelector(".name").textContent = tile.title || "Anzeige";
   } else if (tile.kind === "image") {
-    const image = state.images.find((item) => item.id === tile.imageId);
-    element.innerHTML = image ? `<img src="images/${image.id}.${image.ext}" alt="">` : `<div class="missing">Bild wählen</div>`;
+    if ((tile.imageSource || "catalog") === "media") {
+      const variable = variableById(tile.variableId);
+      element.innerHTML = `<div class="media-placeholder">Medien${variable ? ": " + escapeHtml(variable.name) : ""}</div>`;
+      if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
+        element.innerHTML = `<img src="${context.probeImageUrls[tile.tileId]}" alt="">`;
+      }
+    } else {
+      const image = state.images.find((item) => item.id === tile.imageId);
+      element.innerHTML = image ? `<img src="images/${image.id}.${image.ext}" alt="">` : `<div class="missing">Bild wählen</div>`;
+    }
   } else if (tile.kind === "camera") {
     element.classList.add("camera");
     const variable = variableById(tile.variableId);
-    element.innerHTML = `<div class="kicker">Kamera · Livebild</div><div class="name"></div><div class="camera-preview">${variable ? "Snapshot über Variable" : "Variable mit Bild-URL wählen"}</div>`;
-    element.querySelector(".name").textContent = tile.title || (variable ? variable.name : "Kamera");
+    if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
+      element.innerHTML = `<div class="kicker">Kamera</div><img src="${context.probeImageUrls[tile.tileId]}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1">`;
+    } else {
+      element.innerHTML = `<div class="kicker">Kamera · Livebild</div><div class="name"></div><div class="camera-preview">${variable ? "Snapshot über Variable" : "Variable mit Bild-URL wählen"}</div>`;
+      element.querySelector(".name").textContent = tile.title || (variable ? variable.name : "Kamera");
+    }
   }
-  element.addEventListener("click", (event) => {
-    event.stopPropagation();
-    state.selected = tile.tileId;
-    renderGrid();
-    renderProperties();
-  });
-  element.addEventListener("dblclick", (event) => {
-    event.stopPropagation();
-    state.selected = tile.tileId;
-    renderGrid();
-    renderProperties();
-    openDetails(tile);
-  });
-  element.addEventListener("dragstart", (event) => {
-    event.dataTransfer.setData("text/homedisplay-tile", tile.tileId);
-    event.dataTransfer.effectAllowed = "move";
-  });
-  bindDrop(element, tile.col, tile.row, tile);
+  if (mode === "edit") {
+    element.addEventListener("click", (event) => {
+      event.stopPropagation();
+      state.selected = tile.tileId;
+      renderGrid();
+      renderProperties();
+    });
+    element.addEventListener("dblclick", (event) => {
+      event.stopPropagation();
+      state.selected = tile.tileId;
+      renderGrid();
+      renderProperties();
+      openDetails(tile);
+    });
+    element.addEventListener("dragstart", (event) => {
+      event.dataTransfer.setData("text/homedisplay-tile", tile.tileId);
+      event.dataTransfer.effectAllowed = "move";
+    });
+    bindDrop(element, tile.col, tile.row, tile);
+    if (state.selected === tile.tileId) bindResizeHandles(element, tile);
+  }
+  if (mode === "probe" && tile.actionId) {
+    const action = document.createElement("button");
+    action.type = "button";
+    action.textContent = tile.actionKind === "dim" ? "Wert senden" : "Schalten";
+    action.addEventListener("click", (event) => {
+      event.stopPropagation();
+      sendProbeAction(tile);
+    });
+    element.appendChild(action);
+  }
+  if (mode === "probe" && tile.kind === "nav" && tile.targetPage) {
+    element.style.cursor = "pointer";
+    element.addEventListener("click", () => {
+      probe.page = tile.targetPage;
+      renderProbe();
+    });
+  }
+  if (spanW > 1 || spanH > 1) {
+    const badge = document.createElement("span");
+    badge.className = "span-badge";
+    badge.textContent = `${spanW}×${spanH}`;
+    element.appendChild(badge);
+  }
   return element;
 }
 
-function controlMarkup(control) {
+function renderTile(tile) {
+  return buildTileElement(tile, { mode: "edit" });
+}
+
+function controlMarkup(control, tile) {
   if (control === "dimSwitch") return `<div class="ctl"><span class="sw"></span><span class="ctl-label">Aus</span></div>`;
   if (control === "slider") return `<div class="ctl"><div class="track"><div class="fill"></div><div class="knob"></div></div></div>`;
   if (control === "combo") return `<div class="ctl"><span class="sw"></span><div class="track"><div class="fill"></div><div class="knob"></div></div></div>`;
-  if (control === "battery") return `<div class="battery"><div class="battery-body"><div class="battery-fill" style="width:72%"></div></div><div class="battery-cap"></div><span class="battery-pct">72 %</span></div>`;
+  if (control === "battery") {
+    const pad = tile && tile.batteryPad != null ? tile.batteryPad : 8;
+    const label = tile && tile.batteryLabel ? tile.batteryLabel : "inside";
+    const pctInside = label === "inside" ? `<span class="battery-pct">72 %</span>` : "";
+    const pctOutside = label !== "inside" ? `<span class="battery-pct">72 %</span>` : "";
+    return `<div class="battery" style="padding:${pad}px">${pctOutside}<div class="battery-body"><div class="battery-fill" style="width:72%"></div></div><div class="battery-cap"></div>${pctInside}</div>`;
+  }
   return "";
 }
 
 /* Vorschau im Editor: der Griff lässt sich ziehen, die Leiste selbst nicht. Der Wert wird nicht gespeichert. */
-function bindControlPreview(element) {
+function bindControlPreview(element, tile) {
   const knob = element.querySelector(".knob");
   const track = element.querySelector(".track");
   const fill = element.querySelector(".fill");
@@ -373,6 +605,10 @@ function bindControlPreview(element) {
       event.stopPropagation();
       sw.classList.toggle("on");
       if (label) label.textContent = sw.classList.contains("on") ? "Ein" : "Aus";
+      if (tile && (tile.iconMode || "static") === "toggle") {
+        state.editorIconDemo[tile.tileId] = sw.classList.contains("on");
+        renderGrid();
+      }
     });
   }
   if (!knob || !track) return;
@@ -415,11 +651,20 @@ function bindDrop(target, col, row, existing) {
       return;
     }
     if (variableId) {
-      if (existing && (existing.kind === "value" || existing.kind === "camera")) {
-        assignVariable(existing, variableById(variableId));
+      const variable = variableById(variableId);
+      if (existing && existing.kind === "image" && variable && variable.type === MEDIA_TYPE) {
+        assignMediaVariable(existing, variable);
         return;
       }
-      if (!existing) addTile("value", col, row, variableById(variableId));
+      if (existing && (existing.kind === "value" || existing.kind === "camera")) {
+        assignVariable(existing, variable);
+        return;
+      }
+      if (!existing && variable && variable.type === MEDIA_TYPE) {
+        addTile("image", col, row, variable);
+        return;
+      }
+      if (!existing) addTile("value", col, row, variable);
       return;
     }
     if (kind && !existing) addTile(kind, col, row, null, control);
@@ -496,7 +741,14 @@ function addTile(kind, col, row, variable, control) {
       tile.rowSpan = 1;
     }
   } else if (kind === "image") {
-    tile.imageId = state.images[0] ? state.images[0].id : "";
+    if (variable && variable.type === MEDIA_TYPE) {
+      tile.imageSource = "media";
+      tile.variableId = variable.id;
+      tile.title = tile.title || variable.name;
+    } else {
+      tile.imageSource = "catalog";
+      tile.imageId = state.images[0] ? state.images[0].id : "";
+    }
   } else if (kind === "camera") {
     tile.title = "Kamera";
     tile.variableId = 0;
@@ -519,7 +771,20 @@ function addTile(kind, col, row, variable, control) {
   renderGrid();
   renderProperties();
   renderVariableTree();
-  if (kind === "image" && !tile.imageId) openImages();
+  if (kind === "image" && tile.imageSource !== "media" && !tile.imageId) openImages();
+}
+
+function assignMediaVariable(tile, variable, silent) {
+  if (!variable || variable.type !== MEDIA_TYPE) return;
+  tile.imageSource = "media";
+  tile.variableId = variable.id;
+  if (!tile.title) tile.title = variable.name;
+  delete tile.imageId;
+  if (!silent) {
+    markDirty();
+    renderGrid();
+    renderProperties();
+  }
 }
 
 function assignVariable(tile, variable, silent) {
@@ -632,8 +897,20 @@ function renderProperties() {
   $("p-row").value = tile.row + 1;
   $("p-colspan").value = tile.colSpan || 1;
   $("p-rowspan").value = tile.rowSpan || 1;
+  $("p-colspan").max = state.layout.columns;
+  $("p-rowspan").max = state.layout.rows;
+  const iconMode = tile.iconMode || "static";
+  if ($("p-iconmode")) {
+    $("p-iconmode").value = iconMode;
+    $("p-icon-static").classList.toggle("hidden", iconMode === "toggle");
+    $("p-icon-toggle").classList.toggle("hidden", iconMode !== "toggle");
+  }
   fillIconSelect($("p-icon"), tile.kind === "nav");
+  fillIconSelect($("p-iconon"));
+  fillIconSelect($("p-iconoff"));
   $("p-icon").value = tile.icon || "";
+  if ($("p-iconon")) $("p-iconon").value = tile.iconOn || "lightOn";
+  if ($("p-iconoff")) $("p-iconoff").value = tile.iconOff || "lightOff";
   const variable = variableById(tile.variableId);
   $("p-variable").value = variable ? `${variable.path ? variable.path + " / " : ""}${variable.name} (${variable.id})` : "";
   $("p-unit").value = tile.unit || "";
@@ -646,6 +923,9 @@ function renderProperties() {
   };
   $("p-control-hint").textContent = hints[tile.control] || "";
   $("p-control-hint").classList.toggle("hidden", !hints[tile.control]);
+  $("p-battery-wrap").classList.toggle("hidden", tile.control !== "battery");
+  if ($("p-batterypad")) $("p-batterypad").value = tile.batteryPad != null ? tile.batteryPad : 8;
+  if ($("p-batterylabel")) $("p-batterylabel").value = tile.batteryLabel || "inside";
   $("p-action").checked = Boolean(tile.actionId);
   $("p-action").disabled = !(variable && variable.action);
   $("p-confirm").checked = Boolean(tile.confirm);
@@ -654,11 +934,23 @@ function renderProperties() {
   $("p-target").value = tile.targetPage || "";
   $("p-text").value = tile.text || "";
   $("p-size").value = tile.size || "small";
+  const imgSource = tile.imageSource || "catalog";
+  if ($("p-imagesource")) {
+    $("p-imagesource").value = imgSource;
+    $("p-image-catalog").classList.toggle("hidden", imgSource === "media");
+    $("p-image-media").classList.toggle("hidden", imgSource !== "media");
+  }
   fillImageSelect($("p-image"));
   $("p-image").value = tile.imageId || "";
   const image = state.images.find((item) => item.id === tile.imageId);
   $("p-image-preview").src = image ? `images/${image.id}.${image.ext}` : "";
-  $("p-image-preview").classList.toggle("hidden", !image);
+  $("p-image-preview").classList.toggle("hidden", !image || imgSource === "media");
+  const mediaVar = variableById(tile.variableId);
+  if ($("p-image-variable")) {
+    $("p-image-variable").value = imgSource === "media" && mediaVar
+      ? `${mediaVar.path ? mediaVar.path + " / " : ""}${mediaVar.name} (${mediaVar.id})`
+      : "";
+  }
 }
 
 function applyProperties() {
@@ -677,7 +969,19 @@ function applyProperties() {
   } else {
     setStatus("Position oder Größe passt nicht ins Raster.");
   }
-  if (tile.kind === "value" || tile.kind === "nav") tile.icon = $("p-icon").value;
+  if (tile.kind === "value" || tile.kind === "nav") {
+    if (tile.kind === "value" && $("p-iconmode") && $("p-iconmode").value === "toggle") {
+      tile.iconMode = "toggle";
+      tile.iconOn = $("p-iconon").value;
+      tile.iconOff = $("p-iconoff").value;
+    } else {
+      delete tile.iconMode;
+      delete tile.iconOn;
+      delete tile.iconOff;
+      tile.icon = $("p-icon").value;
+    }
+  }
+  if (tile.kind === "nav") tile.icon = $("p-icon").value;
   if (tile.kind === "value") {
     tile.unit = $("p-unit").value;
     tile.decimals = Number($("p-decimals").value) || 0;
@@ -689,6 +993,8 @@ function applyProperties() {
       tile.valueMin = tile.valueMin ?? 0;
       tile.valueMax = tile.valueMax ?? 100;
       if (!tile.unit) tile.unit = "%";
+      tile.batteryPad = Number($("p-batterypad").value) || 8;
+      tile.batteryLabel = $("p-batterylabel").value || "inside";
       delete tile.actionId;
       delete tile.actionKind;
       tile.confirm = false;
@@ -713,7 +1019,17 @@ function applyProperties() {
     tile.text = $("p-text").value;
     tile.size = $("p-size").value;
   }
-  if (tile.kind === "image") tile.imageId = $("p-image").value;
+  if (tile.kind === "image") {
+    const source = $("p-imagesource").value || "catalog";
+    if (source === "media") {
+      tile.imageSource = "media";
+      delete tile.imageId;
+    } else {
+      tile.imageSource = "catalog";
+      tile.imageId = $("p-image").value;
+      delete tile.variableId;
+    }
+  }
   markDirty();
   renderGrid();
   renderProperties();
@@ -728,9 +1044,42 @@ $("p-control").addEventListener("change", () => {
   }
   applyProperties();
 });
-for (const id of ["p-title", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-size", "p-image"]) {
-  $(id).addEventListener("change", applyProperties);
+for (const id of ["p-title", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-iconmode", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-size", "p-image", "p-imagesource", "p-batterypad", "p-batterylabel"]) {
+  if ($(id)) $(id).addEventListener("change", applyProperties);
 }
+if ($("p-iconmode")) {
+  $("p-iconmode").addEventListener("change", () => {
+    $("p-icon-static").classList.toggle("hidden", $("p-iconmode").value === "toggle");
+    $("p-icon-toggle").classList.toggle("hidden", $("p-iconmode").value !== "toggle");
+    applyProperties();
+  });
+}
+if ($("p-imagesource")) {
+  $("p-imagesource").addEventListener("change", () => {
+    $("p-image-catalog").classList.toggle("hidden", $("p-imagesource").value === "media");
+    $("p-image-media").classList.toggle("hidden", $("p-imagesource").value !== "media");
+    applyProperties();
+  });
+}
+for (const id of ["resize-1x1", "resize-2x1", "resize-1x2", "resize-2x2", "resize-full-width"]) {
+  const button = $(id);
+  if (!button) continue;
+  button.addEventListener("click", () => {
+    const tile = selectedTile();
+    if (!tile) return;
+    if (id === "resize-1x1") resizeTilePreset(1, 1);
+    if (id === "resize-2x1") resizeTilePreset(2, 1);
+    if (id === "resize-1x2") resizeTilePreset(1, 2);
+    if (id === "resize-2x2") resizeTilePreset(2, 2);
+    if (id === "resize-full-width") resizeTilePreset(state.layout.columns, tile.rowSpan || 1);
+  });
+}
+$("display-profile").addEventListener("change", () => {
+  if (!state.layout) return;
+  state.layout.displayProfile = $("display-profile").value;
+  applyGridAspect();
+  markDirty();
+});
 $("p-details").addEventListener("click", () => {
   const tile = selectedTile();
   if (tile) openDetails(tile);
@@ -763,7 +1112,11 @@ function openDetails(tile) {
   const grid = document.createElement("div");
   grid.className = "row";
   body.appendChild(grid);
-  for (const [label, key, value, min, max] of [["Spalte", "col", tile.col + 1, 1, state.layout.columns], ["Zeile", "row", tile.row + 1, 1, state.layout.rows], ["Breite", "colSpan", tile.colSpan || 1, 1, 4], ["Höhe", "rowSpan", tile.rowSpan || 1, 1, 6]]) {
+  const spanHint = document.createElement("p");
+  spanHint.className = "hint";
+  spanHint.textContent = "Breite und Höhe = Anzahl Rasterfelder; am Raster ziehen oder hier eintragen.";
+  body.appendChild(spanHint);
+  for (const [label, key, value, min, max] of [["Spalte", "col", tile.col + 1, 1, state.layout.columns], ["Zeile", "row", tile.row + 1, 1, state.layout.rows], ["Breite", "colSpan", tile.colSpan || 1, 1, state.layout.columns], ["Höhe", "rowSpan", tile.rowSpan || 1, 1, state.layout.rows]]) {
     const wrap = document.createElement("label");
     wrap.textContent = label;
     fields[key] = number(value, min, max);
@@ -930,9 +1283,13 @@ function openDetails(tile) {
 function openLayoutDialog() {
   const dialog = $("layout-dialog");
   $("l-name").value = state.layout.name;
+  fillProfileSelect($("l-display-profile"), state.layout.displayProfile || defaultProfileId());
   $("l-columns").value = state.layout.columns;
   $("l-rows").value = state.layout.rows;
   $("l-tabs").checked = state.layout.showTabs;
+  const prof = layoutProfile(state.layout);
+  $("l-columns").max = prof.maxColumns;
+  $("l-rows").max = prof.maxRows;
   const list = $("l-pages");
   list.innerHTML = "";
   for (const [id, name] of PAGES) {
@@ -957,8 +1314,10 @@ function openLayoutDialog() {
   dialog.onclose = () => {
     if (dialog.returnValue !== "ok") return;
     state.layout.name = $("l-name").value.trim() || state.layout.name;
-    const columns = Math.min(4, Math.max(1, Number($("l-columns").value) || 2));
-    const rows = Math.min(6, Math.max(1, Number($("l-rows").value) || 4));
+    state.layout.displayProfile = $("l-display-profile").value || defaultProfileId();
+    const prof = layoutProfile(state.layout);
+    const columns = Math.min(prof.maxColumns, Math.max(1, Number($("l-columns").value) || prof.defaultColumns));
+    const rows = Math.min(prof.maxRows, Math.max(1, Number($("l-rows").value) || prof.defaultRows));
     const pages = [];
     for (const wrap of list.querySelectorAll("label")) {
       const [check, title] = wrap.querySelectorAll("input");
@@ -1013,13 +1372,20 @@ function escapeHtml(text) {
 }
 
 function renderVariableTree() {
+  const scrollHost = $("variable-scroll");
+  if (scrollHost) state.variableTreeScroll = scrollHost.scrollTop;
   const tree = $("variable-tree");
+  for (const details of tree.querySelectorAll("details.group")) {
+    const key = details.dataset.groupKey;
+    if (key) state.variableTreeOpen[key] = details.open;
+  }
   tree.innerHTML = "";
   const needle = $("variable-search").value.trim().toLowerCase();
   const onlyActions = $("only-actions").checked;
   const groups = new Map();
   for (const variable of state.variables) {
     if (onlyActions && !variable.action) continue;
+    if (variable.type !== MEDIA_TYPE && variable.type > 3) continue;
     if (needle && !`${variable.name} ${variable.path} ${variable.id}`.toLowerCase().includes(needle)) continue;
     const key = variable.path || "Ohne Kategorie";
     if (!groups.has(key)) groups.set(key, []);
@@ -1029,7 +1395,13 @@ function renderVariableTree() {
   for (const key of keys) {
     const details = document.createElement("details");
     details.className = "group";
-    details.open = Boolean(needle) || keys.length <= 3;
+    details.dataset.groupKey = key;
+    details.open = state.variableTreeOpen[key] !== undefined
+      ? Boolean(state.variableTreeOpen[key])
+      : Boolean(needle) || keys.length <= 3;
+    details.addEventListener("toggle", () => {
+      state.variableTreeOpen[key] = details.open;
+    });
     const summary = document.createElement("summary");
     summary.innerHTML = `${escapeHtml(key)} <small>(${groups.get(key).length})</small>`;
     details.appendChild(summary);
@@ -1038,7 +1410,8 @@ function renderVariableTree() {
       row.className = "variable" + (state.pickedVariable && state.pickedVariable.id === variable.id ? " selected" : "");
       row.draggable = true;
       row.title = `${variable.path ? variable.path + " / " : ""}${variable.name}\nID ${variable.id}${variable.profile ? "\nProfil " + variable.profile : ""}`;
-      row.innerHTML = `<span></span><span class="meta">${TYPE_NAMES[variable.type] || ""}${variable.action ? ' <span class="badge">schaltbar</span>' : ""}</span>`;
+      const mediaBadge = variable.type === MEDIA_TYPE ? ' <span class="badge badge-media">Medien</span>' : "";
+      row.innerHTML = `<span></span><span class="meta">${TYPE_NAMES[variable.type] || ""}${mediaBadge}${variable.action ? ' <span class="badge">schaltbar</span>' : ""}</span>`;
       row.firstChild.textContent = variable.name;
       row.addEventListener("dragstart", (event) => {
         event.dataTransfer.setData("text/homedisplay-variable", String(variable.id));
@@ -1046,24 +1419,36 @@ function renderVariableTree() {
       });
       row.addEventListener("click", () => {
         const tile = selectedTile();
+        if (tile && tile.kind === "image" && variable.type === MEDIA_TYPE) {
+          assignMediaVariable(tile, variable);
+          return;
+        }
         if (tile && tile.kind === "value") {
           assignVariable(tile, variable);
           return;
         }
         state.pickedVariable = state.pickedVariable && state.pickedVariable.id === variable.id ? null : variable;
-        setHint(state.pickedVariable ? `„${variable.name}“ gewählt – freie Zelle anklicken, um eine Wertkachel anzulegen.` : "");
+        const hint = variable.type === MEDIA_TYPE
+          ? `„${variable.name}“ gewählt – auf Bild-Kachel oder freie Zelle.`
+          : `„${variable.name}“ gewählt – freie Zelle anklicken, um eine Wertkachel anzulegen.`;
+        setHint(state.pickedVariable ? hint : "");
         renderVariableTree();
       });
       row.addEventListener("dblclick", () => {
-        const cell = freeCell(1, 1);
-        if (cell) addTile("value", cell.col, cell.row, variable);
-        else setStatus("Auf dieser Seite ist keine Zelle frei.");
+        const cell = freeCell(variable.type === MEDIA_TYPE ? 1 : 1, 1);
+        if (!cell) {
+          setStatus("Auf dieser Seite ist keine Zelle frei.");
+          return;
+        }
+        if (variable.type === MEDIA_TYPE) addTile("image", cell.col, cell.row, variable);
+        else addTile("value", cell.col, cell.row, variable);
       });
       details.appendChild(row);
     }
     tree.appendChild(details);
   }
   if (!keys.length) tree.innerHTML = '<div class="hint">Keine Variablen gefunden.</div>';
+  if (scrollHost) scrollHost.scrollTop = state.variableTreeScroll;
 }
 
 $("variable-search").addEventListener("input", renderVariableTree);
@@ -1101,7 +1486,11 @@ function validateLayout(layout) {
       }
       if (tile.kind === "nav" && !layout.pages.some((item) => item.id === tile.targetPage)) throw new Error(`Der Seitenwechsler „${tile.title || tile.tileId}“ zeigt auf eine fehlende Seite.`);
       if (tile.kind === "label" && !(tile.text || "").trim()) throw new Error("Eine Textkachel ist leer.");
-      if (tile.kind === "image" && !tile.imageId) throw new Error("Eine Bildkachel hat kein Bild.");
+      if (tile.kind === "image") {
+        if ((tile.imageSource || "catalog") === "media") {
+          if (!tile.variableId) throw new Error("Eine Bildkachel (Medien) braucht eine Medien-Variable.");
+        } else if (!tile.imageId) throw new Error("Eine Bildkachel hat kein Bild.");
+      }
     }
     if (page.backgroundId && !state.images.some((image) => image.id === page.backgroundId)) {
       throw new Error(`Die Seite „${page.title || page.id}“ verweist auf ein gelöschtes Hintergrundbild.`);
@@ -1115,7 +1504,21 @@ async function store(publish) {
     state.layout.columns = Number($("columns").value) || 2;
     state.layout.rows = Number($("rows").value) || 4;
     state.layout.showTabs = $("show-tabs").checked;
+    state.layout.displayProfile = $("display-profile").value || defaultProfileId();
     validateLayout(state.layout);
+    if (publish) {
+      try {
+        const settings = await call("settings");
+        for (const panel of settings.panels || []) {
+          if (panel.displayProfile && panel.displayProfile !== state.layout.displayProfile) {
+            setHint(`Hinweis: Ansicht-Profil „${state.layout.displayProfile}“ weicht von Anzeige ${panel.name} ab (${panel.displayProfile}).`);
+            break;
+          }
+        }
+      } catch (error) {
+        /* ignore */
+      }
+    }
     const result = await call(publish ? "publish" : "save", { layout: state.layout });
     if (!result.ok) throw new Error(result.error || "Speichern fehlgeschlagen");
     const previousId = state.layout.id;
@@ -1135,18 +1538,29 @@ $("publish").addEventListener("click", () => store(true));
 $("tb-save").addEventListener("click", () => store(false));
 $("tb-publish").addEventListener("click", () => store(true));
 $("new-layout").addEventListener("click", () => newLayout(prompt("Name der neuen Ansicht", "Neue Ansicht") || "Neue Ansicht"));
-$("template-layout").addEventListener("click", async () => {
-  try {
-    const layout = await call("template", { name: prompt("Name der neuen Ansicht", "Übersicht") || "Übersicht" });
-    layout.id = "";
-    layout.version = 0;
-    layout.published = false;
-    selectLayout(layout);
-    markDirty();
-    setStatus("Übersicht geladen. Variablen zuordnen, dann speichern.");
-  } catch (error) {
-    setStatus(error.message);
-  }
+$("template-layout").addEventListener("click", () => {
+  fillProfileSelect($("t-display-profile"), state.layout ? state.layout.displayProfile : defaultProfileId());
+  $("t-name").value = "Übersicht";
+  const dialog = $("template-dialog");
+  dialog.returnValue = "";
+  dialog.showModal();
+  dialog.onclose = async () => {
+    if (dialog.returnValue !== "ok") return;
+    try {
+      const layout = await call("template", {
+        name: $("t-name").value.trim() || "Übersicht",
+        displayProfile: $("t-display-profile").value || defaultProfileId()
+      });
+      layout.id = "";
+      layout.version = 0;
+      layout.published = false;
+      selectLayout(layout);
+      markDirty();
+      setStatus("Übersicht geladen. Variablen zuordnen, dann speichern.");
+    } catch (error) {
+      setStatus(error.message);
+    }
+  };
 });
 $("duplicate-layout").addEventListener("click", () => {
   if (!state.layout) return;
@@ -1393,73 +1807,147 @@ $("open-settings").addEventListener("click", openSettings);
 
 /* ---------- Prüfen ---------- */
 
-let probe = { page: "", snapshot: null };
+let probe = { page: "", snapshot: null, probeImageUrls: {}, timer: null, lastLive: "" };
+
+function scaleProbeViewport() {
+  const viewport = $("probe-viewport");
+  const screen = $("probe-screen");
+  if (!viewport || !screen) return;
+  const profile = probe.snapshot && probe.snapshot.layout ? layoutProfile(probe.snapshot.layout) : DISPLAY_PROFILES[defaultProfileId()];
+  screen.style.width = `${profile.width}px`;
+  screen.style.height = `${profile.height}px`;
+  const scale = Math.min(1, (viewport.clientWidth - 8) / profile.width);
+  screen.style.transform = scale < 1 ? `scale(${scale})` : "";
+  screen.style.marginBottom = scale < 1 ? `${-(profile.height * (1 - scale))}px` : "";
+}
+
+function updateProbeValuesOnly() {
+  if (!probe.snapshot || !probe.snapshot.state) return;
+  const values = {};
+  for (const tile of probe.snapshot.state.tiles || []) values[tile.tileId] = tile;
+  for (const element of $("probe-grid").querySelectorAll(".tile")) {
+    const tileId = element.dataset.tileId;
+    if (!tileId || !values[tileId]) continue;
+    const live = values[tileId];
+    const valueEl = element.querySelector(".value");
+    if (valueEl && live.text) valueEl.textContent = live.text;
+    if (live.color) element.style.background = colorForTile(live.color);
+  }
+}
+
+async function loadProbeImages(layout, panelId) {
+  probe.probeImageUrls = {};
+  for (const page of layout.pages || []) {
+    for (const tile of page.tiles || []) {
+      if (tile.kind === "camera" || (tile.kind === "image" && tile.imageSource === "media")) {
+        try {
+          const result = await call("probeImage", { id: panelId, tileId: tile.tileId });
+          if (result.ok && result.data) {
+            probe.probeImageUrls[tile.tileId] = `data:${result.mime || "image/jpeg"};base64,${result.data}`;
+          }
+        } catch (error) {
+          /* optional */
+        }
+      }
+    }
+  }
+}
 
 function renderProbe() {
-  const stage = $("probe-stage");
+  const grid = $("probe-grid");
   const pages = $("probe-pages");
-  stage.innerHTML = "";
+  const tabs = $("probe-tabs");
+  grid.innerHTML = "";
   pages.innerHTML = "";
+  tabs.innerHTML = "";
   const layout = probe.snapshot && probe.snapshot.layout;
   if (!layout || !(layout.pages || []).length) {
-    stage.innerHTML = '<div class="hint">Diese Anzeige hat keine Ansicht.</div>';
+    grid.innerHTML = '<div class="hint" style="color:#9fb2c8;padding:12px">Diese Anzeige hat keine Ansicht.</div>';
     return;
   }
   if (!probe.page || !(layout.pages || []).some((page) => page.id === probe.page)) probe.page = layout.pages[0].id;
   const values = {};
   for (const tile of (probe.snapshot.state && probe.snapshot.state.tiles) || []) values[tile.tileId] = tile;
-  for (const page of layout.pages) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = page.title || page.id;
-    if (page.id === probe.page) button.classList.add("active");
-    button.addEventListener("click", () => {
-      probe.page = page.id;
-      renderProbe();
-    });
-    pages.appendChild(button);
-  }
-  const current = layout.pages.find((page) => page.id === probe.page);
-  stage.style.gridTemplateColumns = `repeat(${layout.columns || 2}, minmax(0, 1fr))`;
-  for (const tile of (current && current.tiles) || []) {
-    const card = document.createElement("div");
-    card.className = "probe-tile";
-    card.style.gridColumn = `${(tile.col || 0) + 1} / span ${tile.colSpan || 1}`;
-    card.style.gridRow = `${(tile.row || 0) + 1} / span ${tile.rowSpan || 1}`;
-    const title = document.createElement("strong");
-    title.textContent = tile.title || tile.kind || "Kachel";
-    const value = document.createElement("div");
-    value.className = "probe-value";
-    const live = values[tile.tileId];
-    value.textContent = live ? live.text : (tile.kind === "value" ? "—" : "");
-    card.append(title, value);
-    if (tile.kind === "nav" && tile.targetPage) {
-      card.style.cursor = "pointer";
-      card.addEventListener("click", () => {
-        probe.page = tile.targetPage;
+  const profile = layoutProfile({ displayProfile: layout.displayProfile });
+  $("probe-meta").textContent = `Panel-Vorschau · ${profile.width}×${profile.height}`;
+  if (layout.showTabs) {
+    tabs.classList.remove("hidden");
+    for (const page of layout.pages) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = page.title || page.id;
+      if (page.id === probe.page) button.classList.add("active");
+      button.addEventListener("click", () => {
+        probe.page = page.id;
         renderProbe();
       });
+      tabs.appendChild(button);
     }
-    if (tile.actionId) {
-      const action = document.createElement("button");
-      action.type = "button";
-      action.textContent = tile.actionKind === "dim" ? "Wert senden" : "Schalten";
-      action.addEventListener("click", () => sendProbeAction(tile));
-      card.appendChild(action);
+  } else {
+    tabs.classList.add("hidden");
+    for (const page of layout.pages) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = page.title || page.id;
+      if (page.id === probe.page) button.classList.add("active");
+      button.addEventListener("click", () => {
+        probe.page = page.id;
+        renderProbe();
+      });
+      pages.appendChild(button);
     }
-    stage.appendChild(card);
   }
+  const current = layout.pages.find((page) => page.id === probe.page);
+  grid.style.gridTemplateColumns = `repeat(${layout.columns || 2}, 1fr)`;
+  grid.style.gridTemplateRows = `repeat(${layout.rows || 4}, 1fr)`;
+  for (const tile of (current && current.tiles) || []) {
+    const element = buildTileElement(tile, {
+      mode: "probe",
+      stateByTileId: values,
+      probeImageUrls: probe.probeImageUrls
+    });
+    element.dataset.tileId = tile.tileId;
+    grid.appendChild(element);
+  }
+  scaleProbeViewport();
+  probe.lastLive = new Date().toLocaleTimeString("de-DE");
 }
 
-async function loadProbe() {
+async function loadProbe(fullRender) {
   const id = Number($("probe-panel").value);
   if (!id) {
     probe.snapshot = null;
     renderProbe();
     return;
   }
+  const previous = probe.snapshot;
   probe.snapshot = await call("inspect", { id });
+  if (fullRender === false && previous && probe.snapshot.state && probe.snapshot.state.unchanged) {
+    updateProbeValuesOnly();
+    return;
+  }
+  if (probe.snapshot.layout) await loadProbeImages(probe.snapshot.layout, id);
   renderProbe();
+}
+
+function stopProbeTimer() {
+  if (probe.timer) {
+    clearInterval(probe.timer);
+    probe.timer = null;
+  }
+}
+
+function startProbeTimer() {
+  stopProbeTimer();
+  if (!$("probe-live").checked) return;
+  const sec = Math.max(2, Number(probe.snapshot && probe.snapshot.config && probe.snapshot.config.stateIntervalSec) || 3);
+  probe.timer = setInterval(() => {
+    if (!$("probe-dialog").open) {
+      stopProbeTimer();
+      return;
+    }
+    loadProbe(false).catch(() => {});
+  }, sec * 1000);
 }
 
 async function sendProbeAction(tile) {
@@ -1499,19 +1987,29 @@ async function openProbe() {
       setStatus("Noch keine Anzeige-Instanz angelegt.");
       return;
     }
-    await loadProbe();
+    await loadProbe(true);
   } catch (error) {
     setStatus(error.message);
     return;
   }
   $("probe-dialog").showModal();
+  startProbeTimer();
 }
+
+$("probe-dialog").addEventListener("close", stopProbeTimer);
+$("probe-live").addEventListener("change", () => {
+  if ($("probe-dialog").open) startProbeTimer();
+  else stopProbeTimer();
+});
+window.addEventListener("resize", () => {
+  if ($("probe-dialog").open) scaleProbeViewport();
+});
 
 $("probe-panel").addEventListener("change", () => {
   probe.page = "";
-  loadProbe().catch((error) => setStatus(error.message));
+  loadProbe(true).catch((error) => setStatus(error.message));
 });
-$("probe-refresh").addEventListener("click", () => loadProbe().catch((error) => setStatus(error.message)));
+$("probe-refresh").addEventListener("click", () => loadProbe(true).catch((error) => setStatus(error.message)));
 $("open-probe").addEventListener("click", openProbe);
 
 /* ---------- Start ---------- */
@@ -1520,7 +2018,8 @@ async function start() {
   try {
     state.catalog = await call("catalog");
     const variables = await call("variables");
-    state.variables = (variables.variables || []).filter((variable) => variable.type >= 0 && variable.type <= 3);
+    state.variables = (variables.variables || []).filter((variable) => variable.type >= 0 && (variable.type <= 3 || variable.type === MEDIA_TYPE));
+    fillProfileSelect($("display-profile"), defaultProfileId());
     await loadImages();
     renderVariableTree();
     if (state.catalog.layouts[0]) selectLayout(state.catalog.layouts[0]);

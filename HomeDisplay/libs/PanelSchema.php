@@ -19,7 +19,24 @@ final class HomeDisplayPanelSchema
         'system' => 'System',
     ];
 
-    public const ICONS = ['energy', 'temperature', 'light', 'shutter', 'pump', 'valve', 'alarm', 'home', 'clock', 'info'];
+    public const ICONS = [
+        'energy', 'temperature', 'light', 'shutter', 'pump', 'valve', 'alarm', 'home', 'clock', 'info',
+        'lightOn', 'lightOff', 'humidity', 'sun', 'moon', 'water', 'heat', 'cool', 'fan', 'door', 'lock', 'plug', 'batteryIcon', 'wifi', 'car',
+    ];
+
+    public const BATTERY_LABELS = ['inside', 'left', 'right', 'top', 'bottom'];
+
+    public const DISPLAY_PROFILES = [
+        'waveshare-5b-1024x600' => [
+            'label' => 'Waveshare 5B (1024×600)',
+            'width' => 1024,
+            'height' => 600,
+            'defaultColumns' => 3,
+            'defaultRows' => 4,
+            'maxColumns' => 4,
+            'maxRows' => 6,
+        ],
+    ];
 
     /** system: Diagnosekachel, die das Panel selbst mit Firmware, WLAN, Laufzeit und Datenalter füllt. */
     public const KINDS = ['value', 'nav', 'label', 'image', 'camera', 'separator', 'system'];
@@ -41,13 +58,18 @@ final class HomeDisplayPanelSchema
         if (trim((string) ($layout['name'] ?? '')) === '') {
             throw new InvalidArgumentException('Ansicht ohne Namen.');
         }
+        $profileId = (string) ($layout['displayProfile'] ?? self::defaultProfileId());
+        self::profile($profileId);
+        $profile = self::profile($profileId);
+        $maxColumns = (int) $profile['maxColumns'];
+        $maxRows = (int) $profile['maxRows'];
         $columns = (int) ($layout['columns'] ?? 0);
-        if ($columns < 1 || $columns > 4) {
-            throw new InvalidArgumentException('Das Raster hat eine bis vier Spalten.');
+        if ($columns < 1 || $columns > $maxColumns) {
+            throw new InvalidArgumentException('Das Raster hat zu viele Spalten für das Display-Profil.');
         }
         $rows = (int) ($layout['rows'] ?? 4);
-        if ($rows < 1 || $rows > self::MAX_ROWS) {
-            throw new InvalidArgumentException('Das Raster hat eine bis sechs Zeilen.');
+        if ($rows < 1 || $rows > $maxRows) {
+            throw new InvalidArgumentException('Das Raster hat zu viele Zeilen für das Display-Profil.');
         }
         $pages = $layout['pages'] ?? null;
         if (!is_array($pages) || $pages === []) {
@@ -171,9 +193,16 @@ final class HomeDisplayPanelSchema
                     $public['size'] = (string) ($tile['size'] ?? 'small');
                 }
                 if ($kind === 'image') {
-                    $imageId = (string) ($tile['imageId'] ?? '');
-                    $public['imageId'] = $imageId;
-                    $public['imageFile'] = HomeDisplayCatalogStore::imageFileName($imageId);
+                    $source = (string) ($tile['imageSource'] ?? 'catalog');
+                    if ($source === 'media') {
+                        $public['imageSource'] = 'media';
+                        $public['mediaFile'] = self::mediaFileName((string) $tile['tileId']);
+                    } else {
+                        $imageId = (string) ($tile['imageId'] ?? '');
+                        $public['imageSource'] = 'catalog';
+                        $public['imageId'] = $imageId;
+                        $public['imageFile'] = HomeDisplayCatalogStore::imageFileName($imageId);
+                    }
                 }
                 if ($kind === 'camera') {
                     $public['cameraFile'] = self::cameraFileName((string) $tile['tileId']);
@@ -203,6 +232,15 @@ final class HomeDisplayPanelSchema
                     if ($control === 'battery') {
                         $public['valueMin'] = (float) ($tile['valueMin'] ?? 0);
                         $public['valueMax'] = (float) ($tile['valueMax'] ?? 100);
+                        $public['batteryPad'] = max(0, min(48, (int) ($tile['batteryPad'] ?? 8)));
+                        $label = (string) ($tile['batteryLabel'] ?? 'inside');
+                        $public['batteryLabel'] = in_array($label, self::BATTERY_LABELS, true) ? $label : 'inside';
+                    }
+                    $iconMode = (string) ($tile['iconMode'] ?? 'static');
+                    if ($iconMode === 'toggle') {
+                        $public['iconMode'] = 'toggle';
+                        $public['iconOn'] = (string) ($tile['iconOn'] ?? 'lightOn');
+                        $public['iconOff'] = (string) ($tile['iconOff'] ?? 'lightOff');
                     }
                 }
                 $tiles[] = $public;
@@ -219,6 +257,8 @@ final class HomeDisplayPanelSchema
             }
             $pages[] = $publicPage;
         }
+        $profileId = (string) ($layout['displayProfile'] ?? self::defaultProfileId());
+        $profile = self::profile($profileId);
         return [
             'id' => (string) ($layout['id'] ?? ''),
             'name' => (string) ($layout['name'] ?? ''),
@@ -226,8 +266,25 @@ final class HomeDisplayPanelSchema
             'columns' => max(1, (int) ($layout['columns'] ?? 2)),
             'rows' => max(1, (int) ($layout['rows'] ?? 4)),
             'showTabs' => !array_key_exists('showTabs', $layout) || (bool) $layout['showTabs'],
+            'displayProfile' => $profileId,
+            'targetWidth' => (int) $profile['width'],
+            'targetHeight' => (int) $profile['height'],
             'pages' => $pages,
         ];
+    }
+
+    public static function defaultProfileId(): string
+    {
+        return 'waveshare-5b-1024x600';
+    }
+
+    /** @return array<string, mixed> */
+    public static function profile(string $id): array
+    {
+        if (!isset(self::DISPLAY_PROFILES[$id])) {
+            throw new InvalidArgumentException('Unbekanntes Display-Profil: ' . $id);
+        }
+        return self::DISPLAY_PROFILES[$id];
     }
 
     /** @param array<string, mixed> $layout @return list<string> */
@@ -311,10 +368,12 @@ final class HomeDisplayPanelSchema
         if ($used === []) {
             $used = [$pages['start']];
         }
+        $profile = self::profile(self::defaultProfileId());
         return [
             'name' => $name,
-            'columns' => 2,
-            'rows' => 4,
+            'displayProfile' => self::defaultProfileId(),
+            'columns' => (int) $profile['defaultColumns'],
+            'rows' => (int) $profile['defaultRows'],
             'showTabs' => true,
             'pages' => $used,
         ];
@@ -327,8 +386,12 @@ final class HomeDisplayPanelSchema
      *
      * @return array<string, mixed>
      */
-    public static function dashboardLayout(string $name = 'Übersicht'): array
+    public static function dashboardLayout(string $name = 'Übersicht', string $displayProfile = ''): array
     {
+        $profileId = $displayProfile !== '' ? $displayProfile : self::defaultProfileId();
+        $profile = self::profile($profileId);
+        $columns = (int) $profile['defaultColumns'];
+        $rows = (int) $profile['defaultRows'];
         $pages = [];
         $pages[] = ['id' => 'start', 'title' => 'Start', 'tiles' => [
             ['tileId' => 'start-title', 'kind' => 'label', 'text' => 'Zuhause', 'size' => 'large', 'col' => 0, 'row' => 0, 'colSpan' => 3, 'rowSpan' => 1],
@@ -395,8 +458,9 @@ final class HomeDisplayPanelSchema
         ]];
         return [
             'name' => $name,
-            'columns' => 3,
-            'rows' => 4,
+            'displayProfile' => $profileId,
+            'columns' => $columns,
+            'rows' => $rows,
             'showTabs' => false,
             'pages' => $pages,
         ];
@@ -479,7 +543,14 @@ final class HomeDisplayPanelSchema
     private static function validateKind(array $tile, string $kind, array $pageIds, bool $publish): void
     {
         if ($kind === 'value') {
-            if (!in_array((string) ($tile['icon'] ?? ''), self::ICONS, true)) {
+            $iconMode = (string) ($tile['iconMode'] ?? 'static');
+            if ($iconMode === 'toggle') {
+                foreach (['iconOn', 'iconOff'] as $key) {
+                    if (!in_array((string) ($tile[$key] ?? ''), self::ICONS, true)) {
+                        throw new InvalidArgumentException('Unbekanntes Symbol: ' . (string) ($tile[$key] ?? ''));
+                    }
+                }
+            } elseif (!in_array((string) ($tile['icon'] ?? ''), self::ICONS, true)) {
                 throw new InvalidArgumentException('Unbekanntes Symbol: ' . (string) ($tile['icon'] ?? ''));
             }
             $decimals = (int) ($tile['decimals'] ?? 0);
@@ -496,6 +567,13 @@ final class HomeDisplayPanelSchema
             if ($control === 'battery') {
                 if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) $tile['variableId']))) {
                     throw new InvalidArgumentException('Batteriekachel ohne Variable.');
+                }
+                $batteryLabel = (string) ($tile['batteryLabel'] ?? 'inside');
+                if ($batteryLabel !== '' && !in_array($batteryLabel, self::BATTERY_LABELS, true)) {
+                    throw new InvalidArgumentException('Unbekannte Batterie-Label-Position.');
+                }
+                if (isset($tile['batteryPad']) && ((int) $tile['batteryPad'] < 0 || (int) $tile['batteryPad'] > 48)) {
+                    throw new InvalidArgumentException('Batterie-Ränder liegen zwischen 0 und 48.');
                 }
                 return;
             }
@@ -534,6 +612,20 @@ final class HomeDisplayPanelSchema
             return;
         }
         if ($kind === 'image') {
+            $source = (string) ($tile['imageSource'] ?? 'catalog');
+            if ($source === 'media') {
+                $variableId = (int) ($tile['variableId'] ?? 0);
+                if ($publish) {
+                    if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
+                        throw new InvalidArgumentException('Bildkachel ohne Medien-Variable.');
+                    }
+                    $variable = IPS_GetVariable($variableId);
+                    if ((int) ($variable['VariableType'] ?? -1) !== 6) {
+                        throw new InvalidArgumentException('Die Variable ist kein Medien-Typ.');
+                    }
+                }
+                return;
+            }
             $imageId = (string) ($tile['imageId'] ?? '');
             if (!preg_match('/^[a-f0-9]{16}$/', $imageId)) {
                 throw new InvalidArgumentException('Bildkachel ohne Bild.');
@@ -557,6 +649,15 @@ final class HomeDisplayPanelSchema
             $safe = 'cam';
         }
         return 'cam_' . substr($safe, 0, 32) . '.jpg';
+    }
+
+    public static function mediaFileName(string $tileId): string
+    {
+        $safe = preg_replace('/[^A-Za-z0-9_-]/', '', $tileId) ?? '';
+        if ($safe === '') {
+            $safe = 'media';
+        }
+        return 'media_' . substr($safe, 0, 28) . '.jpg';
     }
 
     /** @param array<string, mixed> $tile */
