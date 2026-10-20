@@ -2301,7 +2301,7 @@ function escapeHtml(text) {
 }
 
 function renderVariableTree() {
-  const scrollHost = $("variable-scroll");
+  const scrollHost = $("variable-tree-scroll");
   if (scrollHost) state.variableTreeScroll = scrollHost.scrollTop;
   const tree = $("variable-tree");
   for (const details of tree.querySelectorAll("details.group")) {

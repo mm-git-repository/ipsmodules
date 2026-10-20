@@ -72,29 +72,33 @@
 
   <div id="workspace">
     <aside id="palette">
-      <div id="palette-tools">
-      <h2>Elemente</h2>
-      <div class="palette-items">
-        <div class="palette-item" draggable="true" data-kind="value">Wert</div>
-        <div class="palette-item" draggable="true" data-kind="value" data-control="dimSwitch">Dimmschalter</div>
-        <div class="palette-item" draggable="true" data-kind="value" data-control="slider">Dimmbalken</div>
-        <div class="palette-item" draggable="true" data-kind="value" data-control="combo">Kombischalter</div>
-        <div class="palette-item" draggable="true" data-kind="value" data-control="battery">Batterie</div>
-        <div class="palette-item" draggable="true" data-kind="nav">Seitenwechsler</div>
-        <div class="palette-item" draggable="true" data-kind="display">Nur Anzeige</div>
-        <div class="palette-item" draggable="true" data-kind="energyflow">Energiefluss</div>
-        <div class="palette-item" draggable="true" data-kind="label">Text</div>
-        <div class="palette-item" draggable="true" data-kind="image">Bild</div>
-        <div class="palette-item" draggable="true" data-kind="camera">Kamera</div>
-        <div class="palette-item" draggable="true" data-kind="separator">Trennlinie</div>
-        <div class="palette-item" draggable="true" data-kind="system">Anzeigestatus</div>
+      <div id="palette-elements">
+        <h2>Elemente</h2>
+        <div id="palette-items-scroll">
+          <div class="palette-items">
+            <div class="palette-item" draggable="true" data-kind="value">Wert</div>
+            <div class="palette-item" draggable="true" data-kind="value" data-control="dimSwitch">Dimmschalter</div>
+            <div class="palette-item" draggable="true" data-kind="value" data-control="slider">Dimmbalken</div>
+            <div class="palette-item" draggable="true" data-kind="value" data-control="combo">Kombischalter</div>
+            <div class="palette-item" draggable="true" data-kind="value" data-control="battery">Batterie</div>
+            <div class="palette-item" draggable="true" data-kind="nav">Seitenwechsler</div>
+            <div class="palette-item" draggable="true" data-kind="display">Nur Anzeige</div>
+            <div class="palette-item" draggable="true" data-kind="energyflow">Energiefluss</div>
+            <div class="palette-item" draggable="true" data-kind="label">Text</div>
+            <div class="palette-item" draggable="true" data-kind="image">Bild</div>
+            <div class="palette-item" draggable="true" data-kind="camera">Kamera</div>
+            <div class="palette-item" draggable="true" data-kind="separator">Trennlinie</div>
+            <div class="palette-item" draggable="true" data-kind="system">Anzeigestatus</div>
+          </div>
+        </div>
       </div>
-      </div>
-      <div id="variable-scroll">
-      <h2>Variablen</h2>
-      <input id="variable-search" type="search" placeholder="Suchen nach Name, Pfad oder ID">
-      <label class="small"><input id="only-actions" type="checkbox"> Nur schaltbare</label>
-      <div id="variable-tree"></div>
+      <div id="variable-panel">
+        <h2>Variablen</h2>
+        <input id="variable-search" type="search" placeholder="Suchen nach Name, Pfad oder ID">
+        <label class="small"><input id="only-actions" type="checkbox"> Nur schaltbare</label>
+        <div id="variable-tree-scroll">
+          <div id="variable-tree"></div>
+        </div>
       </div>
     </aside>
 

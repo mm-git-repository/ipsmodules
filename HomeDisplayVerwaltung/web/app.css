@@ -50,14 +50,47 @@ label.small { font-size: 12px; color: var(--muted); }
 
 #workspace { display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
 #palette, #properties { background: var(--panel); padding: 8px 12px 12px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-#palette { border-right: 1px solid var(--line); }
-#palette-tools { flex: none; }
-#variable-scroll { flex: 1; min-height: 0; overflow: auto; margin-top: 4px; }
+#palette { border-right: 1px solid var(--line); gap: 8px; }
+#palette-elements { flex: none; min-height: 0; }
+#palette-items-scroll {
+  overflow-y: auto;
+  max-height: calc(var(--palette-visible-rows) * var(--palette-item-h) + (var(--palette-visible-rows) - 1) * 6px);
+  margin-top: 4px;
+  padding-right: 2px;
+}
+#variable-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+#variable-tree-scroll { flex: 1; min-height: 0; overflow-y: auto; margin-top: 6px; }
 #properties { display: none; }
 .palette-items { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.palette-item { padding: 10px; border: 1px dashed var(--accent); border-radius: 6px; text-align: center; background: var(--accent-soft); cursor: grab; user-select: none; }
-#variable-search { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; }
-#variable-tree { margin-top: 6px; }
+.palette-item {
+  padding: 10px;
+  min-height: var(--palette-item-h);
+  box-sizing: border-box;
+  border: 1px dashed var(--accent);
+  border-radius: 6px;
+  text-align: center;
+  background: var(--accent-soft);
+  cursor: grab;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#palette {
+  --palette-item-h: 42px;
+  --palette-visible-rows: 3;
+}
+#palette-items-scroll .palette-items { grid-template-columns: 1fr; }
+#variable-search { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; flex: none; }
+#variable-panel > label.small { flex: none; margin: 6px 0 0; }
+#variable-tree { margin-top: 0; }
 .group { margin: 4px 0; }
 .group > summary { cursor: pointer; font-weight: 600; padding: 4px 2px; color: var(--accent); }
 .group > summary small { color: var(--muted); font-weight: 400; }
