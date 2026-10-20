@@ -33,7 +33,38 @@ final class HomeDisplayMedia
         if (!is_array($media)) {
             return false;
         }
-        return (int) ($media['MediaType'] ?? -1) === 1;
+        $type = (int) ($media['MediaType'] ?? -1);
+        if ($type === 1) {
+            return true;
+        }
+        // ONVIF Image Grabber und ähnliche Module: Typ manchmal unklar, Inhalt trotzdem Bild.
+        if (function_exists('IPS_GetMediaContent')) {
+            $encoded = @IPS_GetMediaContent($mediaId);
+            if (is_string($encoded) && $encoded !== '') {
+                $binary = base64_decode($encoded, true);
+                if (is_string($binary) && $binary !== '' && self::looksLikeImageBytes($binary)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public static function looksLikeImageBytes(string $binary): bool
+    {
+        if ($binary === '' || strlen($binary) < 16) {
+            return false;
+        }
+        if (strncmp($binary, "\xFF\xD8\xFF", 3) === 0) {
+            return true;
+        }
+        if (strncmp($binary, "\x89PNG\r\n\x1a\n", 8) === 0) {
+            return true;
+        }
+        if (strncmp($binary, 'GIF87a', 6) === 0 || strncmp($binary, 'GIF89a', 6) === 0) {
+            return true;
+        }
+        return strncmp($binary, 'BM', 2) === 0;
     }
 
     /** @return array<string, mixed>|null */
@@ -64,16 +95,26 @@ final class HomeDisplayMedia
         $type = (int) ($variable['VariableType'] ?? -1);
         if ($type === 1) {
             $mediaId = (int) GetValue($variableId);
-            return self::isImageMediaId($mediaId) ? $mediaId : 0;
+            return self::usableImageMediaId($mediaId);
         }
         if ($type === 3) {
             $raw = trim((string) GetValue($variableId));
             if ($raw !== '' && ctype_digit($raw)) {
-                $mediaId = (int) $raw;
-                return self::isImageMediaId($mediaId) ? $mediaId : 0;
+                return self::usableImageMediaId((int) $raw);
             }
         }
         return 0;
+    }
+
+    public static function usableImageMediaId(int $mediaId): int
+    {
+        if ($mediaId <= 0) {
+            return 0;
+        }
+        if (!function_exists('IPS_MediaExists') || !IPS_MediaExists($mediaId)) {
+            return 0;
+        }
+        return $mediaId;
     }
 
     public static function variableMediaRole(int $variableId): string
@@ -107,12 +148,50 @@ final class HomeDisplayMedia
             $rawObject = (int) trim($rawObject);
         }
         $direct = (int) $rawObject;
-        if ($direct > 0 && self::isImageMediaId($direct)) {
+        if ($direct > 0 && self::usableImageMediaId($direct) > 0) {
             return $direct;
         }
         $variableId = (int) ($tile['variableId'] ?? 0);
         if ($variableId > 0) {
-            return self::imageMediaIdFromVariable($variableId);
+            $fromVar = self::imageMediaIdFromVariable($variableId);
+            if ($fromVar > 0) {
+                return $fromVar;
+            }
+            return self::imageMediaIdNearVariable($variableId);
+        }
+        return 0;
+    }
+
+    /** Medien „Image“ unter derselben Grabber-Instanz (ONVIF u. a.). */
+    public static function imageMediaIdNearVariable(int $variableId): int
+    {
+        if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
+            return 0;
+        }
+        $object = IPS_GetObject($variableId);
+        $parent = (int) ($object['ParentID'] ?? 0);
+        if ($parent <= 0 || !self::isInstanceObject($parent)) {
+            return 0;
+        }
+        if (function_exists('IPS_GetObjectListByParent')) {
+            foreach (IPS_GetObjectListByParent($parent) as $childId) {
+                $childId = (int) $childId;
+                if ($childId <= 0 || !IPS_ObjectExists($childId)) {
+                    continue;
+                }
+                $child = IPS_GetObject($childId);
+                if ((int) ($child['ObjectType'] ?? -1) !== 5) {
+                    continue;
+                }
+                $ident = (string) ($child['ObjectIdent'] ?? '');
+                if ($ident !== '' && strcasecmp($ident, 'IMAGE') !== 0 && strcasecmp($ident, 'Image') !== 0) {
+                    continue;
+                }
+                $mid = self::usableImageMediaId($childId);
+                if ($mid > 0) {
+                    return $mid;
+                }
+            }
         }
         return 0;
     }
@@ -224,7 +303,76 @@ final class HomeDisplayMedia
         return is_string($binary) && $binary !== '' ? $binary : null;
     }
 
-    /** Bildquelle aktualisieren (Image Grabber / Kamera-Instanz mit Aktion). */
+    /** Snapshot vor dem Lesen anstoßen (ONVIF Image Grabber, Image Grabber, Variable-Aktion). */
+    public static function refreshCameraTile(array $tile): void
+    {
+        $instanceId = self::resolveSnapshotInstanceId($tile);
+        if ($instanceId > 0) {
+            self::requestSnapshotUpdate($instanceId);
+            return;
+        }
+        $variableId = (int) ($tile['variableId'] ?? 0);
+        if ($variableId > 0) {
+            self::refreshCameraVariable($variableId);
+        }
+    }
+
+    /** @param array<string, mixed> $tile */
+    public static function resolveSnapshotInstanceId(array $tile): int
+    {
+        $mediaId = self::resolveImageMediaId($tile);
+        if ($mediaId <= 0) {
+            $rawObject = $tile['mediaObjectId'] ?? 0;
+            if (is_string($rawObject) && ctype_digit(trim($rawObject))) {
+                $rawObject = (int) trim($rawObject);
+            }
+            $mediaId = (int) $rawObject;
+        }
+        if ($mediaId > 0 && IPS_ObjectExists($mediaId)) {
+            $object = IPS_GetObject($mediaId);
+            $parent = (int) ($object['ParentID'] ?? 0);
+            if ($parent > 0 && self::isInstanceObject($parent)) {
+                return $parent;
+            }
+        }
+        $variableId = (int) ($tile['variableId'] ?? 0);
+        if ($variableId > 0 && IPS_VariableExists($variableId)) {
+            $object = IPS_GetObject($variableId);
+            $parent = (int) ($object['ParentID'] ?? 0);
+            if ($parent > 0 && self::isInstanceObject($parent)) {
+                return $parent;
+            }
+        }
+        return 0;
+    }
+
+    public static function requestSnapshotUpdate(int $instanceId): void
+    {
+        if ($instanceId <= 0 || !IPS_ObjectExists($instanceId)) {
+            return;
+        }
+        try {
+            if (function_exists('ONVIF_UpdateImage')) {
+                @ONVIF_UpdateImage($instanceId);
+                usleep(600000);
+                return;
+            }
+        } catch (Throwable $e) {
+            unset($e);
+        }
+        foreach (['UpdateImage', 'Refresh', 'Update'] as $ident) {
+            try {
+                if (@IPS_RequestAction($instanceId, $ident, true)) {
+                    usleep(600000);
+                    return;
+                }
+            } catch (Throwable $e) {
+                unset($e);
+            }
+        }
+    }
+
+    /** Bildquelle aktualisieren (Variable mit Aktion). */
     public static function refreshCameraVariable(int $variableId): void
     {
         if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
@@ -236,11 +384,26 @@ final class HomeDisplayMedia
             $custom = (int) ($variable['VariableCustomAction'] ?? 0);
             if ($action > 0 || $custom > 0) {
                 @RequestAction($variableId, true);
-                usleep(300000);
+                usleep(400000);
+                return;
+            }
+            $object = IPS_GetObject($variableId);
+            $parent = (int) ($object['ParentID'] ?? 0);
+            if ($parent > 0 && self::isInstanceObject($parent)) {
+                self::requestSnapshotUpdate($parent);
             }
         } catch (Throwable $e) {
             unset($e);
         }
+    }
+
+    private static function isInstanceObject(int $objectId): bool
+    {
+        if ($objectId <= 0 || !IPS_ObjectExists($objectId)) {
+            return false;
+        }
+        $object = IPS_GetObject($objectId);
+        return (int) ($object['ObjectType'] ?? -1) === 1;
     }
 
     /** Medien aus Kachel (Objekt-ID oder Integer-Variable), ohne URL-Abruf. */

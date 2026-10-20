@@ -11,7 +11,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 26;
+    private const MODULE_BUILD = 27;
 
     private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
@@ -1259,17 +1259,26 @@ class HomeDisplay extends IPSModuleStrict
     /** @param array<string, mixed> $tile @return array{binary?: string, error?: string, detail?: string} */
     private function cameraBinaryForTile(array $tile): array
     {
-        $variableId = (int) ($tile['variableId'] ?? 0);
-        if ($variableId > 0) {
-            HomeDisplayMedia::refreshCameraVariable($variableId);
+        HomeDisplayMedia::refreshCameraTile($tile);
+        $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
+        if ($binary !== null && $binary !== '') {
+            return ['binary' => $binary];
         }
+        HomeDisplayMedia::refreshCameraTile($tile);
         $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
         if ($binary !== null && $binary !== '') {
             return ['binary' => $binary];
         }
         $raw = HomeDisplayMedia::cameraImageUrl($tile);
         if ($raw === '') {
-            return ['error' => 'camera', 'detail' => 'Variable leer oder Medien-ID ungültig'];
+            $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
+            if ($mediaId > 0) {
+                return [
+                    'error' => 'camera_fetch',
+                    'detail' => 'Medienobjekt leer – ONVIF Image Grabber: Medien „Image“ wählen, Quelle „Medien“, ggf. in Symcon „Bild aktualisieren“ testen',
+                ];
+            }
+            return ['error' => 'camera', 'detail' => 'Variable leer oder Medien-ID ungültig (ONVIF: Medienobjekt Image unter Grabber-Instanz wählen)'];
         }
         if (preg_match('#^https?://#i', $raw)) {
             $binary = $this->fetchRemoteBinary($raw);
