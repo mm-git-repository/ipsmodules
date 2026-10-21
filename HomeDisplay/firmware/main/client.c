@@ -103,14 +103,18 @@ static int rssi_now(void)
     return info.rssi;
 }
 
-static void set_online(bool value)
+static void set_online(bool is_online)
 {
-    if (value) last_success_at = esp_timer_get_time();
-    if (value != online) {
-        ESP_LOGI(TAG, value ? "Adapter erreichbar" : "Adapter nicht erreichbar");
+    if (is_online) last_success_at = esp_timer_get_time();
+    if (is_online != online) {
+        if (is_online) {
+            ESP_LOGI(TAG, "Adapter erreichbar");
+        } else {
+            ESP_LOGI(TAG, "Adapter nicht erreichbar");
+        }
     }
-    online = value;
-    homedisplay_ui_set_online(value, rssi_now());
+    online = is_online;
+    homedisplay_ui_set_online(is_online, rssi_now());
 }
 
 static esp_err_t request(const char *path, const char *method, const char *body, char *response, size_t response_length)

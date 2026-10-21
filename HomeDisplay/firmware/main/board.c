@@ -1,9 +1,9 @@
 #include "homedisplay.h"
 
+#include "ch422g.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
-#include "port/esp_io_expander.h"
-#include "port/esp_io_expander_ch422g.h"
+#include "esp_check.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_log.h"
@@ -11,15 +11,15 @@
 #include <time.h>
 
 static const char *TAG = "board";
-static esp_io_expander_handle_t expander_handle;
+static ch422g_handle_t ch422g_handle;
 static i2c_master_dev_handle_t rtc_handle;
 
 void homedisplay_board_backlight(bool on)
 {
-    if (!expander_handle) {
+    if (!ch422g_handle) {
         return;
     }
-    esp_io_expander_set_level(expander_handle, IO_EXPANDER_PIN_NUM_2, on ? 1 : 0);
+    ch422g_set_pin(ch422g_handle, 2, on);
 }
 
 static uint8_t bcd_to_int(uint8_t value)
@@ -91,12 +91,13 @@ esp_err_t homedisplay_board_init(esp_lcd_panel_handle_t *panel, esp_lcd_touch_ha
     i2c_master_bus_handle_t bus = NULL;
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &bus), TAG, "I2C");
 
-    esp_io_expander_handle_t expander = NULL;
-    ESP_RETURN_ON_ERROR(esp_io_expander_new_i2c_ch422g(bus, ESP_IO_EXPANDER_I2C_CH422G_ADDRESS, &expander), TAG, "CH422G");
-    expander_handle = expander;
-    ESP_RETURN_ON_ERROR(esp_io_expander_set_dir(expander, IO_EXPANDER_PIN_NUM_1 | IO_EXPANDER_PIN_NUM_2 | IO_EXPANDER_PIN_NUM_3, IO_EXPANDER_OUTPUT), TAG, "CH422G Richtung");
-    ESP_RETURN_ON_ERROR(esp_io_expander_set_level(expander, IO_EXPANDER_PIN_NUM_1 | IO_EXPANDER_PIN_NUM_3, 1), TAG, "Reset lösen");
-    ESP_RETURN_ON_ERROR(esp_io_expander_set_level(expander, IO_EXPANDER_PIN_NUM_2, 0), TAG, "Backlight aus");
+    ch422g_handle_t expander = NULL;
+    ESP_RETURN_ON_ERROR(ch422g_new_i2c_bus(bus, &expander), TAG, "CH422G");
+    ch422g_handle = expander;
+    ESP_RETURN_ON_ERROR(ch422g_init_panel_io(expander), TAG, "CH422G Init");
+    ESP_RETURN_ON_ERROR(ch422g_set_pin(expander, 1, true), TAG, "Reset lösen");
+    ESP_RETURN_ON_ERROR(ch422g_set_pin(expander, 3, true), TAG, "Reset lösen");
+    ESP_RETURN_ON_ERROR(ch422g_set_pin(expander, 2, false), TAG, "Backlight aus");
 
     esp_lcd_rgb_panel_config_t panel_config = {
         .clk_src = LCD_CLK_SRC_PLL160M,
@@ -131,7 +132,7 @@ esp_err_t homedisplay_board_init(esp_lcd_panel_handle_t *panel, esp_lcd_touch_ha
     ESP_RETURN_ON_ERROR(esp_lcd_new_rgb_panel(&panel_config, panel), TAG, "RGB");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(*panel), TAG, "Panel-Reset");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(*panel), TAG, "Panel-Init");
-    ESP_RETURN_ON_ERROR(esp_io_expander_set_level(expander, IO_EXPANDER_PIN_NUM_2, 1), TAG, "Backlight an");
+    ESP_RETURN_ON_ERROR(ch422g_set_pin(expander, 2, true), TAG, "Backlight an");
 
     esp_lcd_panel_io_handle_t touch_io = NULL;
     esp_lcd_panel_io_i2c_config_t touch_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
