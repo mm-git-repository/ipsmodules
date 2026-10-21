@@ -1,4 +1,5 @@
 #include "homedisplay.h"
+#include "serial_menu.h"
 
 #include "esp_event.h"
 #include "esp_http_server.h"
@@ -222,8 +223,11 @@ void homedisplay_provision_start(void)
         httpd_register_uri_handler(provisioning_server, &any);
     }
     char line[120];
-    snprintf(line, sizeof(line), "Einrichtung: WLAN %s\nverbinden und http://192.168.4.1 öffnen", (char *) ap.ap.ssid);
+    snprintf(line, sizeof(line), "Einrichtungs-WLAN\n%s · http://192.168.4.1", (char *) ap.ap.ssid);
     homedisplay_ui_status(line);
-    vTaskDelay(pdMS_TO_TICKS(600000));
+    for (int second = 0; second < 600; second++) {
+        homedisplay_serial_poll();
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
     esp_restart();
 }

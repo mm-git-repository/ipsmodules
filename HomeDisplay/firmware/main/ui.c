@@ -46,6 +46,11 @@ typedef struct {
 
 static lv_obj_t *status_label;
 static lv_obj_t *info_label;
+static lv_obj_t *boot_layer;
+static lv_obj_t *boot_title;
+static lv_obj_t *boot_detail;
+static lv_obj_t *boot_footer;
+static bool boot_screen_active = true;
 static lv_obj_t *home_button;
 static lv_obj_t *page_bar;
 static lv_obj_t *grid;
@@ -77,6 +82,102 @@ static int64_t confirm_at;
 static int64_t last_tap_at;
 static uint32_t frame_counter;
 static uint32_t touch_counter;
+
+static void set_boot_message(const char *title, const char *detail)
+{
+    if (!boot_layer || !boot_title) {
+        return;
+    }
+    lv_label_set_text(boot_title, title && title[0] ? title : "Hausanzeige");
+    if (boot_detail) {
+        lv_label_set_text(boot_detail, detail ? detail : "");
+        if (detail && detail[0]) {
+            lv_obj_clear_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (boot_screen_active) {
+        lv_obj_clear_flag(boot_layer, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(boot_layer);
+    }
+}
+
+static void hide_boot_screen(void)
+{
+    boot_screen_active = false;
+    if (boot_layer) {
+        lv_obj_add_flag(boot_layer, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void split_status_text(const char *text, char *title, size_t title_len, char *detail, size_t detail_len)
+{
+    title[0] = detail[0] = '\0';
+    if (!text || !text[0]) {
+        snprintf(title, title_len, "Hausanzeige");
+        return;
+    }
+    const char *break_at = strchr(text, '\n');
+    if (break_at) {
+        size_t head = (size_t) (break_at - text);
+        if (head >= title_len) {
+            head = title_len - 1;
+        }
+        memcpy(title, text, head);
+        title[head] = '\0';
+        snprintf(detail, detail_len, "%s", break_at + 1);
+    } else {
+        snprintf(title, title_len, "%s", text);
+    }
+}
+
+static void build_boot_layer(lv_obj_t *screen)
+{
+    boot_layer = lv_obj_create(screen);
+    lv_obj_set_size(boot_layer, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES);
+    lv_obj_set_style_bg_color(boot_layer, lv_color_hex(0x0B1628), 0);
+    lv_obj_set_style_border_width(boot_layer, 0, 0);
+    lv_obj_set_style_pad_all(boot_layer, 0, 0);
+    lv_obj_clear_flag(boot_layer, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *card = lv_obj_create(boot_layer);
+    lv_obj_set_size(card, 920, 420);
+    lv_obj_center(card);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x132338), 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(0x2A4F7C), 0);
+    lv_obj_set_style_border_width(card, 2, 0);
+    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_set_style_pad_all(card, 32, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    boot_title = lv_label_create(card);
+    lv_obj_set_width(boot_title, 840);
+    lv_label_set_long_mode(boot_title, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(boot_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(boot_title, lv_color_hex(0xF4F7FB), 0);
+    lv_obj_set_style_text_font(boot_title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_transform_zoom(boot_title, 384, 0);
+    lv_label_set_text(boot_title, "Hausanzeige startet");
+
+    boot_detail = lv_label_create(card);
+    lv_obj_set_width(boot_detail, 840);
+    lv_label_set_long_mode(boot_detail, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(boot_detail, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(boot_detail, lv_color_hex(0xB7C4D4), 0);
+    lv_obj_set_style_text_font(boot_detail, &lv_font_montserrat_28, 0);
+    lv_label_set_text(boot_detail, "");
+
+    boot_footer = lv_label_create(boot_layer);
+    lv_obj_set_style_text_color(boot_footer, lv_color_hex(0x6E849C), 0);
+    lv_obj_set_style_text_font(boot_footer, &lv_font_montserrat_20, 0);
+    char footer[64];
+    snprintf(footer, sizeof(footer), "Firmware %s", HOMEDISPLAY_FIRMWARE_VERSION);
+    lv_label_set_text(boot_footer, footer);
+    lv_obj_align(boot_footer, LV_ALIGN_BOTTOM_MID, 0, -28);
+}
 static homedisplay_action_fn action_callback;
 
 static lv_color_t color_for(const char *name)
@@ -771,6 +872,8 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_add_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(clock_layer, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) 0);
     build_test_layer(screen);
+    build_boot_layer(screen);
+    set_boot_message("Hausanzeige startet", "Display bereit");
     lvgl_port_unlock();
     touched_at = esp_timer_get_time();
     offline_since = touched_at;
@@ -779,9 +882,29 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
 
 void homedisplay_ui_status(const char *text)
 {
-    if (!status_label || !text) return;
+    if (!text) {
+        return;
+    }
+    char title[120];
+    char detail[280];
+    char bar[320];
+    split_status_text(text, title, sizeof(title), detail, sizeof(detail));
     lvgl_port_lock(0);
-    lv_label_set_text(status_label, text);
+    if (boot_screen_active && boot_layer) {
+        set_boot_message(title, detail);
+    }
+    if (status_label) {
+        if (strchr(text, '\n')) {
+            snprintf(bar, sizeof(bar), "%s", title);
+            if (detail[0]) {
+                size_t used = strlen(bar);
+                snprintf(bar + used, sizeof(bar) - used, " · %s", detail);
+            }
+            lv_label_set_text(status_label, bar);
+        } else {
+            lv_label_set_text(status_label, text);
+        }
+    }
     lvgl_port_unlock();
 }
 
@@ -792,6 +915,7 @@ void homedisplay_ui_apply_layout(const char *json)
     if (layout_root) cJSON_Delete(layout_root);
     layout_root = root;
     lvgl_port_lock(0);
+    hide_boot_screen();
     show_page(0);
     lvgl_port_unlock();
 }

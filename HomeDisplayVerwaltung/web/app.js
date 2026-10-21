@@ -1337,7 +1337,7 @@ function dimTrackMarkup(tile, control, live, pct) {
   const swOn = control === "dimSwitch" ? (numeric != null ? numeric > min + 0.001 : pct > 2) : pct > 2;
   const swHtml = showSw ? `<span class="sw${swOn ? " on" : ""}"></span>` : "";
   const valueHtml = showValue ? `<span class="ctl-value">${pct} %</span>` : "";
-  const trackHtml = `<div class="track" data-dim-track><div class="fill" style="width:${pct}%"></div><div class="knob" style="left:calc(${pct}% - 1.4em)"></div></div>`;
+  const trackHtml = `<div class="track" data-dim-track><div class="fill" style="width:${pct}%"></div><div class="knob" style="left:${pct}%"></div></div>`;
   const offClass = showSw && control === "dimSwitch" && !swOn ? " dim-off" : "";
   if (layout === "stacked" && showSw) {
     return `<div class="ctl dim-ctl layout-stacked${offClass}">${swHtml}<div class="dim-slider-row">${trackHtml}${valueHtml}</div></div>`;
@@ -1371,7 +1371,7 @@ function controlMarkup(control, tile, live, demoOn) {
     const pct = dimPercentFromTile(tile, live, 40);
     const showValue = tile.dimShowPercent !== false;
     const valueHtml = showValue ? `<span class="ctl-value">${pct} %</span>` : "";
-    const trackHtml = `<div class="track" data-dim-track><div class="fill" style="width:${pct}%"></div><div class="knob" style="left:calc(${pct}% - 1.4em)"></div></div>`;
+    const trackHtml = `<div class="track" data-dim-track><div class="fill" style="width:${pct}%"></div><div class="knob" style="left:${pct}%"></div></div>`;
     return `<div class="ctl blinds"><button type="button" class="bl-btn" data-blind="up">▲</button><div class="dim-slider-row">${trackHtml}${valueHtml}</div><button type="button" class="bl-btn" data-blind="down">▼</button></div>`;
   }
   if (control === "setpoint") {
@@ -1388,7 +1388,7 @@ function applyDimVisual(element, pct, tile) {
   const valueEl = element.querySelector(".ctl-value");
   const clamped = Math.round(Math.min(100, Math.max(0, pct)));
   if (fill) fill.style.width = `${clamped}%`;
-  if (knob) knob.style.left = `calc(${clamped}% - 1.4em)`;
+  if (knob) knob.style.left = `${clamped}%`;
   if (valueEl) valueEl.textContent = `${clamped} %`;
   const control = tile.control || "switch";
   const sw = element.querySelector(".sw");

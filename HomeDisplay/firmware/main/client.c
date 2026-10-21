@@ -1,4 +1,5 @@
 #include "homedisplay.h"
+#include "serial_menu.h"
 
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
@@ -805,6 +806,7 @@ static void client_task(void *argument)
     int64_t verify_deadline = esp_timer_get_time() + 180000000;
     int64_t test_pattern_until = CONFIG_HOMEDISPLAY_BOOT_TEST_SECONDS > 0 ? esp_timer_get_time() + (int64_t) CONFIG_HOMEDISPLAY_BOOT_TEST_SECONDS * 1000000 : 0;
     while (true) {
+        homedisplay_serial_poll();
         esp_task_wdt_reset();
         if (test_pattern_until && esp_timer_get_time() > test_pattern_until) {
             homedisplay_ui_test_pattern(false);

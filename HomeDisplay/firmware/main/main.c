@@ -1,4 +1,5 @@
 #include "homedisplay.h"
+#include "serial_menu.h"
 
 #include <string.h>
 
@@ -41,6 +42,8 @@ void app_main(void)
     ESP_ERROR_CHECK(homedisplay_board_init(&panel, &touch));
     homedisplay_ui_init(panel, touch);
     ESP_LOGI(TAG, "Firmware %s, Reset-Grund %d", HOMEDISPLAY_FIRMWARE_VERSION, (int) esp_reset_reason());
+    homedisplay_ui_status("Start\nFirmware " HOMEDISPLAY_FIRMWARE_VERSION);
+    homedisplay_serial_boot_window(8000);
 
     int64_t rtc_time = 0;
     if (homedisplay_rtc_read(&rtc_time) == ESP_OK) {
@@ -60,9 +63,16 @@ void app_main(void)
         snprintf(password, sizeof(password), "%s", CONFIG_HOMEDISPLAY_WIFI_PASSWORD);
     }
     if (ssid[0] == '\0') {
+        homedisplay_ui_status("Einrichtung\nSerial: m + Enter oder Setup-WLAN");
+        if (homedisplay_serial_run_menu(false)) {
+            esp_restart();
+        }
         homedisplay_provision_start();
         return;
     }
+    char wlan_line[96];
+    snprintf(wlan_line, sizeof(wlan_line), "WLAN verbinden\n%s", ssid);
+    homedisplay_ui_status(wlan_line);
     homedisplay_wifi_start(ssid, password);
     homedisplay_client_start();
 }
