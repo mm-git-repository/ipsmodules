@@ -210,6 +210,10 @@ class HomeDisplay extends IPSModuleStrict
         if (!is_array($layout)) {
             return $this->encode(['ok' => false, 'error' => 'Ansicht konnte nicht gelesen werden.']);
         }
+        $runtime = $this->runtime();
+        $key = (string) $this->InstanceID;
+        $runtime[$key]['editorProbe'] = ['layout' => $layout, 'until' => time() + 900];
+        $this->saveRuntime($runtime);
         $state = $this->stateForLayout($layout, $this->InstanceID, -1);
         return $this->encode(['ok' => true, 'tiles' => $state['tiles'] ?? []]);
     }
@@ -1884,7 +1888,7 @@ class HomeDisplay extends IPSModuleStrict
     /** @return array<string, mixed>|null */
     private function findLayoutTile(int $instanceId, string $tileId): ?array
     {
-        $layout = $this->activeLayout($instanceId);
+        $layout = $this->editorProbeLayout($instanceId) ?? $this->activeLayout($instanceId);
         if ($layout === null) {
             return null;
         }
@@ -1900,6 +1904,18 @@ class HomeDisplay extends IPSModuleStrict
             }
         }
         return null;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function editorProbeLayout(int $instanceId): ?array
+    {
+        $runtime = $this->runtime();
+        $entry = $runtime[(string) $instanceId]['editorProbe'] ?? null;
+        if (!is_array($entry) || (int) ($entry['until'] ?? 0) < time()) {
+            return null;
+        }
+        $layout = $entry['layout'] ?? null;
+        return is_array($layout) ? $layout : null;
     }
 
     private function fetchRemoteBinary(string $url): ?string

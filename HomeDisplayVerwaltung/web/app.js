@@ -3829,44 +3829,34 @@ function updateProbeValuesOnly() {
   scheduleFitTileText($("probe-grid"));
 }
 
+function probeImageBlobFromResult(result) {
+  if (!result || !result.ok || !result.data) return null;
+  const mime = result.mime || "image/jpeg";
+  const binary = atob(result.data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
 async function loadProbeImages(layout, panelId, stateTiles) {
   revokeProbeObjectUrls();
   probe.probeImageUrls = {};
   probe.probeImageErrors = {};
   probe.probeImageErrorDetails = {};
-  const liveById = {};
-  for (const st of stateTiles || []) liveById[st.tileId] = st;
+  if (!panelId || !layout) return;
   for (const page of layout.pages || []) {
     for (const tile of page.tiles || []) {
       if (!tileNeedsProbeImage(tile)) continue;
       try {
-        const live = liveById[tile.tileId];
-        const bust = live && (live.cameraSeq != null || live.mediaSeq != null) ? (live.cameraSeq ?? live.mediaSeq) : Date.now();
-        const streamUrl = probeImageStreamUrl(panelId, tile.tileId, bust);
-        const response = await fetch(streamUrl, { credentials: "same-origin" });
-        if (!response.ok) {
-          let detail = response.headers.get("X-HomeDisplay-Detail") || "";
-          const err = response.headers.get("X-HomeDisplay-Error") || "camera_fetch";
-          if (!detail) {
-            try {
-              const meta = await call("probeImage", { id: panelId, tileId: tile.tileId, meta: true });
-              if (meta.error) probe.probeImageErrors[tile.tileId] = meta.error;
-              if (meta.detail) detail = meta.detail;
-            } catch (error) {
-              /* optional */
-            }
-          }
-          probe.probeImageErrors[tile.tileId] = probe.probeImageErrors[tile.tileId] || err;
-          probe.probeImageErrorDetails[tile.tileId] = detail || `HTTP ${response.status}`;
+        normalizeMediaTileBindings(tile);
+        const result = await call("probeImage", { id: panelId, tileId: tile.tileId, tile });
+        const blob = probeImageBlobFromResult(result);
+        if (blob && blob.size) {
+          probe.probeImageUrls[tile.tileId] = { url: URL.createObjectURL(blob), revoke: true };
           continue;
         }
-        const blob = await response.blob();
-        if (!blob.size) {
-          probe.probeImageErrors[tile.tileId] = "camera_fetch";
-          probe.probeImageErrorDetails[tile.tileId] = "Leere Antwort von Symcon";
-          continue;
-        }
-        probe.probeImageUrls[tile.tileId] = { url: URL.createObjectURL(blob), revoke: true };
+        probe.probeImageErrors[tile.tileId] = (result && result.error) || "camera_fetch";
+        probe.probeImageErrorDetails[tile.tileId] = (result && result.detail) || "Kein Bild von Symcon";
       } catch (error) {
         probe.probeImageErrors[tile.tileId] = "fetch";
         probe.probeImageErrorDetails[tile.tileId] = error && error.message ? error.message : "";

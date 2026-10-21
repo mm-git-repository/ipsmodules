@@ -125,6 +125,9 @@ final class HomeDisplayMedia
         if (self::imageMediaIdFromVariable($variableId) > 0) {
             return self::ROLE_MEDIA_ID;
         }
+        if (self::imageMediaIdNearVariable($variableId) > 0) {
+            return self::ROLE_MEDIA_ID;
+        }
         $variable = IPS_GetVariable($variableId);
         $type = (int) ($variable['VariableType'] ?? -1);
         if ($type === 3) {
@@ -173,27 +176,48 @@ final class HomeDisplayMedia
         if ($parent <= 0 || !self::isInstanceObject($parent)) {
             return 0;
         }
-        if (function_exists('IPS_GetObjectListByParent')) {
-            foreach (IPS_GetObjectListByParent($parent) as $childId) {
-                $childId = (int) $childId;
-                if ($childId <= 0 || !IPS_ObjectExists($childId)) {
-                    continue;
-                }
-                $child = IPS_GetObject($childId);
-                if ((int) ($child['ObjectType'] ?? -1) !== 5) {
-                    continue;
-                }
-                $ident = (string) ($child['ObjectIdent'] ?? '');
-                if ($ident !== '' && strcasecmp($ident, 'IMAGE') !== 0 && strcasecmp($ident, 'Image') !== 0) {
-                    continue;
-                }
-                $mid = self::usableImageMediaId($childId);
-                if ($mid > 0) {
-                    return $mid;
+        return self::imageMediaIdForInstance($parent);
+    }
+
+    /** ONVIF Image Grabber legt Medien mit Ident IMAGE unter der Instanz an. */
+    public static function imageMediaIdForInstance(int $instanceId): int
+    {
+        if ($instanceId <= 0 || !self::isInstanceObject($instanceId)) {
+            return 0;
+        }
+        if (function_exists('IPS_GetObjectIdByIdent')) {
+            foreach (['IMAGE', 'Image'] as $ident) {
+                $childId = (int) @IPS_GetObjectIdByIdent($ident, $instanceId);
+                if ($childId > 0 && self::usableImageMediaId($childId) > 0) {
+                    return $childId;
                 }
             }
         }
-        return 0;
+        if (!function_exists('IPS_GetObjectListByParent')) {
+            return 0;
+        }
+        $fallback = 0;
+        foreach (IPS_GetObjectListByParent($instanceId) as $childId) {
+            $childId = (int) $childId;
+            if ($childId <= 0 || !IPS_ObjectExists($childId)) {
+                continue;
+            }
+            $child = IPS_GetObject($childId);
+            if ((int) ($child['ObjectType'] ?? -1) !== 5) {
+                continue;
+            }
+            if (self::usableImageMediaId($childId) <= 0) {
+                continue;
+            }
+            $ident = (string) ($child['ObjectIdent'] ?? '');
+            if ($ident !== '' && strcasecmp($ident, 'IMAGE') === 0) {
+                return $childId;
+            }
+            if ($fallback <= 0 && self::isImageMediaId($childId)) {
+                $fallback = $childId;
+            }
+        }
+        return $fallback;
     }
 
     /** @param array<string, mixed> $tile */
@@ -303,6 +327,24 @@ final class HomeDisplayMedia
         return is_string($binary) && $binary !== '' ? $binary : null;
     }
 
+    public static function mediaBytesWithRetry(int $mediaId, int $attempts = 16): ?string
+    {
+        if ($mediaId <= 0) {
+            return null;
+        }
+        $attempts = max(1, $attempts);
+        for ($i = 0; $i < $attempts; $i++) {
+            $binary = self::mediaBytes($mediaId);
+            if ($binary !== null && $binary !== '') {
+                return $binary;
+            }
+            if ($i + 1 < $attempts) {
+                usleep(250000);
+            }
+        }
+        return null;
+    }
+
     /** Snapshot vor dem Lesen anstoßen (ONVIF Image Grabber, Image Grabber, Variable-Aktion). */
     public static function refreshCameraTile(array $tile): void
     {
@@ -354,7 +396,14 @@ final class HomeDisplayMedia
         try {
             if (function_exists('ONVIF_UpdateImage')) {
                 @ONVIF_UpdateImage($instanceId);
-                usleep(600000);
+                return;
+            }
+        } catch (Throwable $e) {
+            unset($e);
+        }
+        try {
+            if (function_exists('IG_UpdateImage')) {
+                @IG_UpdateImage($instanceId);
                 return;
             }
         } catch (Throwable $e) {
@@ -362,10 +411,8 @@ final class HomeDisplayMedia
         }
         foreach (['UpdateImage', 'Refresh', 'Update'] as $ident) {
             try {
-                if (@IPS_RequestAction($instanceId, $ident, true)) {
-                    usleep(600000);
-                    return;
-                }
+                @IPS_RequestAction($instanceId, $ident, true);
+                return;
             } catch (Throwable $e) {
                 unset($e);
             }
@@ -411,7 +458,7 @@ final class HomeDisplayMedia
     {
         $mediaId = self::resolveImageMediaId($tile);
         if ($mediaId > 0) {
-            $binary = self::mediaBytes($mediaId);
+            $binary = self::mediaBytesWithRetry($mediaId);
             if ($binary !== null && $binary !== '') {
                 return $binary;
             }
@@ -429,15 +476,21 @@ final class HomeDisplayMedia
     public static function variableMediaBytes(int $variableId): ?string
     {
         $mediaId = self::imageMediaIdFromVariable($variableId);
-        return $mediaId > 0 ? self::mediaBytes($mediaId) : null;
+        if ($mediaId <= 0) {
+            $mediaId = self::imageMediaIdNearVariable($variableId);
+        }
+        return $mediaId > 0 ? self::mediaBytesWithRetry($mediaId) : null;
     }
 
     public static function publishableMediaBinding(int $variableId, int $mediaObjectId): bool
     {
-        if ($mediaObjectId > 0 && self::isImageMediaId($mediaObjectId)) {
+        if ($mediaObjectId > 0 && self::usableImageMediaId($mediaObjectId) > 0) {
             return true;
         }
         if ($variableId > 0 && self::imageMediaIdFromVariable($variableId) > 0) {
+            return true;
+        }
+        if ($variableId > 0 && self::imageMediaIdNearVariable($variableId) > 0) {
             return true;
         }
         return false;
