@@ -1,5 +1,5 @@
 idf_component_register(
     SRCS "main.c" "board.c" "net.c" "client.c" "ui.c" "ota.c"
     INCLUDE_DIRS "."
-    REQUIRES esp_lcd esp_lcd_touch esp_lcd_touch_gt911 esp_lvgl_port esp_io_expander esp_io_expander_ch422g esp_wifi esp_http_client esp_http_server nvs_flash mdns json app_update mbedtls esp_timer spiffs esp_driver_i2c
+    REQUIRES esp_lcd esp_lcd_touch esp_lcd_touch_gt911 esp_lvgl_port esp32_io_expander esp_wifi esp_http_client esp_http_server nvs_flash mdns json app_update mbedtls esp_timer spiffs esp_driver_i2c
 )

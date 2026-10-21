@@ -188,7 +188,7 @@ function fitTileContentBox(box) {
   if (maxW <= 0 || maxH <= 0) return;
   box.style.setProperty("--tile-scale", "1");
   let lo = 0.35;
-  let hi = Math.min(8, maxH / 10, maxW / 12);
+  let hi = Math.min(14, maxH / 8, maxW / 10);
   for (let i = 0; i < 14; i++) {
     const mid = (lo + hi) / 2;
     box.style.setProperty("--tile-scale", String(mid));
@@ -316,7 +316,7 @@ function dimTapTrackEnabled(tile, control) {
 }
 
 function tileHasInlineProbeControl(tile) {
-  return Boolean(tile.actionId && tile.kind === "value" && PROBE_INLINE_CONTROLS.includes(tile.control || "switch"));
+  return Boolean(tile.actionId && tile.kind === "value" && PROBE_INLINE_CONTROLS.includes(tileInteractionMode(tile)));
 }
 
 function tileInteractionMode(tile) {
@@ -1154,13 +1154,22 @@ function buildTileElement(tile, context) {
       if (labelPos !== "inside") element.classList.add(`label-${labelPos}`, "label-outside");
     }
     if (control === "setpoint") element.classList.add("setpoint");
+    const iconSwitch = interaction === "iconSwitch";
     const iconId = effectiveIcon(tile, live ? live.value : undefined, demoOn);
     const kicker = INTERACTION_NAMES[interaction] || CONTROL_NAMES[control] || `${iconName(iconId)}${tile.actionId ? " · schaltbar" : ""}`;
-    const body = controlMarkup(control, tile, live, demoOn);
+    const body = iconSwitch ? "" : controlMarkup(control, tile, live, demoOn);
     const displayText = live && live.text ? live.text : (variable ? "12,3" : "—");
     const label = tile.title || (variable ? variable.name : "Wert");
     const stateLine = escapeHtml(displayText) + (body ? "" : (tile.unit ? " " + escapeHtml(tile.unit) : ""));
-    const cardBody = body || (iconId ? `<div class="oh-card-icon">${escapeHtml(iconName(iconId))}</div>` : "");
+    let cardBody;
+    if (iconSwitch) {
+      let on = Boolean(demoOn);
+      if (live && typeof live.value === "boolean") on = live.value;
+      else if (live && live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
+      cardBody = `<button type="button" class="oh-icon-toggle" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${escapeHtml(iconName(iconId))}</button>`;
+    } else {
+      cardBody = body || (iconId ? `<div class="oh-card-icon">${escapeHtml(iconName(iconId))}</div>` : "");
+    }
     element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, stateLine, cardBody)}</div>`;
     if (DIM_CONTROLS.includes(control) || control === "blinds" || control === "setpoint" || control === "switch" || interaction === "iconSwitch") {
       bindTileControls(element, tile, mode, live);
@@ -1337,11 +1346,14 @@ function dimTrackMarkup(tile, control, live, pct) {
 }
 
 function controlMarkup(control, tile, live, demoOn) {
+  if (tileInteractionMode(tile) === "iconSwitch") {
+    return "";
+  }
   if (control === "dimSwitch" || control === "slider" || control === "combo") {
     const pct = dimPercentFromTile(tile, live);
     return dimTrackMarkup(tile, control, live, pct);
   }
-  if (control === "switch" || control === "iconSwitch") {
+  if (control === "switch") {
     let on = Boolean(demoOn);
     if (live && typeof live.value === "boolean") on = live.value;
     else if (live && live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
@@ -1408,18 +1420,30 @@ function bindTileControls(element, tile, mode, live) {
     dimCtl.classList.toggle("dim-off", !on);
   };
 
-  if (sw && (control === "dimSwitch" || control === "combo" || control === "switch" || iconSwitch)) {
+  const iconToggle = element.querySelector("[data-icon-toggle]");
+  if (iconSwitch && iconToggle) {
+    iconToggle.addEventListener("pointerdown", stop);
+    iconToggle.addEventListener("click", (event) => {
+      stop(event);
+      const on = iconToggle.getAttribute("aria-pressed") === "true";
+      const next = !on;
+      iconToggle.setAttribute("aria-pressed", next ? "true" : "false");
+      iconToggle.textContent = iconName(next ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff"));
+      if (mode === "edit") {
+        state.editorIconDemo[tile.tileId] = next;
+        return;
+      }
+      if (mode === "probe" && tile.actionId) sendProbeAction(tile, { switchToggle: true });
+    });
+  }
+
+  if (sw && (control === "dimSwitch" || control === "combo" || control === "switch") && !iconSwitch) {
     sw.addEventListener("pointerdown", stop);
     sw.addEventListener("click", (event) => {
       stop(event);
       const wasOn = sw.classList.contains("on");
-      if (control === "switch" || iconSwitch) {
+      if (control === "switch") {
         sw.classList.toggle("on");
-        if (mode === "edit" && iconSwitch) {
-          state.editorIconDemo[tile.tileId] = sw.classList.contains("on");
-          renderGrid();
-          return;
-        }
         if (mode === "probe" && tile.actionId) sendProbeAction(tile, { switchToggle: true });
         return;
       }
@@ -3796,6 +3820,31 @@ function applyLiveStateToProbeTile(element, tile, live) {
     if (ohFoot && live.forecast != null) ohFoot.textContent = live.forecast;
   } else if (tile.kind === "scene") {
     if (ohState) ohState.textContent = tile.actionId ? "Tippen" : "—";
+  } else if (tile.kind === "value") {
+    if (ohState && live.text != null && live.text !== "") {
+      ohState.innerHTML = escapeHtml(live.text);
+    }
+    const iconBtn = element.querySelector("[data-icon-toggle]");
+    if (iconBtn && tileInteractionMode(tile) === "iconSwitch") {
+      const iconId = effectiveIcon(tile, live.value, undefined);
+      iconBtn.textContent = iconName(iconId);
+      let on = false;
+      if (typeof live.value === "boolean") on = live.value;
+      else if (typeof live.value === "number") on = live.value > (tile.valueMin ?? 0);
+      else if (live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
+      iconBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+    const sw = element.querySelector(".sw");
+    if (sw && (tile.control || "switch") === "switch" && tileInteractionMode(tile) !== "iconSwitch") {
+      let on = false;
+      if (typeof live.value === "boolean") on = live.value;
+      else if (live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
+      sw.classList.toggle("on", on);
+    }
+    if (live.value != null && live.value !== "" && element.querySelector(".dim-ctl")) {
+      const pct = dimPercentFromTile(tile, live);
+      applyDimVisual(element, pct, tile);
+    }
   } else if (live.text != null && live.text !== "") {
     if (ohState) ohState.innerHTML = escapeHtml(live.text);
     const valueEl = element.querySelector(".value");

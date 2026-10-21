@@ -552,17 +552,25 @@ static void show_page(int index)
         snprintf(view->icon_mode, sizeof(view->icon_mode), "%s", icon_mode ? icon_mode : "static");
         snprintf(view->icon_on, sizeof(view->icon_on), "%s", cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOn")) ? cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOn")) : "lightOn");
         snprintf(view->icon_off, sizeof(view->icon_off), "%s", cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOff")) ? cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOff")) : "lightOff");
+        bool icon_toggle = strcmp(view->icon_mode, "toggle") == 0;
         lv_obj_t *symbol = lv_label_create(view->card);
         view->icon_label = symbol;
         lv_label_set_text(symbol, icon_symbol(icon));
-        lv_obj_align(symbol, LV_ALIGN_TOP_LEFT, 8, 8);
         lv_obj_t *name = lv_label_create(view->card);
         lv_label_set_text(name, view->title);
-        lv_obj_align(name, LV_ALIGN_TOP_LEFT, 36, 8);
         view->label = lv_label_create(view->card);
         lv_label_set_text(view->label, "—");
         lv_obj_set_style_text_font(view->label, &lv_font_montserrat_28, 0);
-        lv_obj_align(view->label, (slider || combo) ? LV_ALIGN_TOP_RIGHT : LV_ALIGN_LEFT_MID, (slider || combo) ? -8 : 36, (slider || combo) ? 8 : 8);
+        if (icon_toggle) {
+            lv_obj_set_style_text_font(symbol, &lv_font_montserrat_28, 0);
+            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 8, 8);
+            lv_obj_align(view->label, LV_ALIGN_TOP_RIGHT, -8, 8);
+            lv_obj_align(symbol, LV_ALIGN_CENTER, 0, 8);
+        } else {
+            lv_obj_align(symbol, LV_ALIGN_TOP_LEFT, 8, 8);
+            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 36, 8);
+            lv_obj_align(view->label, (slider || combo) ? LV_ALIGN_TOP_RIGHT : LV_ALIGN_LEFT_MID, (slider || combo) ? -8 : 36, (slider || combo) ? 8 : 8);
+        }
         if (dim_switch) {
             build_power(view);
             lv_obj_align(view->power, LV_ALIGN_BOTTOM_LEFT, 12, -12);
@@ -576,7 +584,7 @@ static void show_page(int index)
             build_track(view, bar);
             lv_obj_align(view->track, LV_ALIGN_BOTTOM_LEFT, combo ? 72 : 12, -16);
             place_level(view, view->value_min);
-        } else if (view->has_action) {
+        } else if (view->has_action || icon_toggle) {
             lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
         }
     }

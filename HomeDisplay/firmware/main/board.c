@@ -2,8 +2,8 @@
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
-#include "esp_io_expander.h"
-#include "esp_io_expander_ch422g.h"
+#include "port/esp_io_expander.h"
+#include "port/esp_io_expander_ch422g.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_log.h"
