@@ -49,8 +49,17 @@ static lv_obj_t *info_label;
 static lv_obj_t *boot_layer;
 static lv_obj_t *boot_title;
 static lv_obj_t *boot_detail;
+static lv_obj_t *boot_code;
 static lv_obj_t *boot_footer;
 static bool boot_screen_active = true;
+static bool boot_layer_on_top;
+static char setup_pair_code[8];
+static char last_boot_title[120];
+static char last_boot_detail[280];
+static char last_setup_detail[512];
+static char last_status_bar[320];
+static char last_info_line[96];
+static char last_system_report[320];
 static lv_obj_t *home_button;
 static lv_obj_t *page_bar;
 static lv_obj_t *grid;
@@ -83,15 +92,62 @@ static int64_t last_tap_at;
 static uint32_t frame_counter;
 static uint32_t touch_counter;
 
+static bool is_pairing_code(const char *text)
+{
+    if (!text || strlen(text) != 6) {
+        return false;
+    }
+    for (size_t index = 0; text[index]; index++) {
+        char c = text[index];
+        if ((c >= 'A' && c <= 'Z') || (c >= '2' && c <= '9')) {
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
 static void set_boot_message(const char *title, const char *detail)
 {
     if (!boot_layer || !boot_title) {
         return;
     }
-    lv_label_set_text(boot_title, title && title[0] ? title : "Hausanzeige");
-    if (boot_detail) {
-        lv_label_set_text(boot_detail, detail ? detail : "");
-        if (detail && detail[0]) {
+    const char *head = title && title[0] ? title : "Hausanzeige";
+    const char *sub = detail ? detail : "";
+    if (strcmp(last_boot_title, head) == 0 && strcmp(last_boot_detail, sub) == 0) {
+        return;
+    }
+    snprintf(last_boot_title, sizeof(last_boot_title), "%s", head);
+    snprintf(last_boot_detail, sizeof(last_boot_detail), "%s", sub);
+
+    lv_label_set_text(boot_title, head);
+    bool code_mode = is_pairing_code(sub);
+    if (setup_pair_code[0] && boot_code) {
+        lv_label_set_text(boot_code, setup_pair_code);
+        lv_obj_clear_flag(boot_code, LV_OBJ_FLAG_HIDDEN);
+        if (sub[0] && !code_mode) {
+            lv_label_set_text(boot_detail, sub);
+            lv_obj_clear_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
+        } else if (code_mode) {
+            lv_obj_add_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
+        }
+    } else if (boot_code) {
+        if (code_mode) {
+            lv_label_set_text(boot_code, sub);
+            lv_obj_clear_flag(boot_code, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(boot_code, LV_OBJ_FLAG_HIDDEN);
+            if (sub[0]) {
+                lv_label_set_text(boot_detail, sub);
+                lv_obj_clear_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+    } else if (boot_detail) {
+        lv_label_set_text(boot_detail, sub);
+        if (sub[0]) {
             lv_obj_clear_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
@@ -99,13 +155,18 @@ static void set_boot_message(const char *title, const char *detail)
     }
     if (boot_screen_active) {
         lv_obj_clear_flag(boot_layer, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(boot_layer);
+        if (!boot_layer_on_top) {
+            lv_obj_move_foreground(boot_layer);
+            boot_layer_on_top = true;
+        }
     }
 }
 
 static void hide_boot_screen(void)
 {
     boot_screen_active = false;
+    boot_layer_on_top = false;
+    last_boot_title[0] = last_boot_detail[0] = '\0';
     if (boot_layer) {
         lv_obj_add_flag(boot_layer, LV_OBJ_FLAG_HIDDEN);
     }
@@ -142,7 +203,7 @@ static void build_boot_layer(lv_obj_t *screen)
     lv_obj_clear_flag(boot_layer, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *card = lv_obj_create(boot_layer);
-    lv_obj_set_size(card, 920, 420);
+    lv_obj_set_size(card, 920, 480);
     lv_obj_center(card);
     lv_obj_set_style_bg_color(card, lv_color_hex(0x132338), 0);
     lv_obj_set_style_border_color(card, lv_color_hex(0x2A4F7C), 0);
@@ -158,9 +219,16 @@ static void build_boot_layer(lv_obj_t *screen)
     lv_label_set_long_mode(boot_title, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(boot_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(boot_title, lv_color_hex(0xF4F7FB), 0);
-    lv_obj_set_style_text_font(boot_title, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_transform_zoom(boot_title, 384, 0);
+    lv_obj_set_style_text_font(boot_title, &lv_font_montserrat_48, 0);
     lv_label_set_text(boot_title, "Hausanzeige startet");
+
+    boot_code = lv_label_create(card);
+    lv_obj_set_width(boot_code, 840);
+    lv_obj_set_style_text_align(boot_code, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(boot_code, lv_color_hex(0xFFB547), 0);
+    lv_obj_set_style_text_font(boot_code, &lv_font_montserrat_48, 0);
+    lv_label_set_text(boot_code, "");
+    lv_obj_add_flag(boot_code, LV_OBJ_FLAG_HIDDEN);
 
     boot_detail = lv_label_create(card);
     lv_obj_set_width(boot_detail, 840);
@@ -168,6 +236,7 @@ static void build_boot_layer(lv_obj_t *screen)
     lv_obj_set_style_text_align(boot_detail, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(boot_detail, lv_color_hex(0xB7C4D4), 0);
     lv_obj_set_style_text_font(boot_detail, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_line_space(boot_detail, 8, 0);
     lv_label_set_text(boot_detail, "");
 
     boot_footer = lv_label_create(boot_layer);
@@ -722,7 +791,14 @@ static void clock_tick(lv_timer_t *timer)
         if (stale < 60) snprintf(info, sizeof(info), "%s  veraltet seit %lld s  %02d:%02d", wifi, (long long) stale, hour, (seconds / 60) % 60);
         else snprintf(info, sizeof(info), "%s  veraltet seit %lld min  %02d:%02d", wifi, (long long) (stale / 60), hour, (seconds / 60) % 60);
     }
-    lv_label_set_text(info_label, info);
+    if (boot_screen_active) {
+        apply_backlight();
+        return;
+    }
+    if (strcmp(last_info_line, info) != 0) {
+        snprintf(last_info_line, sizeof(last_info_line), "%s", info);
+        lv_label_set_text(info_label, info);
+    }
     if (system_label) {
         char report[320];
         esp_netif_ip_info_t ip = {0};
@@ -737,7 +813,10 @@ static void clock_tick(lv_timer_t *timer)
                  (unsigned long) (esp_get_free_heap_size() / 1024), (unsigned long) (esp_get_minimum_free_heap_size() / 1024),
                  online ? "verbunden" : "getrennt", (long long) age,
                  (unsigned long) frame_counter, (unsigned long) touch_counter);
-        lv_label_set_text(system_label, report);
+        if (strcmp(last_system_report, report) != 0) {
+            snprintf(last_system_report, sizeof(last_system_report), "%s", report);
+            lv_label_set_text(system_label, report);
+        }
     }
     if (test_layer && !lv_obj_has_flag(test_layer, LV_OBJ_FLAG_HIDDEN)) {
         char line[160];
@@ -813,7 +892,7 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lvgl_port_init(&port_config);
     const lvgl_port_display_cfg_t display_config = {
         .panel_handle = panel,
-        .buffer_size = HOMEDISPLAY_LCD_H_RES * 40,
+        .buffer_size = HOMEDISPLAY_LCD_H_RES * 72,
         .double_buffer = false,
         .hres = HOMEDISPLAY_LCD_H_RES,
         .vres = HOMEDISPLAY_LCD_V_RES,
@@ -880,6 +959,49 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_timer_create(clock_tick, 1000, NULL);
 }
 
+void homedisplay_ui_set_pairing_code(const char *code)
+{
+    if (!code) {
+        setup_pair_code[0] = '\0';
+        return;
+    }
+    snprintf(setup_pair_code, sizeof(setup_pair_code), "%s", code);
+}
+
+void homedisplay_ui_setup_progress(const char *detail)
+{
+    if (!detail || !boot_screen_active) {
+        return;
+    }
+    if (strcmp(last_setup_detail, detail) == 0) {
+        return;
+    }
+    snprintf(last_setup_detail, sizeof(last_setup_detail), "%s", detail);
+    lvgl_port_lock(0);
+    boot_screen_active = true;
+    if (boot_title) {
+        lv_label_set_text(boot_title, "Kopplungscode");
+    }
+    if (boot_code && setup_pair_code[0]) {
+        lv_label_set_text(boot_code, setup_pair_code);
+        lv_obj_clear_flag(boot_code, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (boot_detail) {
+        lv_label_set_text(boot_detail, detail);
+        lv_obj_clear_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (boot_layer) {
+        lv_obj_clear_flag(boot_layer, LV_OBJ_FLAG_HIDDEN);
+        if (!boot_layer_on_top) {
+            lv_obj_move_foreground(boot_layer);
+            boot_layer_on_top = true;
+        }
+    }
+    snprintf(last_boot_title, sizeof(last_boot_title), "Kopplungscode");
+    snprintf(last_boot_detail, sizeof(last_boot_detail), "%s", detail);
+    lvgl_port_unlock();
+}
+
 void homedisplay_ui_status(const char *text)
 {
     if (!text) {
@@ -889,7 +1011,14 @@ void homedisplay_ui_status(const char *text)
     char detail[280];
     char bar[320];
     split_status_text(text, title, sizeof(title), detail, sizeof(detail));
+    if (boot_screen_active && setup_pair_code[0] && detail[0]) {
+        homedisplay_ui_setup_progress(detail);
+    }
     lvgl_port_lock(0);
+    if (boot_screen_active && boot_layer && setup_pair_code[0] && detail[0]) {
+        lvgl_port_unlock();
+        return;
+    }
     if (boot_screen_active && boot_layer) {
         set_boot_message(title, detail);
     }
@@ -900,9 +1029,12 @@ void homedisplay_ui_status(const char *text)
                 size_t used = strlen(bar);
                 snprintf(bar + used, sizeof(bar) - used, " · %s", detail);
             }
-            lv_label_set_text(status_label, bar);
         } else {
-            lv_label_set_text(status_label, text);
+            snprintf(bar, sizeof(bar), "%s", text);
+        }
+        if (strcmp(last_status_bar, bar) != 0) {
+            snprintf(last_status_bar, sizeof(last_status_bar), "%s", bar);
+            lv_label_set_text(status_label, bar);
         }
     }
     lvgl_port_unlock();
@@ -912,9 +1044,17 @@ void homedisplay_ui_apply_layout(const char *json)
 {
     cJSON *root = cJSON_Parse(json);
     if (!root) return;
+    cJSON *pages = cJSON_GetObjectItem(root, "pages");
+    int count = cJSON_GetArraySize(pages);
+    if (count <= 0) {
+        cJSON_Delete(root);
+        homedisplay_ui_setup_progress("Vorlage leer oder ungültig\nIn IPS der Instanz ein Layout zuweisen\nund veröffentlichen");
+        return;
+    }
     if (layout_root) cJSON_Delete(layout_root);
     layout_root = root;
     lvgl_port_lock(0);
+    last_setup_detail[0] = '\0';
     hide_boot_screen();
     show_page(0);
     lvgl_port_unlock();

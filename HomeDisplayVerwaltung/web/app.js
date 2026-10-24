@@ -999,16 +999,34 @@ function scheduleEditorTilePreviews() {
   }, 350);
 }
 
+async function resolvePreviewPanelId() {
+  if (state.previewPanelId) return state.previewPanelId;
+  try {
+    const settings = await call("settings");
+    const id = settings.panels && settings.panels[0] ? Number(settings.panels[0].id) : 0;
+    if (id) state.previewPanelId = id;
+    return id;
+  } catch (error) {
+    return 0;
+  }
+}
+
 async function refreshEditorTilePreviews() {
-  if (!state.previewPanelId || !state.layout) return;
+  if (!state.layout) return;
   const page = currentPage();
   if (!page) return;
   const targets = page.tiles.filter(tileNeedsLivePreview);
+  const panelId = await resolvePreviewPanelId();
   const token = ++state.previewFetchToken;
   for (const tile of targets) {
     try {
       normalizeMediaTileBindings(tile);
-      const result = await call("probeImage", { id: state.previewPanelId, tileId: tile.tileId, tile });
+      if (!panelId) {
+        state.tilePreviewErrors[tile.tileId] = "camera";
+        state.tilePreviewErrorDetails[tile.tileId] = "Keine Hausanzeige-Instanz im System – bitte zuerst eine HomeDisplay-Anzeige anlegen.";
+        continue;
+      }
+      const result = await call("probeImage", { id: panelId, tileId: tile.tileId, tile });
       if (token !== state.previewFetchToken) return;
       if (result.ok && result.data) {
         state.tilePreviewUrls[tile.tileId] = `data:${result.mime || "image/jpeg"};base64,${result.data}`;
@@ -3892,7 +3910,9 @@ async function loadProbeImages(layout, panelId, stateTiles) {
   probe.probeImageUrls = {};
   probe.probeImageErrors = {};
   probe.probeImageErrorDetails = {};
-  if (!panelId || !layout) return;
+  if (!layout) return;
+  if (!panelId) panelId = await resolvePreviewPanelId();
+  if (!panelId) return;
   for (const page of layout.pages || []) {
     for (const tile of page.tiles || []) {
       if (!tileNeedsProbeImage(tile)) continue;

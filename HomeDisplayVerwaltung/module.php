@@ -481,6 +481,10 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
         }
         if ($method === 'probeImage') {
             $id = (int) ($body['id'] ?? 0);
+            if ($id <= 0) {
+                $ids = $this->panelIds();
+                $id = (int) ($ids[0] ?? 0);
+            }
             try {
                 $this->panelOrFail($id);
             } catch (Throwable $e) {

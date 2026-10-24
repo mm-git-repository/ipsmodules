@@ -30,6 +30,7 @@ void app_main(void)
     if (esp_vfs_spiffs_register(&storage) != ESP_OK) {
         ESP_LOGW(TAG, "Bildspeicher konnte nicht eingebunden werden");
     }
+    homedisplay_serial_console_init();
 
     /* Task-Watchdog: 30 s; Client- und LVGL-Task melden sich regelmäßig. */
     esp_task_wdt_config_t watchdog = {.timeout_ms = 30000, .idle_core_mask = 0, .trigger_panic = true};

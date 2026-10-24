@@ -12,7 +12,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 30;
+    private const MODULE_BUILD = 32;
 
     private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
@@ -138,6 +138,12 @@ class HomeDisplay extends IPSModuleStrict
         $this->SetValue('PanelStatus', $Text);
     }
 
+    /** Setzt den Kopplungsstatus. Aufruf aus einer anderen Anzeige, weil die Variable von außen nur lesbar ist. */
+    public function SetPairingState(string $Text): void
+    {
+        $this->SetValue('PairingState', $Text);
+    }
+
     public function Pair(): string
     {
         $code = strtoupper(trim($this->ReadPropertyString('ClaimCode')));
@@ -169,7 +175,7 @@ class HomeDisplay extends IPSModuleStrict
         $this->refreshPairingLabel();
         return 'Code übernommen. Status „Wartet auf Anzeige …“ ist normal, bis das Gerät sich meldet (alle ca. 3 s, wenn WLAN und Dienstadresse am Display stimmen). Dienst: '
             . $serviceUrl
-            . ' – am Display muss dieselbe Hook-URL eingetragen sein (https://…:3777/hook/homedisplay). Nach Reset am Display erscheint ein neuer Code; dann hier erneut eintragen und übernehmen.';
+            . ' – am Display muss dieselbe Hook-URL eingetragen sein (https://…:3777/hook/homedisplay). Der Kopplungscode ist pro Anzeige-Hardware fest (MAC).';
     }
 
     public function Unpair(): string
@@ -320,7 +326,7 @@ class HomeDisplay extends IPSModuleStrict
         $rows = [];
         foreach (IPS_GetMediaListByType(1) as $mediaId) {
             $mediaId = (int) $mediaId;
-            if ($mediaId <= 0 || !HomeDisplayMedia::isImageMediaId($mediaId)) {
+            if ($mediaId <= 0 || (!HomeDisplayMedia::isImageMediaId($mediaId) && !HomeDisplayMedia::isGrabberImageMedia($mediaId))) {
                 continue;
             }
             if (!IPS_ObjectExists($mediaId)) {
@@ -810,7 +816,11 @@ class HomeDisplay extends IPSModuleStrict
             $token = (string) IPS_GetProperty($id, 'DeviceToken');
             if ($claim === $code && $token !== '') {
                 $this->rememberDeviceReport($id, $body);
-                $this->markPanelHello($id, $body);
+                try {
+                    $this->markPanelHello($id, $body);
+                } catch (Throwable $e) {
+                    $this->SendDebug('HelloStatus', $e->getMessage(), 0);
+                }
                 return [
                     'status' => 'paired',
                     'token' => $token,
@@ -1687,13 +1697,11 @@ class HomeDisplay extends IPSModuleStrict
     /** @param array<string, mixed> $tile @return array{binary?: string, error?: string, detail?: string} */
     private function cameraBinaryForTile(array $tile): array
     {
-        HomeDisplayMedia::refreshCameraTile($tile);
-        $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
-        if ($binary !== null && $binary !== '') {
-            return ['binary' => $binary];
+        $streamErr = HomeDisplayMedia::cameraStreamBindingError($tile);
+        if ($streamErr !== null) {
+            return ['error' => 'camera_fetch', 'detail' => $streamErr];
         }
-        HomeDisplayMedia::refreshCameraTile($tile);
-        $binary = HomeDisplayMedia::snapshotMediaBinary($tile);
+        $binary = HomeDisplayMedia::fetchCameraBinary($tile);
         if ($binary !== null && $binary !== '') {
             return ['binary' => $binary];
         }
@@ -1703,15 +1711,27 @@ class HomeDisplay extends IPSModuleStrict
             if ($mediaId > 0) {
                 return [
                     'error' => 'camera_fetch',
-                    'detail' => 'Medienobjekt leer – ONVIF Image Grabber: Medien „Image“ wählen, Quelle „Medien“, ggf. in Symcon „Bild aktualisieren“ testen',
+                    'detail' => HomeDisplayMedia::snapshotUpdateHint($tile),
                 ];
             }
             return ['error' => 'camera', 'detail' => 'Variable leer oder Medien-ID ungültig (ONVIF: Medienobjekt Image unter Grabber-Instanz wählen)'];
         }
+        if (HomeDisplayMedia::looksLikeVideoStreamSource($raw)) {
+            return [
+                'error' => 'camera_fetch',
+                'detail' => 'RTSP/H.265-URL – ONVIF Image Grabber (JPEG) als Medienquelle wählen, nicht ONVIF Media Stream.',
+            ];
+        }
         if (preg_match('#^https?://#i', $raw)) {
             $binary = $this->fetchRemoteBinary($raw);
-            if ($binary !== null && $binary !== '') {
+            if ($binary !== null && $binary !== '' && HomeDisplayMedia::looksLikeImageBytes($binary)) {
                 return ['binary' => $binary];
+            }
+            if ($binary !== null && $binary !== '') {
+                return [
+                    'error' => 'camera_fetch',
+                    'detail' => 'Antwort ist kein JPEG/PNG (evtl. H.265-Stream) – Image Grabber Medienobjekt Image verwenden.',
+                ];
             }
             $host = parse_url($raw, PHP_URL_HOST);
             $prefix = is_string($host) && $host !== '' ? $host . ' – ' : '';
@@ -1719,10 +1739,27 @@ class HomeDisplay extends IPSModuleStrict
             return ['error' => 'camera_fetch', 'detail' => $detail];
         }
         $binary = HomeDisplayMedia::readBinaryFromPath($raw);
-        if ($binary !== null && $binary !== '') {
+        if ($binary !== null && $binary !== '' && HomeDisplayMedia::looksLikeImageBytes($binary)) {
             return ['binary' => $binary];
         }
-        return ['error' => 'camera_fetch', 'detail' => 'Pfad/Datei aus Variable nicht lesbar: ' . substr($raw, 0, 80)];
+        $mediaId = HomeDisplayMedia::mediaIdFromFileRef($raw);
+        if ($mediaId > 0) {
+            HomeDisplayMedia::refreshCameraTile($tile);
+            $binary = HomeDisplayMedia::mediaBytesWithRetry($mediaId);
+            if ($binary !== null && $binary !== '' && HomeDisplayMedia::looksLikeImageBytes($binary)) {
+                return ['binary' => $binary];
+            }
+            if (HomeDisplayMedia::isStreamMediaId($mediaId)) {
+                return [
+                    'error' => 'camera_fetch',
+                    'detail' => 'Medienobjekt ist ein Video-Stream (H.265/RTSP), kein JPEG – ONVIF Image Grabber „Image“ wählen.',
+                ];
+            }
+        }
+        $hint = preg_match('#ONVIF_#i', $raw)
+            ? ' ONVIF: Datei oft nur im RAM – Medienobjekt Image unter Image Grabber verknüpfen, Quelle „Medien“, ONVIF_UpdateImage testen.'
+            : '';
+        return ['error' => 'camera_fetch', 'detail' => 'Pfad/Datei nicht lesbar oder leer: ' . substr($raw, 0, 80) . '.' . $hint];
     }
 
     /** @return array<string, mixed> */
@@ -2161,12 +2198,21 @@ class HomeDisplay extends IPSModuleStrict
         if (isset($body['firmware']) && (string) $body['firmware'] !== '') {
             $label .= ' · Programm ' . (string) $body['firmware'];
         }
-        $pairingId = @IPS_GetObjectIDByIdent('PairingState', $instanceId);
-        if (is_int($pairingId) && $pairingId > 0) {
-            IPS_SetValue($pairingId, $label);
-        }
-        if (function_exists('HDISP_SetPanelStatus')) {
-            HDISP_SetPanelStatus($instanceId, $label);
+        // Status-Anzeige darf /v1/hello nie abbrechen (Dienst läuft oft auf einer anderen Panel-Instanz).
+        try {
+            if ((int) $instanceId === $this->InstanceID) {
+                $this->SetValue('PairingState', $label);
+                $this->SetValue('PanelStatus', $label);
+            } else {
+                if (function_exists('HDISP_SetPairingState')) {
+                    HDISP_SetPairingState($instanceId, $label);
+                }
+                if (function_exists('HDISP_SetPanelStatus')) {
+                    HDISP_SetPanelStatus($instanceId, $label);
+                }
+            }
+        } catch (Throwable $e) {
+            $this->SendDebug('HelloStatus', $e->getMessage(), 0);
         }
     }
 

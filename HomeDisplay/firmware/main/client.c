@@ -6,6 +6,7 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_ota_ops.h"
 #include "esp_random.h"
 #include "esp_system.h"
@@ -43,6 +44,8 @@ static char firmware_signature[700];
 static char firmware_version[24];
 static char update_error[80];
 static char rollback_reason[80];
+static int last_http_status;
+static esp_err_t last_transport_error;
 static char last_command[24];
 static int progress;
 static int state_interval = 3;
@@ -118,24 +121,45 @@ static void set_online(bool is_online)
     homedisplay_ui_set_online(is_online, rssi_now());
 }
 
-static esp_err_t request(const char *path, const char *method, const char *body, char *response, size_t response_length)
+static void trim_base_url(void)
 {
-    if (!homedisplay_wifi_connected()) return ESP_ERR_WIFI_NOT_CONNECT;
-    char url[240];
-    snprintf(url, sizeof(url), "%s%s", base_url, path);
-    esp_http_client_config_t config = {
-        .url = url,
-        .timeout_ms = 8000,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
+    size_t length = strlen(base_url);
+    while (length > 0 && base_url[length - 1] == '/') {
+        base_url[--length] = '\0';
+    }
+}
+
+static void configure_http_client(esp_http_client_config_t *config, const char *url)
+{
+    memset(config, 0, sizeof(*config));
+    config->url = url;
+    config->timeout_ms = 12000;
+    if (strncmp(url, "https://", 8) == 0) {
 #if CONFIG_HOMEDISPLAY_TLS_INSECURE
-    config.skip_cert_common_name_check = true;
-    config.crt_bundle_attach = NULL;
+        config->crt_bundle_attach = NULL;
+        config->skip_cert_common_name_check = true;
+#else
+        config->crt_bundle_attach = esp_crt_bundle_attach;
 #endif
+    }
+}
+
+static esp_err_t request_to_base(const char *base, const char *path, const char *method, const char *body, char *response, size_t response_length)
+{
+    if (!homedisplay_wifi_connected()) {
+        return ESP_ERR_WIFI_NOT_CONNECT;
+    }
+    char url[280];
+    snprintf(url, sizeof(url), "%s%s", base, path);
+    esp_http_client_config_t config;
+    configure_http_client(&config, url);
     esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) return ESP_ERR_NO_MEM;
+    if (!client) {
+        return ESP_ERR_NO_MEM;
+    }
     esp_http_client_set_method(client, strcmp(method, "POST") == 0 ? HTTP_METHOD_POST : HTTP_METHOD_GET);
-    if (token[0] != '\0') {
+    bool use_auth = token[0] != '\0' && strcmp(path, "/v1/hello") != 0;
+    if (use_auth) {
         char header[64];
         snprintf(header, sizeof(header), "Bearer %s", token);
         esp_http_client_set_header(client, "Authorization", header);
@@ -144,10 +168,15 @@ static esp_err_t request(const char *path, const char *method, const char *body,
         esp_http_client_set_header(client, "Content-Type", "application/json");
     }
     esp_err_t error = esp_http_client_open(client, body ? strlen(body) : 0);
-    if (error == ESP_OK && body) esp_http_client_write(client, body, strlen(body));
+    last_transport_error = error;
+    last_http_status = 0;
+    if (error == ESP_OK && body) {
+        esp_http_client_write(client, body, strlen(body));
+    }
     if (error == ESP_OK) {
         esp_http_client_fetch_headers(client);
         int status = esp_http_client_get_status_code(client);
+        last_http_status = status;
         int total = 0;
         while (total < (int) response_length - 1) {
             int chunk = esp_http_client_read(client, response + total, response_length - 1 - total);
@@ -155,21 +184,53 @@ static esp_err_t request(const char *path, const char *method, const char *body,
                 error = ESP_FAIL;
                 break;
             }
-            if (chunk == 0) break;
+            if (chunk == 0) {
+                break;
+            }
             total += chunk;
         }
         response[total < 0 ? 0 : total] = '\0';
         if (error == ESP_OK && status == 401) {
-            ESP_LOGW(TAG, "Token abgelehnt, Kopplung erforderlich");
+            ESP_LOGW(TAG, "Token abgelehnt (%s)", path);
             token[0] = '\0';
             remember("token", "");
             error = ESP_ERR_INVALID_STATE;
         } else if (error == ESP_OK && status >= 400) {
+            ESP_LOGW(TAG, "HTTP %d auf %s: %.120s", status, path, response);
             error = ESP_FAIL;
         }
+    } else {
+        ESP_LOGW(TAG, "Transportfehler %s %s: %s", method, url, esp_err_to_name(error));
     }
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
+    return error;
+}
+
+static esp_err_t request(const char *path, const char *method, const char *body, char *response, size_t response_length)
+{
+    trim_base_url();
+    if (base_url[0] == '\0') {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t error = request_to_base(base_url, path, method, body, response, response_length);
+    if (error == ESP_OK) {
+        return ESP_OK;
+    }
+    if (strncmp(base_url, "https://", 8) == 0) {
+        char http_base[160];
+        snprintf(http_base, sizeof(http_base), "http://%s", base_url + 8);
+        size_t http_len = strlen(http_base);
+        while (http_len > 0 && http_base[http_len - 1] == '/') {
+            http_base[--http_len] = '\0';
+        }
+        ESP_LOGI(TAG, "HTTPS fehlgeschlagen, versuche HTTP: %s", http_base);
+        error = request_to_base(http_base, path, method, body, response, response_length);
+        if (error == ESP_OK) {
+            snprintf(base_url, sizeof(base_url), "%s", http_base);
+            remember("base", base_url);
+        }
+    }
     return error;
 }
 
@@ -192,43 +253,91 @@ static void discover(void)
     mdns_query_results_free(results);
 }
 
-static void make_code(void)
+static void ensure_pairing_code(void);
+static void ui_setup(const char *detail);
+
+static void ui_request_error(const char *step, const char *path)
 {
+    char detail[320];
+    if (last_http_status > 0) {
+        snprintf(detail, sizeof(detail), "%s\nHTTP %d auf %s\n%s", step, last_http_status, path, base_url);
+    } else {
+        snprintf(detail, sizeof(detail), "%s\n%s\n%s\nHook bis …/hook/homedisplay", step,
+                 esp_err_to_name(last_transport_error), base_url);
+    }
+    ui_setup(detail);
+}
+
+static void ui_setup(const char *detail)
+{
+    ensure_pairing_code();
+    homedisplay_ui_set_pairing_code(pairing_code);
+    homedisplay_ui_setup_progress(detail);
+}
+
+static void ensure_pairing_code(void)
+{
+    if (pairing_code[0] != '\0') {
+        return;
+    }
     static const char alphabet[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    for (int index = 0; index < 6; index++) pairing_code[index] = alphabet[esp_random() % (sizeof(alphabet) - 1)];
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    uint32_t hash = ((uint32_t) mac[0] << 24) | ((uint32_t) mac[1] << 16) | ((uint32_t) mac[2] << 8) | (uint32_t) mac[3];
+    hash ^= ((uint32_t) mac[4] << 8) | (uint32_t) mac[5];
+    hash ^= hash << 13;
+    hash ^= hash >> 17;
+    hash ^= hash << 5;
+    for (int index = 0; index < 6; index++) {
+        pairing_code[index] = alphabet[hash % 32];
+        hash /= 32;
+    }
     pairing_code[6] = '\0';
 }
 
 static void pair_until_token(void)
 {
-    make_code();
-    char line[64];
-    snprintf(line, sizeof(line), "Kopplungscode\n%s", pairing_code);
-    homedisplay_ui_status(line);
+    ensure_pairing_code();
+    homedisplay_ui_set_pairing_code(pairing_code);
+    ui_setup("Starte Kopplung\nWarte auf WLAN …");
     char body[96];
     char response[512];
     snprintf(body, sizeof(body), "{\"code\":\"%s\",\"firmware\":\"" HOMEDISPLAY_FIRMWARE_VERSION "\"}", pairing_code);
+    char last_detail[160] = {0};
     while (token[0] == '\0') {
         esp_task_wdt_reset();
         if (!homedisplay_wifi_connected()) {
-            homedisplay_ui_status("Warte auf WLAN");
-        } else {
-            homedisplay_ui_status(line);
-            if (base_url[0] == '\0') discover();
-            if (base_url[0] != '\0' && request("/v1/hello", "POST", body, response, sizeof(response)) == ESP_OK) {
-                cJSON *root = cJSON_Parse(response);
-                const char *status = cJSON_GetStringValue(cJSON_GetObjectItem(root, "status"));
-                const char *received = cJSON_GetStringValue(cJSON_GetObjectItem(root, "token"));
-                if (status && strcmp(status, "paired") == 0 && received) {
-                    snprintf(token, sizeof(token), "%s", received);
-                    remember("token", token);
-                }
-                cJSON_Delete(root);
+            if (strcmp(last_detail, "wlan") != 0) {
+                ui_setup("WLAN verbinden …\nSSID und Passwort prüfen");
+                strcpy(last_detail, "wlan");
             }
+        } else if (base_url[0] == '\0') {
+            if (strcmp(last_detail, "mdns") != 0) {
+                ui_setup("WLAN verbunden\nSuche Dienst (mDNS) …");
+                strcpy(last_detail, "mdns");
+            }
+            discover();
+        } else if (request("/v1/hello", "POST", body, response, sizeof(response)) != ESP_OK) {
+            if (strcmp(last_detail, "hello_fail") != 0) {
+                ui_request_error("Server-Antwort fehlgeschlagen", "/v1/hello");
+                strcpy(last_detail, "hello_fail");
+            }
+        } else {
+            cJSON *root = cJSON_Parse(response);
+            const char *status = cJSON_GetStringValue(cJSON_GetObjectItem(root, "status"));
+            const char *received = cJSON_GetStringValue(cJSON_GetObjectItem(root, "token"));
+            if (status && strcmp(status, "paired") == 0 && received) {
+                snprintf(token, sizeof(token), "%s", received);
+                remember("token", token);
+                ui_setup("Mit IPS gekoppelt\nToken erhalten");
+            } else if (strcmp(last_detail, "pending") != 0) {
+                ui_setup("Verbunden mit Server\nWarte auf IPS:\nClaimCode eintragen und übernehmen");
+                strcpy(last_detail, "pending");
+            }
+            cJSON_Delete(root);
         }
         vTaskDelay(pdMS_TO_TICKS(3000));
     }
-    homedisplay_ui_status("Hausanzeige verbunden");
 }
 
 static int version_of(const char *text)
@@ -285,15 +394,9 @@ static esp_err_t download_to_file(const char *path, const char *target)
 {
     char url[260];
     snprintf(url, sizeof(url), "%s%s", base_url, path);
-    esp_http_client_config_t config = {
-        .url = url,
-        .timeout_ms = 15000,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-#if CONFIG_HOMEDISPLAY_TLS_INSECURE
-    config.skip_cert_common_name_check = true;
-    config.crt_bundle_attach = NULL;
-#endif
+    esp_http_client_config_t config;
+    configure_http_client(&config, url);
+    config.timeout_ms = 15000;
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) return ESP_ERR_NO_MEM;
     char header[64];
@@ -664,9 +767,23 @@ static void run_command(cJSON *root)
 
 static void pull_manifest(char *response, size_t length)
 {
-    if (request("/v1/manifest", "GET", NULL, response, length) != ESP_OK) return;
+    if (token[0] == '\0') {
+        return;
+    }
+    ui_setup("Verbinde mit Server\nRufe Manifest ab …");
+    if (request("/v1/manifest", "GET", NULL, response, length) != ESP_OK) {
+        if (last_http_status == 401) {
+            ui_setup("Token ungültig\nClaimCode in IPS prüfen\nNeu koppeln (Serial: k)");
+        } else {
+            ui_request_error("Manifest fehlgeschlagen", "/v1/manifest");
+        }
+        return;
+    }
     cJSON *root = cJSON_Parse(response);
-    if (!root) return;
+    if (!root) {
+        ui_setup("Manifest ungültig\nServer-Antwort nicht lesbar");
+        return;
+    }
     remember_time(root);
     run_command(root);
     cJSON *firmware = cJSON_GetObjectItem(root, "firmware");
@@ -679,25 +796,45 @@ static void pull_manifest(char *response, size_t length)
     char next_layout[80];
     copy_string(cJSON_GetObjectItem(config, "sha256"), next_config, sizeof(next_config));
     copy_string(cJSON_GetObjectItem(layout, "sha256"), next_layout, sizeof(next_layout));
+    int layout_version = cJSON_GetObjectItem(layout, "version") ? cJSON_GetObjectItem(layout, "version")->valueint : 0;
     const char *min_firmware = cJSON_GetStringValue(cJSON_GetObjectItem(layout, "minFirmware"));
     layout_held = min_firmware && version_of(HOMEDISPLAY_FIRMWARE_VERSION) < version_of(min_firmware);
     cJSON_Delete(root);
-    if (next_config[0] && strcmp(next_config, config_sha) != 0 && request("/v1/config", "GET", NULL, response, length) == ESP_OK) {
-        snprintf(config_sha, sizeof(config_sha), "%s", next_config);
-        apply_config_document(response);
-        write_cache(CONFIG_CACHE, response);
-        remember("config_sha", config_sha);
+    if (next_config[0] && strcmp(next_config, config_sha) != 0) {
+        ui_setup("Server verbunden\nLade Einstellungen …");
+        if (request("/v1/config", "GET", NULL, response, length) == ESP_OK) {
+            snprintf(config_sha, sizeof(config_sha), "%s", next_config);
+            apply_config_document(response);
+            write_cache(CONFIG_CACHE, response);
+            remember("config_sha", config_sha);
+        }
     }
-    if (!layout_held && next_layout[0] && strcmp(next_layout, layout_sha) != 0 && request("/v1/layout", "GET", NULL, response, length) == ESP_OK) {
-        fetch_images(response);
-        fetch_layout_cameras(response);
-        fetch_layout_media(response);
-        snprintf(layout_sha, sizeof(layout_sha), "%s", next_layout);
-        homedisplay_ui_apply_layout(response);
-        write_cache(LAYOUT_CACHE, response);
-        remember("layout_sha", layout_sha);
-        last_seq = -1;
+    if (layout_held) {
+        ui_setup("Vorlage wartet\nFirmware zu alt für Layout\nBitte OTA aktualisieren");
+        return;
     }
+    if (!next_layout[0] || layout_version <= 0) {
+        ui_setup("Noch keine Vorlage\nIn IPS: Layout zuweisen\nund veröffentlichen");
+        return;
+    }
+    if (strcmp(next_layout, layout_sha) == 0) {
+        ui_setup("Vorlage aktuell\nLade Live-Werte …");
+        return;
+    }
+    ui_setup("Hole Vorlage vom Server\nLayout wird geladen …");
+    if (request("/v1/layout", "GET", NULL, response, length) != ESP_OK) {
+        ui_setup("Vorlage nicht erreichbar\n/v1/layout fehlgeschlagen");
+        return;
+    }
+    ui_setup("Verarbeite Vorlage\nLade Bilder und Medien …");
+    fetch_images(response);
+    fetch_layout_cameras(response);
+    fetch_layout_media(response);
+    snprintf(layout_sha, sizeof(layout_sha), "%s", next_layout);
+    homedisplay_ui_apply_layout(response);
+    write_cache(LAYOUT_CACHE, response);
+    remember("layout_sha", layout_sha);
+    last_seq = -1;
 }
 
 static void post_action(const char *tile_id, const char *action_id, int value)
@@ -801,8 +938,15 @@ static void client_task(void *argument)
         return;
     }
     restore_cache(response, response_length);
-    if (token[0] == '\0') pair_until_token();
-    int64_t next_manifest = 0;
+    ensure_pairing_code();
+    homedisplay_ui_set_pairing_code(pairing_code);
+    if (token[0] == '\0') {
+        pair_until_token();
+    } else {
+        ui_setup("Bereits gekoppelt\nStarte Synchronisation …");
+    }
+    pull_manifest(response, response_length);
+    int64_t next_manifest = esp_timer_get_time();
     int64_t verify_deadline = esp_timer_get_time() + 180000000;
     int64_t test_pattern_until = CONFIG_HOMEDISPLAY_BOOT_TEST_SECONDS > 0 ? esp_timer_get_time() + (int64_t) CONFIG_HOMEDISPLAY_BOOT_TEST_SECONDS * 1000000 : 0;
     while (true) {
@@ -816,7 +960,7 @@ static void client_task(void *argument)
         int64_t now = esp_timer_get_time();
         if (!homedisplay_wifi_connected()) {
             set_online(false);
-            homedisplay_ui_status("WLAN getrennt");
+            ui_setup("WLAN getrennt\nVerbindung wird wiederhergestellt …");
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
         }
@@ -849,7 +993,7 @@ static void client_task(void *argument)
             failures++;
             if (failures >= 3) {
                 set_online(false);
-                homedisplay_ui_status("Dienst nicht erreichbar");
+                ui_setup("Server antwortet nicht\n/v1/state fehlgeschlagen\nManifest wird erneut versucht …");
             }
             if (failures == 20 && strlen(CONFIG_HOMEDISPLAY_ADAPTER_URL) == 0) {
                 /* Adapter eventuell umgezogen: erneut per mDNS suchen. */

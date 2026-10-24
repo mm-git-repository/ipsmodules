@@ -11,7 +11,7 @@ idf.py -p COMx flash monitor
 ## Einrichtung
 
 1. Ohne WLAN-Daten in `menuconfig` und ohne gespeicherte Zugangsdaten öffnet die Anzeige zehn Minuten lang das WLAN `Hausanzeige-Setup-XXXX`. Dort `http://192.168.4.1` öffnen, WLAN und optional die Dienstadresse eintragen. Die Anzeige speichert die Daten und startet neu.
-2. **Serial-Menü (115200):** In den ersten 8 Sekunden nach dem Start `m` + Enter drücken, oder jederzeit im Betrieb erneut `m` + Enter. Menü für Dienstadresse, WLAN, Kopplung löschen, Assistent und Factory Reset (`RESET` bestätigen). Speichern mit `s` startet neu.
+2. **Serial-Menü:** Am **USB-Port** des Boards (nicht nur Strom) mit `idf.py monitor` oder einem Terminal verbinden. In den ersten 8 Sekunden nach dem Start `m` + Enter drücken, oder jederzeit im Betrieb erneut `m` + Enter. Menü für Dienstadresse, WLAN, Kopplung löschen, Assistent und Factory Reset (`RESET` bestätigen). Speichern mit `s` startet neu.
 3. Alternativ WLAN und Dienstadresse fest in `idf.py menuconfig` unter HomeDisplay eintragen. Die Adresse beginnt mit `https://`. Die Anzeige prüft das Zertifikat von IP-Symcon nicht.
 4. Beim ersten Kontakt zeigt die Anzeige einen Kopplungscode. Diesen Code in der Instanz Hausanzeige eintragen und „Kopplungscode übernehmen“ ausführen.
 
