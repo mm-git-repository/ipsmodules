@@ -12,7 +12,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 32;
+    private const MODULE_BUILD = 33;
 
     private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
@@ -857,6 +857,11 @@ class HomeDisplay extends IPSModuleStrict
         $firmware = $this->firmwareDescriptor($device['id']);
         $runtime = $this->runtime();
         $command = $runtime[(string) $device['id']]['command'] ?? null;
+        if (is_array($command) && (int) ($command['at'] ?? 0) < time() - 600) {
+            unset($runtime[(string) $device['id']]['command']);
+            $this->saveRuntime($runtime);
+            $command = null;
+        }
         return [
             'contract' => self::CONTRACT,
             'now' => time(),
@@ -1497,8 +1502,16 @@ class HomeDisplay extends IPSModuleStrict
         $runtime[(string) $device['id']]['pending'] = [];
         $runtime[(string) $device['id']]['lastCheck'] = time();
         $command = $runtime[(string) $device['id']]['command'] ?? null;
-        if (is_array($command) && (int) ($command['at'] ?? 0) < time() - 3600) {
-            unset($runtime[(string) $device['id']]['command']);
+        if (is_array($command)) {
+            $commandAt = (int) ($command['at'] ?? 0);
+            $uptime = isset($body['uptime']) ? (int) $body['uptime'] : -1;
+            $name = (string) ($command['name'] ?? '');
+            // Restart nach erfolgreichem Boot wieder entfernen, sonst bleibt er im Manifest.
+            $restartDone = $name === 'restart' && $uptime >= 0 && $uptime < 180 && $commandAt > 0 && $commandAt <= time() - $uptime;
+            $expired = $commandAt > 0 && $commandAt < time() - 600;
+            if ($restartDone || $expired) {
+                unset($runtime[(string) $device['id']]['command']);
+            }
         }
         $this->saveRuntime($runtime);
         $status = implode(', ', $parts);

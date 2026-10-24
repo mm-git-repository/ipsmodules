@@ -32,10 +32,10 @@ void app_main(void)
     }
     homedisplay_serial_console_init();
 
-    /* Task-Watchdog: 30 s; Client- und LVGL-Task melden sich regelmäßig. */
-    esp_task_wdt_config_t watchdog = {.timeout_ms = 30000, .idle_core_mask = 0, .trigger_panic = true};
-    if (esp_task_wdt_init(&watchdog) == ESP_ERR_INVALID_STATE) {
-        esp_task_wdt_reconfigure(&watchdog);
+    /* Task-Watchdog: 60 s (Layout/Bilder können länger brauchen). IDF initialisiert oft schon. */
+    esp_task_wdt_config_t watchdog = {.timeout_ms = 60000, .idle_core_mask = 0, .trigger_panic = true};
+    if (esp_task_wdt_reconfigure(&watchdog) == ESP_ERR_INVALID_STATE) {
+        esp_task_wdt_init(&watchdog);
     }
 
     esp_lcd_panel_handle_t panel = NULL;

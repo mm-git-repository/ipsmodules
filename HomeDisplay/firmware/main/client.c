@@ -167,6 +167,7 @@ static esp_err_t request_to_base(const char *base, const char *path, const char 
     if (body) {
         esp_http_client_set_header(client, "Content-Type", "application/json");
     }
+    esp_task_wdt_reset();
     esp_err_t error = esp_http_client_open(client, body ? strlen(body) : 0);
     last_transport_error = error;
     last_http_status = 0;
@@ -179,6 +180,7 @@ static esp_err_t request_to_base(const char *base, const char *path, const char 
         last_http_status = status;
         int total = 0;
         while (total < (int) response_length - 1) {
+            esp_task_wdt_reset();
             int chunk = esp_http_client_read(client, response + total, response_length - 1 - total);
             if (chunk < 0) {
                 error = ESP_FAIL;
@@ -751,6 +753,11 @@ static void run_command(cJSON *root)
     remember("command", last_command);
     ESP_LOGI(TAG, "Befehl %s", name);
     if (strcmp(name, "restart") == 0) {
+        /* Verhindert Neustart-Schleife, wenn der Befehl nach dem Reboot erneut im Manifest hängt. */
+        if ((esp_timer_get_time() - started_at) < 120000000LL) {
+            ESP_LOGW(TAG, "Restart-Befehl ignoriert (kurz nach Boot)");
+            return;
+        }
         homedisplay_ui_status("Neustart");
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
@@ -770,6 +777,7 @@ static void pull_manifest(char *response, size_t length)
     if (token[0] == '\0') {
         return;
     }
+    esp_task_wdt_reset();
     ui_setup("Verbinde mit Server\nRufe Manifest ab …");
     if (request("/v1/manifest", "GET", NULL, response, length) != ESP_OK) {
         if (last_http_status == 401) {
@@ -827,9 +835,13 @@ static void pull_manifest(char *response, size_t length)
         return;
     }
     ui_setup("Verarbeite Vorlage\nLade Bilder und Medien …");
+    esp_task_wdt_reset();
     fetch_images(response);
+    esp_task_wdt_reset();
     fetch_layout_cameras(response);
+    esp_task_wdt_reset();
     fetch_layout_media(response);
+    esp_task_wdt_reset();
     snprintf(layout_sha, sizeof(layout_sha), "%s", next_layout);
     homedisplay_ui_apply_layout(response);
     write_cache(LAYOUT_CACHE, response);
@@ -938,14 +950,18 @@ static void client_task(void *argument)
         return;
     }
     restore_cache(response, response_length);
+    esp_task_wdt_reset();
     ensure_pairing_code();
     homedisplay_ui_set_pairing_code(pairing_code);
     if (token[0] == '\0') {
         pair_until_token();
     } else {
         ui_setup("Bereits gekoppelt\nStarte Synchronisation …");
+        /* OTA-Rollback vermeiden, sobald WLAN + Token stehen – nicht erst nach /v1/state. */
+        confirm_boot();
     }
     pull_manifest(response, response_length);
+    confirm_boot();
     int64_t next_manifest = esp_timer_get_time();
     int64_t verify_deadline = esp_timer_get_time() + 180000000;
     int64_t test_pattern_until = CONFIG_HOMEDISPLAY_BOOT_TEST_SECONDS > 0 ? esp_timer_get_time() + (int64_t) CONFIG_HOMEDISPLAY_BOOT_TEST_SECONDS * 1000000 : 0;
