@@ -81,7 +81,7 @@
         <div id="palette-items-scroll">
           <div class="palette-items">
             <div class="palette-item" draggable="true" data-kind="value">Wert</div>
-            <div class="palette-item" draggable="true" data-kind="value" data-control="combo">Kombischalter</div>
+            <div class="palette-item" draggable="true" data-kind="value" data-control="combo">Dimmschalter</div>
             <div class="palette-item" draggable="true" data-kind="value" data-control="battery">Batterie</div>
             <div class="palette-item" draggable="true" data-kind="nav">Seitenwechsler</div>
                         <div class="palette-item" draggable="true" data-kind="chart">Diagramm</div>
@@ -119,19 +119,10 @@
       </div>
     </section>
 
-    <aside id="properties">
-      <h2>Eigenschaften</h2>
-      <div id="prop-empty" class="hint">Kachel im Raster auswählen oder ein Element aus der Palette ins Raster ziehen. Doppelklick öffnet die Details.</div>
-      <div id="prop-page" class="hidden">
-        <label>Hintergrund dieser Seite
-          <select id="page-background"></select>
-        </label>
-        <label>Seiten-Symbol (Reiter)
-          <select id="page-icon"></select>
-        </label>
-        <p class="hint">Gilt für die aktive Seite (Tabs). An der Anzeige sichtbar, im Editor-Raster nicht.</p>
-      </div>
-      <form id="prop-form" class="hidden">
+    <dialog id="tile-dialog">
+      <form id="prop-form">
+        <h3 id="t-title">Kachel</h3>
+        <div id="tile-body">
         <label>Art <input id="p-kind" readonly></label>
         <label>Titel <input id="p-title"></label>
         <label><input id="p-show-title" type="checkbox" checked> Titel anzeigen</label>
@@ -154,7 +145,7 @@
           <label>Höhe <input id="p-rowspan" type="number" min="1" max="6" value="1"></label>
         </div>
         <div class="row">
-          <label><input id="p-own-bg" type="checkbox"> Eigene Farbe <input id="p-bg-color" type="color" value="#2a4f7c"></label>
+          <label id="p-own-bg-wrap"><input id="p-own-bg" type="checkbox"> <span id="p-own-bg-label">Eigene Farbe</span> <input id="p-bg-color" type="color" value="#2a4f7c"></label>
           <label id="p-own-on-wrap"><input id="p-own-on" type="checkbox"> Farbe Ein <input id="p-on-color" type="color" value="#ffb547"></label>
         </div>
         <div data-for="nav">
@@ -214,13 +205,14 @@
           </label>
         </div>
         <div data-for="scene">
-          <label>Aktions-Variable <span class="pick-row"><input id="p-scene-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="scene">Auswählen</button></span></label>
+          <div id="p-scene-steps"></div>
+          <button type="button" id="p-scene-add">Lampe hinzufügen</button>
           <label>Aktions-ID <input id="p-scene-actionid" placeholder="Automatisch (a-Kennung)" maxlength="40" pattern="[A-Za-z0-9_-]*"></label>
           <label>Symbol
             <select id="p-scene-icon"></select>
           </label>
           <label><input id="p-scene-confirm" type="checkbox"> Bestätigung an der Anzeige</label>
-          <p class="hint">Variable mit IPS-Aktion (Skript). Tippen an der Anzeige löst die Aktion aus — wie eine openHAB-Szene.</p>
+          <p class="hint">Jede Zeile setzt beim Tippen eine Lampe auf den gewählten Wert. Farbe optional über eine Integer-Variable (Profil HexColor).</p>
         </div>
         <div data-for="weather">
           <label>Temperatur-Variable <span class="pick-row"><input id="p-weather-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="weather">Auswählen</button></span></label>
@@ -230,7 +222,7 @@
           </div>
           <label>Prognose (optional) <span class="pick-row"><input id="p-weather-forecast" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="forecast">Auswählen</button></span></label>
           <label>Symbol <select id="p-weather-icon"></select></label>
-          <p class="hint">Temperatur: Variable im Baum anklicken. Prognose: danach Textvariable anklicken (Fußzeile der Karte).</p>
+          <p class="hint">Temperatur und Prognose jeweils über Auswählen wählen.</p>
         </div>
         <div data-for="presence">
           <label>Variable <span class="pick-row"><input id="p-presence-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="presence">Auswählen</button></span></label>
@@ -240,7 +232,7 @@
               <option value="alarm">Alarm</option>
             </select>
           </label>
-          <p class="hint">Variable im Baum anklicken (meist Ja/Nein). Modus steuert Darstellung an der Anzeige.</p>
+          <p class="hint">Variable über Auswählen wählen (meist Ja/Nein). Modus steuert die Darstellung an der Anzeige.</p>
         </div>
         <div data-for="separator">
           <p class="hint">Horizontale Trennlinie über die volle Breite der Zeile. Nur Titel optional.</p>
@@ -262,14 +254,43 @@
           </div>
           <label>Schalter / Bedienung
             <select id="p-interaction">
+              <option value="">Nur Wert anzeigen</option>
               <option value="switch">Schalter (Ein/Aus)</option>
-              <option value="iconSwitch">Icon-Schalter</option>
-              <option value="combo">Kombischalter</option>
-              <option value="battery">Batterie (Ladestand)</option>
+              <option value="combo">Dimmschalter</option>
               <option value="blinds">Rolladen</option>
               <option value="setpoint">Setpoint (Heizung)</option>
             </select>
           </label>
+          <div id="p-switch-wrap" class="hidden">
+            <label><input id="p-show-icon" type="checkbox" checked> Icon anzeigen</label>
+            <div id="p-icon-toggle">
+              <label>Symbol Ein <select id="p-iconon"></select></label>
+              <label>Symbol Aus <select id="p-iconoff"></select></label>
+            </div>
+            <label><input id="p-show-state-text" type="checkbox"> Text Ein/Aus anzeigen</label>
+          </div>
+          <div id="p-value-style">
+            <label><input id="p-own-text" type="checkbox"> Eigene Textfarbe <input id="p-text-color" type="color" value="#f4f7fb"></label>
+            <label>Textgröße
+              <select id="p-text-size">
+                <option value="small">Klein</option>
+                <option value="normal" selected>Normal</option>
+                <option value="large">Groß</option>
+                <option value="xlarge">Sehr groß</option>
+              </select>
+            </label>
+            <div class="row">
+              <label>Schwellwert <input id="p-threshold" placeholder="leer = aus"></label>
+              <label>Farbe ab Schwellwert
+                <select id="p-status-color">
+                  <option value="neutral">Neutral</option>
+                  <option value="ok">Grün</option>
+                  <option value="warn">Gelb</option>
+                  <option value="alarm">Rot</option>
+                </select>
+              </label>
+            </div>
+          </div>
           <div id="p-setpoint-wrap" class="hidden">
             <label>Sollwert-Variable <span class="pick-row"><input id="p-setpoint-var" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="setpoint">Auswählen</button></span></label>
             <label>Schritt <input id="p-setpoint-step" type="number" step="0.1" value="0.5"></label>
@@ -277,14 +298,6 @@
           <div id="p-icon-static">
             <label>Symbol (optional)
               <select id="p-value-icon"></select>
-            </label>
-          </div>
-          <div id="p-icon-toggle" class="hidden">
-            <label>Symbol Ein
-              <select id="p-iconon"></select>
-            </label>
-            <label>Symbol Aus
-              <select id="p-iconoff"></select>
             </label>
           </div>
           <div data-for="value" id="p-battery-wrap" class="hidden">
@@ -300,26 +313,20 @@
             </label>
           </div>
           <div id="p-dim-wrap" class="hidden">
-            <label id="p-combo-variant-wrap">Art des Schalters
-              <select id="p-combo-variant">
-                <option value="switch">Schalter + Balken</option>
-                <option value="barOnly">Nur Balken</option>
-                <option value="switchTap">Schalter + Balken, Antippen springt</option>
+            <label><input id="p-dim-show-switch" type="checkbox" checked> Schalter (Ein/Aus) anzeigen</label>
+            <label><input id="p-dim-show-bar" type="checkbox" checked> Balken anzeigen</label>
+            <label><input id="p-dim-show-percent" type="checkbox" checked> Prozent anzeigen</label>
+            <label><input id="p-dim-show-state-text" type="checkbox"> Text Ein/Aus anzeigen</label>
+            <label id="p-dim-layout-wrap">Anordnung
+              <select id="p-dim-layout">
+                <option value="horizontal">Nebeneinander</option>
+                <option value="stacked">Schalter über Balken</option>
               </select>
             </label>
-            <div class="row">
-              <label><input id="p-dim-show-percent" type="checkbox" checked> Prozent am Balken</label>
-              <label>Anordnung
-                <select id="p-dim-layout">
-                  <option value="horizontal">Nebeneinander</option>
-                  <option value="stacked">Schalter über Balken</option>
-                </select>
-              </label>
-            </div>
-            <label id="p-dim-tap-wrap">Leiste antippen
+            <label id="p-dim-tap-wrap">Bei Antippen
               <select id="p-dim-tap">
-                <option value="auto">Standard</option>
-                <option value="on">Immer – Springen zur Position</option>
+                <option value="popup">Dimmer-Popup öffnen</option>
+                <option value="on">Direkt auf Position springen</option>
                 <option value="off">Nur Griff ziehen</option>
               </select>
             </label>
@@ -374,7 +381,7 @@
             <label>Nachkommastellen <input id="p-flow-decimals" type="number" min="0" max="3" value="0"></label>
           </div>
           <label>Animation ab (W) <input id="p-flow-threshold" type="number" min="0" value="50"></label>
-          <p class="hint">Alle Pflicht-Variablen zuweisen: Slot wählen, Variable im Baum anklicken. Kachel 2×2 empfohlen.</p>
+          <p class="hint">Alle Pflicht-Variablen über Auswählen zuweisen. Kachel 2×2 empfohlen.</p>
         </div>
         <div data-for="image">
           <label>Bildquelle
@@ -411,26 +418,16 @@
         <div data-for="system">
           <p class="hint">Die Anzeige füllt diese Kachel selbst: Programm, WLAN-Stärke, IP-Adresse, Laufzeit, freier Speicher und Alter der Werte. Mindestens 2 × 2 Zellen empfohlen.</p>
         </div>
-        <div class="row">
-          <button type="button" id="p-details">Details …</button>
+        </div>
+        <div class="row right">
           <button type="button" id="p-delete">Entfernen</button>
+          <button type="button" id="p-close">Schließen</button>
         </div>
       </form>
-    </aside>
+    </dialog>
   </div>
 
   <div id="statusbar"><span id="status">Lade …</span><span id="hint"></span></div>
-
-  <dialog id="details">
-    <form method="dialog">
-      <h3 id="d-title">Kachel</h3>
-      <div id="d-body"></div>
-      <div class="row right">
-        <button value="cancel">Abbrechen</button>
-        <button value="ok" id="d-ok">Übernehmen</button>
-      </div>
-    </form>
-  </dialog>
 
   <dialog id="layout-dialog">
     <form method="dialog">

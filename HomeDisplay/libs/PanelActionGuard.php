@@ -53,6 +53,45 @@ final class HomeDisplayPanelActionGuard
         if ((string) ($tile['actionId'] ?? '') === '' || (string) $tile['actionId'] !== $actionId) {
             throw new InvalidArgumentException('Aktion nicht freigegeben.');
         }
+        if ($tileKind === 'scene') {
+            $steps = is_array($tile['sceneSteps'] ?? null) ? $tile['sceneSteps'] : [];
+            if ($steps === [] && (int) ($tile['variableId'] ?? 0) > 0) {
+                $steps = [['variableId' => (int) $tile['variableId'], 'value' => true]];
+            }
+            $resolved = [];
+            foreach ($steps as $step) {
+                if (!is_array($step)) {
+                    continue;
+                }
+                $variableId = (int) ($step['variableId'] ?? 0);
+                if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
+                    throw new InvalidArgumentException('Keine Zielvariable.');
+                }
+                $variable = IPS_GetVariable($variableId);
+                if ((int) ($variable['VariableAction'] ?? 0) <= 0 && (int) ($variable['VariableCustomAction'] ?? 0) <= 0) {
+                    throw new InvalidArgumentException('Variable ist nicht schaltbar.');
+                }
+                $item = [
+                    'variableId' => $variableId,
+                    'value' => self::sceneValue($variable, $step['value'] ?? null),
+                    'delayMs' => max(0, min(10000, (int) ($step['delayMs'] ?? 0))),
+                ];
+                $colorId = (int) ($step['colorVariableId'] ?? 0);
+                $color = strtolower(trim((string) ($step['color'] ?? '')));
+                if ($colorId > 0 && preg_match('/^#([0-9a-f]{6})$/', $color, $match)) {
+                    if (!IPS_VariableExists($colorId)) {
+                        throw new InvalidArgumentException('Farbvariable fehlt.');
+                    }
+                    $item['colorVariableId'] = $colorId;
+                    $item['colorValue'] = hexdec($match[1]);
+                }
+                $resolved[] = $item;
+            }
+            if ($resolved === []) {
+                throw new InvalidArgumentException('Szene ohne Lampen.');
+            }
+            return ['duplicate' => false, 'variableId' => 0, 'value' => null, 'steps' => $resolved];
+        }
         $variableId = (int) ($tile['variableId'] ?? 0);
         if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
             throw new InvalidArgumentException('Keine Zielvariable.');
@@ -90,6 +129,22 @@ final class HomeDisplayPanelActionGuard
             throw new InvalidArgumentException('Wert außerhalb des zulässigen Bereichs.');
         }
         return is_int($current) ? (int) round($number) : $number;
+    }
+
+    /** @param array<string, mixed> $variable */
+    private static function sceneValue(array $variable, mixed $value): mixed
+    {
+        if ((int) ($variable['VariableType'] ?? 0) === 0) {
+            return (bool) $value;
+        }
+        if (!is_numeric($value)) {
+            throw new InvalidArgumentException('Wert fehlt.');
+        }
+        $number = (float) $value;
+        if ($number < 0 || $number > 100) {
+            throw new InvalidArgumentException('Wert außerhalb des zulässigen Bereichs.');
+        }
+        return (int) ($variable['VariableType'] ?? 0) === 1 ? (int) round($number) : $number;
     }
 
     /**

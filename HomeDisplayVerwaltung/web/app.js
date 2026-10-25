@@ -248,15 +248,32 @@ function ohCardMarkup(label, stateHtml, bodyHtml, footHtml, tile) {
   const foot = footHtml ? `<div class="oh-card-foot">${footHtml}</div>` : "";
   const align = tile && tile.titleAlign === "center" ? "align-center" : (tile && tile.titleAlign === "right" ? "align-right" : "");
   const title = tile && tile.showTitle === false ? "" : escapeHtml(label || "");
-  return `<div class="oh-card"><div class="oh-card-head ${align}"><span class="oh-card-label">${title}</span><span class="oh-card-state">${stateHtml}</span></div><div class="oh-card-body">${bodyHtml || ""}</div>${foot}</div>`;
+  const sizes = { small: "0.85em", large: "1.35em", xlarge: "1.8em" };
+  const bits = [];
+  if (tile && tile.textColor) bits.push(`color:${tile.textColor}`);
+  if (tile && sizes[tile.textSize]) bits.push(`font-size:${sizes[tile.textSize]}`);
+  const style = bits.length ? ` style="${bits.join(";")}"` : "";
+  return `<div class="oh-card"><div class="oh-card-head ${align}"><span class="oh-card-label">${title}</span><span class="oh-card-state"${style}>${stateHtml}</span></div><div class="oh-card-body">${bodyHtml || ""}</div>${foot}</div>`;
 }
 
-function comboVariantOf(tile) {
-  if (!tile) return "switchTap";
-  if (tile.control === "slider") return "barOnly";
-  if (tile.control === "dimSwitch") return "switch";
-  if (tile.control === "combo" && (tile.dimTapTrack === "off" || tile.dimTapTrack === false)) return "switch";
-  return "switchTap";
+function normalizeTile(tile) {
+  if (!tile) return;
+  if (tile.kind === "value") {
+    if (tile.control === "slider") {
+      tile.control = "combo";
+      if (tile.dimShowSwitch === undefined) tile.dimShowSwitch = false;
+    } else if (tile.control === "dimSwitch") {
+      tile.control = "combo";
+      if (tile.dimShowSwitch === undefined) tile.dimShowSwitch = true;
+    }
+    if ((tile.iconMode || "") === "toggle") {
+      if (!tile.control || tile.control === "switch") tile.control = "switch";
+      if (tile.showIcon === undefined) tile.showIcon = true;
+    }
+  }
+  if (tile.kind === "scene" && !Array.isArray(tile.sceneSteps) && tile.variableId) {
+    tile.sceneSteps = [{ variableId: tile.variableId, value: true }];
+  }
 }
 
 function applyTileChrome(element, tile) {
@@ -305,12 +322,11 @@ function chartSvgMarkup(series, style, min, max) {
   const area = style === "area" ? `<polygon class="oh-chart-area" points="0,${h} ${poly} ${w},${h}"></polygon>` : "";
   return `<svg class="oh-chart-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${area}<polyline class="oh-chart-line" points="${poly}"></polyline></svg>`;
 }
-const CONTROL_NAMES = { switch: "Schalter", combo: "Kombischalter", battery: "Batterie" };
-const INTERACTION_NAMES = { switch: "Schalter (Ein/Aus)", iconSwitch: "Icon-Schalter", combo: "Kombischalter", battery: "Batterie", blinds: "Rolladen", setpoint: "Setpoint" };
+const CONTROL_NAMES = { switch: "Schalter", combo: "Dimmschalter", battery: "Batterie" };
+const INTERACTION_NAMES = { switch: "Schalter (Ein/Aus)", combo: "Dimmschalter", battery: "Batterie", blinds: "Rolladen", setpoint: "Setpoint" };
 const INTERACTION_HINTS = {
-  switch: "Ein/Aus per Schalter an der Anzeige.",
-  iconSwitch: "Tipp schaltet um; das Symbol wechselt zwischen Ein und Aus. Kein zusätzlicher Werttext.",
-  combo: "Art des Schalters legt fest, ob ein Ein/Aus-Schalter neben dem Balken steht und ob Antippen springt.",
+  switch: "Ein/Aus. Farbe, Icon und Text sind einzeln wählbar.",
+  combo: "Dimmer: Schalter, Balken, Prozent, Text und Antippen sind einzeln wählbar.",
   battery: "Ladestand grafisch, ohne Schaltaktion an der Anzeige.",
   blinds: "Position 0–100 % oder Fahrt über schaltbare Variable (Aktionsart Position).",
   setpoint: "Ist-Wert anzeigen, Sollwert mit +/- an der Anzeige ändern."
@@ -348,10 +364,10 @@ function valueFromDimPercent(tile, pct) {
 }
 
 function dimTapTrackEnabled(tile, control) {
-  const mode = tile.dimTapTrack;
+  const mode = tile.dimTap || tile.dimTapTrack;
   if (mode === "on" || mode === true) return true;
-  if (mode === "off" || mode === false) return false;
-  return control === "combo" || control === "blinds";
+  if (mode === "off" || mode === false || mode === "popup") return false;
+  return control === "blinds";
 }
 
 function tileHasInlineProbeControl(tile) {
@@ -359,13 +375,13 @@ function tileHasInlineProbeControl(tile) {
 }
 
 function tileInteractionMode(tile) {
-  if (!tile || tile.kind !== "value") return "switch";
+  if (!tile || tile.kind !== "value") return "";
   if (tile.control === "battery") return "battery";
   if (tile.control === "blinds") return "blinds";
   if (tile.control === "setpoint") return "setpoint";
   if (tile.control === "slider" || tile.control === "combo" || tile.control === "dimSwitch") return "combo";
-  if ((tile.iconMode || "static") === "toggle") return "iconSwitch";
-  return "switch";
+  if ((tile.iconMode || "") === "toggle" || tile.control === "switch" || tile.actionId) return "switch";
+  return "";
 }
 
 function applyTileStatus(element, live, tile) {
@@ -484,8 +500,11 @@ function syncInteractionPropertyPanels() {
   const tile = selectedTile();
   if (!tile || tile.kind !== "value") return;
   const mode = interaction.value;
-  $("p-icon-static")?.classList.toggle("hidden", mode === "iconSwitch" || mode === "battery");
-  $("p-icon-toggle")?.classList.toggle("hidden", mode !== "iconSwitch");
+  const plain = mode === "" || mode === "battery";
+  $("p-icon-static")?.classList.toggle("hidden", mode === "switch" || mode === "battery" || mode === "combo");
+  $("p-switch-wrap")?.classList.toggle("hidden", mode !== "switch");
+  $("p-icon-toggle")?.classList.toggle("hidden", mode !== "switch" || !$("p-show-icon")?.checked);
+  $("p-value-style")?.classList.toggle("hidden", mode !== "");
   $("p-battery-wrap")?.classList.toggle("hidden", mode !== "battery");
   const hintEl = $("p-control-hint");
   if (hintEl) {
@@ -507,10 +526,14 @@ function syncInteractionPropertyPanels() {
   }
   $("p-setpoint-wrap")?.classList.toggle("hidden", mode !== "setpoint");
   $("p-dim-wrap")?.classList.toggle("hidden", !(mode === "combo" || mode === "blinds"));
-  $("p-combo-variant-wrap")?.classList.toggle("hidden", mode !== "combo");
-  $("p-dim-tap-wrap")?.classList.toggle("hidden", mode !== "blinds");
-  $("p-value-format")?.classList.toggle("hidden", mode === "iconSwitch");
-  $("p-own-on-wrap")?.classList.toggle("hidden", mode !== "switch" && mode !== "iconSwitch" && mode !== "combo");
+  const both = mode === "combo" && $("p-dim-show-switch")?.checked && $("p-dim-show-bar")?.checked;
+  $("p-dim-layout-wrap")?.classList.toggle("hidden", !both);
+  $("p-dim-tap-wrap")?.classList.toggle("hidden", mode !== "combo" && mode !== "blinds");
+  $("p-value-format")?.classList.toggle("hidden", mode === "switch");
+  $("p-own-on-wrap")?.classList.toggle("hidden", mode !== "switch" && mode !== "combo");
+  const bgLabel = $("p-own-bg-label");
+  if (bgLabel) bgLabel.textContent = mode === "switch" || mode === "combo" ? "Farbe Aus" : "Eigene Farbe";
+  if (plain) { /* Anzeige ohne Schaltergrafik */ }
 }
 const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text"];
 const MEDIA_ROLES = {
@@ -868,7 +891,10 @@ function selectLayout(layout) {
   if (!state.layout.pages.length) state.layout.pages = [{ id: "start", title: "Start", tiles: [] }];
   for (const page of state.layout.pages) {
     page.tiles = page.tiles || [];
-    for (const tile of page.tiles) tile.kind = tile.kind || "value";
+    for (const tile of page.tiles) {
+      tile.kind = tile.kind || "value";
+      normalizeTile(tile);
+    }
   }
   state.page = state.layout.pages[0].id;
   state.selected = null;
@@ -1061,19 +1087,6 @@ function renderGrid() {
       cell.style.gridRow = `${row + 1}`;
       bindDrop(cell, col, row);
       cell.addEventListener("click", () => {
-        if (state.pickedVariable) {
-          if (isMediaPick(state.pickedVariable)) {
-            const tile = selectedTile();
-            if (tile && tile.kind === "camera") assignCameraMedia(tile, state.pickedVariable);
-            else if (tile && tile.kind === "image") assignMediaVariable(tile, state.pickedVariable);
-            else addTile("image", col, row, state.pickedVariable);
-          } else if (isImageUrlRef(state.pickedVariable)) {
-            const tile = selectedTile();
-            if (tile && tile.kind === "camera") assignVariable(tile, state.pickedVariable);
-            else addTile("camera", col, row, state.pickedVariable);
-          } else addTile("value", col, row, state.pickedVariable);
-          return;
-        }
         state.selected = null;
         renderGrid();
         renderProperties();
@@ -1260,7 +1273,7 @@ function buildTileElement(tile, context) {
     element.classList.add("oh-style");
     const variable = variableById(tile.variableId);
     const interaction = tileInteractionMode(tile);
-    const control = tile.control || "switch";
+    const control = tile.control || "";
     if (DIM_CONTROLS.includes(control) || control === "blinds") element.classList.add("dim");
     if (control === "battery") {
       element.classList.add("battery");
@@ -1268,7 +1281,7 @@ function buildTileElement(tile, context) {
       if (labelPos !== "inside") element.classList.add(`label-${labelPos}`, "label-outside");
     }
     if (control === "setpoint") element.classList.add("setpoint");
-    const switchTile = Boolean(tile.actionId) && (interaction === "iconSwitch" || control === "switch");
+    const switchTile = interaction === "switch" && Boolean(tile.actionId);
     if (switchTile) {
       element.classList.add("as-switch");
       let on = Boolean(demoOn);
@@ -1276,24 +1289,24 @@ function buildTileElement(tile, context) {
       else if (live && live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
       element.classList.toggle("on", on);
     }
-    const iconSwitch = interaction === "iconSwitch";
-    const iconId = effectiveIcon(tile, live ? live.value : undefined, demoOn);
-    const kicker = INTERACTION_NAMES[interaction] || CONTROL_NAMES[control] || `${iconName(iconId)}${tile.actionId ? " · schaltbar" : ""}`;
-    const body = iconSwitch ? "" : controlMarkup(control, tile, live, demoOn);
+    const showIcon = switchTile && tile.showIcon !== false;
+    const iconId = showIcon ? effectiveIcon(Object.assign({}, tile, { iconMode: "toggle" }), live ? live.value : undefined, demoOn) : (tile.icon || "");
+    const kicker = INTERACTION_NAMES[interaction] || CONTROL_NAMES[control] || (interaction === "" ? "Wert" : `${iconName(iconId)}${tile.actionId ? " · schaltbar" : ""}`);
+    const body = showIcon ? "" : controlMarkup(control, tile, live, demoOn);
     const displayText = live && live.text ? live.text : (variable ? "12,3" : "—");
     const label = tile.title || (variable ? variable.name : "Wert");
-    const stateLine = interaction === "iconSwitch" ? "" : (escapeHtml(displayText) + (body ? "" : (tile.unit ? " " + escapeHtml(tile.unit) : "")));
+    let on = element.classList.contains("on");
+    const stateLine = switchTile
+      ? (tile.showStateText ? (on ? "Ein" : "Aus") : "")
+      : (escapeHtml(displayText) + (body ? "" : (tile.unit ? " " + escapeHtml(tile.unit) : "")));
     let cardBody;
-    if (iconSwitch) {
-      let on = Boolean(demoOn);
-      if (live && typeof live.value === "boolean") on = live.value;
-      else if (live && live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
+    if (showIcon) {
       cardBody = `<button type="button" class="oh-icon-toggle" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${escapeHtml(iconName(iconId))}</button>`;
     } else {
-      cardBody = body || (iconId ? `<div class="oh-card-icon">${escapeHtml(iconName(iconId))}</div>` : "");
+      cardBody = body || (iconId && interaction === "" ? `<div class="oh-card-icon">${escapeHtml(iconName(iconId))}</div>` : "");
     }
     element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, stateLine, cardBody, "", tile)}</div>`;
-    if (DIM_CONTROLS.includes(control) || control === "blinds" || control === "setpoint" || control === "switch" || interaction === "iconSwitch") {
+    if (DIM_CONTROLS.includes(control) || control === "blinds" || control === "setpoint" || (control === "switch" && tile.actionId) || (interaction === "switch" && tile.showIcon !== false && tile.actionId)) {
       bindTileControls(element, tile, mode, live);
     }
   } else if (tile.kind === "nav") {
@@ -1327,7 +1340,8 @@ function buildTileElement(tile, context) {
   } else if (tile.kind === "scene") {
     element.classList.add("oh-style", "scene");
     const label = tile.title || "Szene";
-    element.innerHTML = `${editorKicker(mode, "Szene")}<div class="tile-scale">${ohCardMarkup(label, tile.actionId ? "Tippen" : "—", `<div class="oh-card-icon">${escapeHtml(iconName(tile.icon || "home"))}</div>`)}</div>`;
+    const steps = Array.isArray(tile.sceneSteps) ? tile.sceneSteps.filter((step) => step.variableId) : [];
+    element.innerHTML = `${editorKicker(mode, steps.length ? `Szene · ${steps.length} Lampen` : "Szene")}<div class="tile-scale">${ohCardMarkup(label, tile.actionId ? "Tippen" : "—", `<div class="oh-card-icon">${escapeHtml(iconName(tile.icon || "home"))}</div>`)}</div>`;
   } else if (tile.kind === "weather") {
     element.classList.add("oh-style", "weather");
     const label = tile.title || "Wetter";
@@ -1398,13 +1412,15 @@ function buildTileElement(tile, context) {
       state.selected = tile.tileId;
       renderGrid();
       renderProperties();
+      renderVariableTree();
     });
     element.addEventListener("dblclick", (event) => {
       event.stopPropagation();
       state.selected = tile.tileId;
       renderGrid();
       renderProperties();
-      openDetails(tile);
+      renderVariableTree();
+      openTileDialog(tile);
     });
     element.addEventListener("dragstart", (event) => {
       event.dataTransfer.setData("text/homedisplay-tile", tile.tileId);
@@ -1449,24 +1465,26 @@ function renderTile(tile) {
 }
 
 function dimTrackMarkup(tile, control, live, pct) {
-  const showSw = control === "dimSwitch" || control === "combo";
+  const showSw = tile.dimShowSwitch !== false && control !== "slider";
+  const showBar = tile.dimShowBar !== false;
   const showValue = tile.dimShowPercent !== false;
   const layout = tile.dimLayout || "horizontal";
   const min = tile.valueMin ?? 0;
   const numeric = numericLiveValue(tile, live);
-  const swOn = control === "dimSwitch" ? (numeric != null ? numeric > min + 0.001 : pct > 2) : pct > 2;
+  const swOn = numeric != null ? numeric > min + 0.001 : pct > 2;
   const swHtml = showSw ? `<span class="sw${swOn ? " on" : ""}"></span>` : "";
   const valueHtml = showValue ? `<span class="ctl-value">${pct} %</span>` : "";
-  const trackHtml = `<div class="track" data-dim-track><div class="fill" style="width:${pct}%"></div><div class="knob" style="left:${pct}%"></div></div>`;
-  const offClass = showSw && control === "dimSwitch" && !swOn ? " dim-off" : "";
-  if (layout === "stacked" && showSw) {
-    return `<div class="ctl dim-ctl layout-stacked${offClass}">${swHtml}<div class="dim-slider-row">${trackHtml}${valueHtml}</div></div>`;
+  const stateHtml = tile.dimShowStateText ? `<span class="ctl-value">${swOn ? "Ein" : "Aus"}</span>` : "";
+  const trackHtml = showBar ? `<div class="track" data-dim-track><div class="fill" style="width:${pct}%"></div><div class="knob" style="left:${pct}%"></div></div>` : "";
+  const offClass = showSw && !swOn ? " dim-off" : "";
+  if (layout === "stacked" && showSw && showBar) {
+    return `<div class="ctl dim-ctl layout-stacked${offClass}">${swHtml}<div class="dim-slider-row">${trackHtml}${valueHtml}${stateHtml}</div></div>`;
   }
-  return `<div class="ctl dim-ctl${offClass}">${swHtml}${trackHtml}${valueHtml}</div>`;
+  return `<div class="ctl dim-ctl${offClass}">${swHtml}${trackHtml}${valueHtml}${stateHtml}</div>`;
 }
 
 function controlMarkup(control, tile, live, demoOn) {
-  if (tileInteractionMode(tile) === "iconSwitch") {
+  if (tileInteractionMode(tile) === "switch" && tile.showIcon !== false && tile.actionId) {
     return "";
   }
   if (control === "dimSwitch" || control === "slider" || control === "combo") {
@@ -1474,6 +1492,7 @@ function controlMarkup(control, tile, live, demoOn) {
     return dimTrackMarkup(tile, control, live, pct);
   }
   if (control === "switch") {
+    if (!tile.actionId) return "";
     let on = Boolean(demoOn);
     if (live && typeof live.value === "boolean") on = live.value;
     else if (live && live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
@@ -1518,8 +1537,8 @@ function applyDimVisual(element, pct, tile) {
 }
 
 function bindTileControls(element, tile, mode, live) {
-  const control = tile.control || "switch";
-  const iconSwitch = tileInteractionMode(tile) === "iconSwitch";
+  const control = tile.control || "";
+  const iconSwitch = tileInteractionMode(tile) === "switch" && tile.showIcon !== false && Boolean(tile.actionId);
   const stop = (event) => {
     event.stopPropagation();
     event.preventDefault();
@@ -1535,7 +1554,7 @@ function bindTileControls(element, tile, mode, live) {
   element.dataset.lastDimPct = String(lastPct);
 
   const syncSwitchOffState = () => {
-    if (!dimCtl || control !== "dimSwitch") return;
+    if (!dimCtl || tile.dimShowSwitch === false) return;
     const on = sw && sw.classList.contains("on");
     dimCtl.classList.toggle("dim-off", !on);
   };
@@ -1558,7 +1577,7 @@ function bindTileControls(element, tile, mode, live) {
     });
   }
 
-  if (sw && (control === "dimSwitch" || control === "combo" || control === "switch") && !iconSwitch) {
+  if (sw && (DIM_CONTROLS.includes(control) || control === "switch") && !iconSwitch) {
     sw.addEventListener("pointerdown", stop);
     sw.addEventListener("click", (event) => {
       stop(event);
@@ -1569,7 +1588,7 @@ function bindTileControls(element, tile, mode, live) {
         if (mode === "probe" && tile.actionId) sendProbeAction(tile, { switchToggle: true });
         return;
       }
-      if (control === "dimSwitch") {
+      if (DIM_CONTROLS.includes(control) && tile.dimShowSwitch !== false) {
         if (wasOn) {
           lastPct = applyDimVisual(element, Number(element.dataset.lastDimPct || lastPct) || lastPct, tile);
           element.dataset.storedDimPct = String(lastPct);
@@ -1604,7 +1623,7 @@ function bindTileControls(element, tile, mode, live) {
   const tapTrack = dimTapTrackEnabled(tile, control);
 
   const canAdjustDim = () => {
-    if (control === "dimSwitch" && sw && !sw.classList.contains("on")) return false;
+    if (control === "combo" && tile.dimShowSwitch !== false && sw && !sw.classList.contains("on")) return false;
     return Boolean(track && knob);
   };
 
@@ -1702,27 +1721,7 @@ function bindDrop(target, col, row, existing) {
     }
     if (variableId) {
       const variable = variableById(variableId);
-      if (existing && existing.kind === "image" && isMediaPick(variable)) {
-        assignMediaVariable(existing, variable);
-        return;
-      }
-      if (existing && existing.kind === "camera" && isMediaPick(variable)) {
-        assignCameraMedia(existing, variable);
-        return;
-      }
-      if (existing && existing.kind === "camera" && (isImageUrlRef(variable) || !isMediaPick(variable))) {
-        assignVariable(existing, variable);
-        return;
-      }
-      if (existing && (existing.kind === "value" || existing.kind === "display" || existing.kind === "chart" || existing.kind === "scene" || existing.kind === "weather" || existing.kind === "presence")) {
-        assignVariable(existing, variable);
-        return;
-      }
-      if (existing && existing.kind === "energyflow") {
-        const slot = $("p-flow-slot") ? $("p-flow-slot").value : "load";
-        assignFlowVariable(existing, slot, variable);
-        return;
-      }
+      if (existing) return;
       if (!existing && isMediaPick(variable)) {
         addTile("image", col, row, variable);
         return;
@@ -2102,15 +2101,79 @@ function fillImageSelect(select) {
   }
 }
 
+function variableLabel(variable) {
+  if (!variable) return "";
+  return `${variable.path ? variable.path + " / " : ""}${variable.name} (${variable.id})`;
+}
+
+function renderSceneSteps(tile) {
+  const host = $("p-scene-steps");
+  if (!host) return;
+  if (!Array.isArray(tile.sceneSteps)) tile.sceneSteps = [];
+  host.innerHTML = "";
+  tile.sceneSteps.forEach((step, index) => {
+    const box = document.createElement("div");
+    box.className = "scene-step";
+    const lamp = variableById(step.variableId);
+    const colorVar = variableById(step.colorVariableId);
+    const boolLamp = lamp && Number(lamp.type) === 0;
+    const valueField = boolLamp
+      ? `<label><input type="checkbox" data-step="value" ${step.value ? "checked" : ""}> Ein</label>`
+      : `<label>Helligkeit <input data-step="value" type="number" min="0" max="100" value="${Number(step.value) || 0}"></label>`;
+    box.innerHTML = `<label>Lampe <span class="pick-row"><input readonly value="${escapeHtml(variableLabel(lamp))}" placeholder="Auswählen"><button type="button" class="pick-var" data-pick="sceneStep" data-slot="${index}">Auswählen</button></span></label>
+      ${valueField}
+      <label><input type="checkbox" data-step="useColor" ${step.colorVariableId ? "checked" : ""}> Farbe setzen</label>
+      <div data-step="color" class="${step.colorVariableId ? "" : "hidden"}">
+        <label>Farb-Variable <span class="pick-row"><input readonly value="${escapeHtml(variableLabel(colorVar))}" placeholder="Auswählen"><button type="button" class="pick-var" data-pick="sceneStepColor" data-slot="${index}">Auswählen</button></span></label>
+        <label>Farbe <input data-step="colorValue" type="color" value="${step.color || "#ffb547"}"></label>
+      </div>
+      <label>Verzögerung (ms) <input data-step="delay" type="number" min="0" max="10000" value="${Number(step.delayMs) || 0}"></label>
+      <button type="button" data-step="remove">Entfernen</button>`;
+    box.querySelector("[data-step=useColor]").addEventListener("change", (event) => {
+      box.querySelector("[data-step=color]").classList.toggle("hidden", !event.target.checked);
+      if (!event.target.checked) delete step.colorVariableId;
+      collectSceneSteps();
+    });
+    box.querySelector("[data-step=remove]").addEventListener("click", () => {
+      tile.sceneSteps.splice(index, 1);
+      renderSceneSteps(tile);
+      applyProperties();
+    });
+    host.appendChild(box);
+  });
+  host.querySelectorAll(".pick-var").forEach((button) => {
+    button.addEventListener("click", () => openVariablePicker(button.dataset.pick, button.dataset.slot || ""));
+  });
+}
+
+function collectSceneSteps() {
+  const tile = selectedTile();
+  const host = $("p-scene-steps");
+  if (!tile || !host) return tile && Array.isArray(tile.sceneSteps) ? tile.sceneSteps : [];
+  const rows = [...host.querySelectorAll(".scene-step")];
+  const steps = rows.map((row, index) => {
+    const prev = (tile.sceneSteps || [])[index] || {};
+    const valueEl = row.querySelector("[data-step=value]");
+    const useColor = row.querySelector("[data-step=useColor]")?.checked;
+    const step = { variableId: Number(prev.variableId) || 0 };
+    if (valueEl && valueEl.type === "checkbox") step.value = valueEl.checked;
+    else step.value = Number(valueEl?.value) || 0;
+    if (useColor && prev.colorVariableId) {
+      step.colorVariableId = prev.colorVariableId;
+      step.color = row.querySelector("[data-step=colorValue]")?.value || "#ffb547";
+    }
+    const delay = Number(row.querySelector("[data-step=delay]")?.value) || 0;
+    if (delay > 0) step.delayMs = delay;
+    return step;
+  }).filter((step) => step.variableId > 0);
+  tile.sceneSteps = steps;
+  return steps;
+}
+
 function renderProperties() {
   const tile = selectedTile();
-  const hasLayout = Boolean(state.layout);
-  $("prop-empty").classList.toggle("hidden", Boolean(tile) || hasLayout);
-  $("prop-form").classList.toggle("hidden", !tile);
-  if ($("prop-page")) {
-    $("prop-page").classList.toggle("hidden", !hasLayout || Boolean(tile));
-    if (hasLayout && !tile) renderPageBackground();
-  }
+  const title = $("t-title");
+  if (title && tile) title.textContent = `${KIND_NAMES[tile.kind] || tile.kind} – ${tile.title || tile.tileId}`;
   if (!tile) return;
   for (const block of document.querySelectorAll("#prop-form [data-for]")) {
     block.classList.toggle("hidden", !block.dataset.for.split(" ").includes(tile.kind));
@@ -2141,16 +2204,26 @@ function renderProperties() {
     fillIconSelect($("p-iconoff"));
     if ($("p-iconon")) $("p-iconon").value = tile.iconOn || "lightOn";
     if ($("p-iconoff")) $("p-iconoff").value = tile.iconOff || "lightOff";
+    if ($("p-show-icon")) $("p-show-icon").checked = tile.showIcon !== false;
+    if ($("p-show-state-text")) $("p-show-state-text").checked = tile.showStateText === true;
     if ($("p-interaction")) $("p-interaction").value = tileInteractionMode(tile);
-    if ($("p-combo-variant")) $("p-combo-variant").value = comboVariantOf(tile);
+    if ($("p-dim-show-switch")) $("p-dim-show-switch").checked = tile.dimShowSwitch !== false;
+    if ($("p-dim-show-bar")) $("p-dim-show-bar").checked = tile.dimShowBar !== false;
+    if ($("p-dim-show-state-text")) $("p-dim-show-state-text").checked = tile.dimShowStateText === true;
     syncInteractionPropertyPanels();
     if ($("p-dim-show-percent")) $("p-dim-show-percent").checked = tile.dimShowPercent !== false;
     if ($("p-dim-layout")) $("p-dim-layout").value = tile.dimLayout || "horizontal";
+    if ($("p-own-text")) $("p-own-text").checked = Boolean(tile.textColor);
+    if ($("p-text-color") && tile.textColor) $("p-text-color").value = tile.textColor;
+    if ($("p-text-size")) $("p-text-size").value = tile.textSize || "normal";
+    if ($("p-threshold")) $("p-threshold").value = tile.threshold != null ? String(tile.threshold) : "";
+    if ($("p-status-color")) $("p-status-color").value = tile.color || "neutral";
     if ($("p-dim-tap")) {
-      const tap = tile.dimTapTrack;
+      const tap = tile.control === "combo" ? (tile.dimTap || "popup") : (tile.dimTapTrack || "popup");
       if (tap === true || tap === "on") $("p-dim-tap").value = "on";
       else if (tap === false || tap === "off") $("p-dim-tap").value = "off";
-      else $("p-dim-tap").value = "auto";
+      else if (tap === "popup") $("p-dim-tap").value = "popup";
+      else $("p-dim-tap").value = tile.control === "blinds" ? "on" : "popup";
     }
   }
   const variable = variableById(tile.variableId);
@@ -2218,14 +2291,9 @@ function renderProperties() {
   if (tile.kind === "scene") {
     fillIconSelect($("p-scene-icon"), false);
     if ($("p-scene-icon")) $("p-scene-icon").value = tile.icon || "home";
-    const sceneVar = variableById(tile.variableId);
-    if ($("p-scene-variable")) {
-      $("p-scene-variable").value = sceneVar
-        ? `${sceneVar.path ? sceneVar.path + " / " : ""}${sceneVar.name} (${sceneVar.id})`
-        : "";
-    }
     if ($("p-scene-actionid")) $("p-scene-actionid").value = tile.actionId || "";
     if ($("p-scene-confirm")) $("p-scene-confirm").checked = Boolean(tile.confirm);
+    renderSceneSteps(tile);
   }
   if (tile.kind === "weather") {
     fillIconSelect($("p-weather-icon"), false);
@@ -2328,38 +2396,56 @@ function applyProperties() {
   }
   if (tile.kind === "nav") tile.icon = $("p-icon").value;
   if (tile.kind === "value") {
-    const modeEarly = ($("p-interaction") && $("p-interaction").value) || tileInteractionMode(tile);
-    if (modeEarly === "iconSwitch") {
-      delete tile.prefix;
-      delete tile.unit;
-    } else {
-      const prefix = $("p-prefix") ? $("p-prefix").value.trim() : "";
-      if (prefix) tile.prefix = prefix;
-      else delete tile.prefix;
-      tile.unit = $("p-unit").value;
-    }
-    tile.decimals = Number($("p-decimals").value) || 0;
+    const prefix = $("p-prefix") ? $("p-prefix").value.trim() : "";
+    if (prefix) tile.prefix = prefix;
+    else delete tile.prefix;
+    tile.unit = $("p-unit") ? $("p-unit").value : (tile.unit || "");
+    tile.decimals = Number($("p-decimals")?.value) || 0;
     const variable = variableById(tile.variableId);
-    const mode = ($("p-interaction") && $("p-interaction").value) || tileInteractionMode(tile);
+    const mode = ($("p-interaction") && $("p-interaction").value) || "";
     delete tile.iconMode;
     delete tile.iconOn;
     delete tile.iconOff;
+    delete tile.showIcon;
+    delete tile.showStateText;
     delete tile.control;
     delete tile.batteryPad;
     delete tile.batteryLabel;
-    if (mode === "iconSwitch") {
-      tile.iconMode = "toggle";
-      tile.iconOn = $("p-iconon").value;
-      tile.iconOff = $("p-iconoff").value;
+    if (mode === "switch") {
+      tile.control = "switch";
+      if ($("p-show-icon")?.checked) {
+        tile.iconMode = "toggle";
+        tile.iconOn = $("p-iconon").value || "lightOn";
+        tile.iconOff = $("p-iconoff").value || "lightOff";
+      } else {
+        tile.showIcon = false;
+      }
+      if ($("p-show-state-text")?.checked) tile.showStateText = true;
       delete tile.icon;
-    } else if (mode !== "battery") {
+    } else if (mode !== "battery" && mode !== "combo") {
       const iconVal = $("p-value-icon") ? $("p-value-icon").value : "";
       if (iconVal) tile.icon = iconVal;
       else delete tile.icon;
     }
+    if ($("p-own-text")?.checked && $("p-text-color") && mode === "") tile.textColor = $("p-text-color").value;
+    else delete tile.textColor;
+    const textSize = $("p-text-size") ? $("p-text-size").value : "normal";
+    if (mode === "" && textSize && textSize !== "normal") tile.textSize = textSize;
+    else delete tile.textSize;
+    const thresholdRaw = ($("p-threshold")?.value || "").trim();
+    if (mode === "" && thresholdRaw !== "" && !Number.isNaN(Number(thresholdRaw))) {
+      tile.threshold = Number(thresholdRaw);
+      tile.color = $("p-status-color") ? $("p-status-color").value : "neutral";
+    } else if (mode === "") {
+      delete tile.threshold;
+      delete tile.color;
+    }
     if (mode === "combo") {
-      const variant = $("p-combo-variant") ? $("p-combo-variant").value : "switchTap";
-      tile.control = variant === "barOnly" ? "slider" : (variant === "switch" ? "dimSwitch" : "combo");
+      tile.control = "combo";
+      tile.dimShowSwitch = Boolean($("p-dim-show-switch")?.checked);
+      tile.dimShowBar = Boolean($("p-dim-show-bar")?.checked);
+      if ($("p-dim-show-state-text")?.checked) tile.dimShowStateText = true;
+      else delete tile.dimShowStateText;
     }
     else if (mode === "blinds") {
       tile.control = "blinds";
@@ -2395,20 +2481,26 @@ function applyProperties() {
       const layout = $("p-dim-layout") ? $("p-dim-layout").value : "horizontal";
       if (layout === "stacked") tile.dimLayout = "stacked";
       else delete tile.dimLayout;
-      if (mode === "blinds") {
-        const tapMode = $("p-dim-tap") ? $("p-dim-tap").value : "auto";
-        if (tapMode === "on") tile.dimTapTrack = "on";
-        else if (tapMode === "off") tile.dimTapTrack = "off";
+      if (mode === "combo") {
+        const tapMode = $("p-dim-tap") ? $("p-dim-tap").value : "popup";
+        if (tapMode === "on" || tapMode === "off") tile.dimTap = tapMode;
+        else delete tile.dimTap;
+        delete tile.dimTapTrack;
+      } else if (mode === "blinds") {
+        const tapMode = $("p-dim-tap") ? $("p-dim-tap").value : "on";
+        if (tapMode === "off" || tapMode === "popup") tile.dimTapTrack = tapMode === "popup" ? "off" : "off";
+        else if (tapMode === "on") delete tile.dimTapTrack;
         else delete tile.dimTapTrack;
       } else {
         delete tile.dimTapTrack;
+        delete tile.dimTap;
       }
     } else {
       delete tile.dimShowPercent;
       delete tile.dimLayout;
       delete tile.dimTapTrack;
     }
-    if (mode !== "battery" && $("p-action").checked && variable && variable.action) {
+    if ((mode === "switch" || mode === "combo" || mode === "blinds" || mode === "setpoint") && $("p-action").checked && variable && variable.action) {
       tile.actionId = tile.actionId || `a-${tile.tileId}`;
       tile.actionKind = mode === "blinds" ? "position" : (DIM_CONTROLS.includes(mode) || mode === "setpoint" ? "dim" : $("p-actionkind").value);
       tile.confirm = $("p-confirm").checked;
@@ -2450,18 +2542,17 @@ function applyProperties() {
   }
   if (tile.kind === "scene") {
     tile.icon = $("p-scene-icon") ? $("p-scene-icon").value || "home" : (tile.icon || "home");
-    const sceneVar = variableById(tile.variableId);
     const actionIdRaw = ($("p-scene-actionid")?.value || "").trim();
-    if (sceneVar && sceneVar.action) {
+    const steps = collectSceneSteps();
+    tile.sceneSteps = steps;
+    delete tile.variableId;
+    delete tile.actionKind;
+    if (steps.length) {
       tile.actionId = actionIdRaw || tile.actionId || `a-${tile.tileId}`;
-      if (!/^[A-Za-z0-9_-]{1,40}$/.test(tile.actionId)) {
-        tile.actionId = `a-${tile.tileId}`;
-      }
-      tile.actionKind = "switch";
+      if (!/^[A-Za-z0-9_-]{1,40}$/.test(tile.actionId)) tile.actionId = `a-${tile.tileId}`;
       tile.confirm = Boolean($("p-scene-confirm")?.checked);
     } else {
       delete tile.actionId;
-      delete tile.actionKind;
       tile.confirm = false;
     }
   }
@@ -2527,10 +2618,6 @@ function applyProperties() {
 const pInteraction = $("p-interaction");
 if (pInteraction) {
   pInteraction.addEventListener("change", () => {
-    if (pInteraction.value === "iconSwitch") {
-      if ($("p-prefix")) $("p-prefix").value = "";
-      if ($("p-unit")) $("p-unit").value = "";
-    }
     syncInteractionPropertyPanels();
     applyProperties();
   });
@@ -2541,7 +2628,7 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-title-align", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-combo-variant", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-scene-actionid", "p-scene-icon", "p-scene-confirm", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode"]) {
+for (const id of ["p-title", "p-show-title", "p-title-align", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-scene-actionid", "p-scene-icon", "p-scene-confirm", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
@@ -2596,11 +2683,22 @@ if (displayProfileSelect) {
     }
   });
 }
-bindClick("p-details", () => {
-  const tile = selectedTile();
-  if (tile) openDetails(tile);
-});
 bindClick("p-delete", deleteSelected);
+bindClick("p-close", () => $("tile-dialog")?.close());
+bindClick("p-scene-add", () => {
+  const tile = selectedTile();
+  if (!tile) return;
+  if (!Array.isArray(tile.sceneSteps)) tile.sceneSteps = [];
+  tile.sceneSteps.push({ variableId: 0, value: 100 });
+  renderSceneSteps(tile);
+});
+function openTileDialog(tile) {
+  if (!tile) return;
+  state.selected = tile.tileId;
+  renderProperties();
+  const dialog = $("tile-dialog");
+  if (dialog && !dialog.open) dialog.showModal();
+}
 
 /* ---------- Detaildialog ---------- */
 
@@ -2705,560 +2803,6 @@ function appendEnergyFlowDetails(body, tile, fields, add, check, number, text) {
   sync();
 }
 
-function openDetails(tile) {
-  const dialog = $("details");
-  const body = $("d-body");
-  $("d-title").textContent = `${KIND_NAMES[tile.kind]} – ${tile.title || tile.text || tile.tileId}`;
-  body.innerHTML = "";
-  const fields = [];
-  const add = (label, input) => {
-    const wrap = document.createElement("label");
-    wrap.textContent = label;
-    wrap.appendChild(input);
-    body.appendChild(wrap);
-    return input;
-  };
-  const text = (value) => Object.assign(document.createElement("input"), { value: value ?? "" });
-  const number = (value, min, max) => Object.assign(document.createElement("input"), { type: "number", value, min, max });
-  const check = (value) => Object.assign(document.createElement("input"), { type: "checkbox", checked: Boolean(value) });
-  const info = document.createElement("p");
-  info.className = "hint";
-  info.textContent = `Kennung ${tile.tileId}${tile.actionId ? ", Aktion " + tile.actionId : ""}. Seite ${pageTitleIn(state.page)}.`;
-  body.appendChild(info);
-  fields.title = add("Titel", text(tile.title));
-  const grid = document.createElement("div");
-  grid.className = "row hidden";
-  body.appendChild(grid);
-  const spanHint = document.createElement("p");
-  spanHint.className = "hint hidden";
-  spanHint.textContent = "Breite und Höhe = Anzahl Rasterfelder; am Raster ziehen oder hier eintragen.";
-  body.appendChild(spanHint);
-  for (const [label, key, value, min, max] of [["Spalte", "col", tile.col + 1, 1, state.layout.columns], ["Zeile", "row", tile.row + 1, 1, state.layout.rows], ["Breite", "colSpan", tile.colSpan || 1, 1, state.layout.columns], ["Höhe", "rowSpan", tile.rowSpan || 1, 1, state.layout.rows]]) {
-    const wrap = document.createElement("label");
-    wrap.textContent = label;
-    fields[key] = number(value, min, max);
-    wrap.appendChild(fields[key]);
-    grid.appendChild(wrap);
-  }
-  if (tile.kind === "nav") {
-    fields.icon = add("Symbol", document.createElement("select"));
-    fillIconSelect(fields.icon, true);
-    fields.icon.value = tile.icon || "";
-  }
-  if (tile.kind === "value") {
-    const variable = variableById(tile.variableId);
-    const picker = document.createElement("select");
-    picker.innerHTML = '<option value="0">Keine Variable</option>';
-    for (const item of state.variables) {
-      const option = document.createElement("option");
-      option.value = String(item.id);
-      option.textContent = `${item.path ? item.path + " / " : ""}${item.name} (${item.id})`;
-      picker.appendChild(option);
-    }
-    picker.value = String(tile.variableId || 0);
-    const pickBtn = document.createElement("button");
-    pickBtn.type = "button";
-    pickBtn.textContent = "Auswählen";
-    pickBtn.addEventListener("click", () => openVariablePicker("variable"));
-    const pickRow = document.createElement("div");
-    pickRow.className = "pick-row";
-    pickRow.append(picker, pickBtn);
-    add("Variable", pickRow);
-    fields.variable = picker;
-    fields.unit = add("Einheit", text(tile.unit));
-    fields.decimals = add("Nachkommastellen", number(tile.decimals || 0, 0, 3));
-    const interactionSel = document.createElement("select");
-    interactionSel.innerHTML = '<option value="switch">Schalter (Ein/Aus)</option><option value="iconSwitch">Icon-Schalter</option><option value="combo">Kombischalter</option><option value="battery">Batterie (Ladestand)</option>';
-    interactionSel.value = tileInteractionMode(tile);
-    fields.interaction = add("Schalter / Bedienung", interactionSel);
-    fields.action = add("Schaltbar", check(tile.actionId));
-    fields.action.disabled = !(variable && variable.action);
-    fields.confirm = add("Bestätigung an der Anzeige", check(tile.confirm));
-    const kind = document.createElement("select");
-    kind.innerHTML = '<option value="switch">Schalten</option><option value="dim">Dimmen</option><option value="position">Position</option>';
-    kind.value = tile.actionKind || "switch";
-    fields.actionKind = add("Aktionsart", kind);
-    fields.valueMin = add("Minimum (Dimmen/Position)", number(tile.valueMin ?? 0));
-    fields.valueMax = add("Maximum (Dimmen/Position)", number(tile.valueMax ?? 100));
-    fields.threshold = add("Schwellwert für Farbe (leer = aus)", text(tile.threshold ?? ""));
-    const color = document.createElement("select");
-    color.innerHTML = '<option value="neutral">Neutral</option><option value="ok">Grün</option><option value="warn">Gelb</option><option value="alarm">Rot</option>';
-    color.value = tile.color || "neutral";
-    fields.color = add("Farbe über dem Schwellwert", color);
-    const staticIconWrap = document.createElement("label");
-    staticIconWrap.textContent = "Symbol (optional) ";
-    fields.icon = document.createElement("select");
-    fillIconSelect(fields.icon, false);
-    fields.icon.value = tile.icon || "";
-    staticIconWrap.appendChild(fields.icon);
-    body.appendChild(staticIconWrap);
-    const toggleIconWrap = document.createElement("div");
-    toggleIconWrap.className = "row hidden";
-    toggleIconWrap.dataset.iconSection = "toggle";
-    const onWrap = document.createElement("label");
-    onWrap.textContent = "Symbol Ein ";
-    fields.iconOn = document.createElement("select");
-    fillIconSelect(fields.iconOn, false);
-    fields.iconOn.value = tile.iconOn || "lightOn";
-    onWrap.appendChild(fields.iconOn);
-    const offWrap = document.createElement("label");
-    offWrap.textContent = "Symbol Aus ";
-    fields.iconOff = document.createElement("select");
-    fillIconSelect(fields.iconOff, false);
-    fields.iconOff.value = tile.iconOff || "lightOff";
-    offWrap.appendChild(fields.iconOff);
-    toggleIconWrap.append(onWrap, offWrap);
-    body.appendChild(toggleIconWrap);
-    const batteryWrap = document.createElement("div");
-    batteryWrap.className = "row hidden";
-    batteryWrap.dataset.controlSection = "battery";
-    const padWrap = document.createElement("label");
-    padWrap.textContent = "Innenabstand (px) ";
-    fields.batteryPad = number(tile.batteryPad != null ? tile.batteryPad : 8, 0, 40);
-    padWrap.appendChild(fields.batteryPad);
-    const labelWrap = document.createElement("label");
-    labelWrap.textContent = "Prozent-Anzeige ";
-    const batteryLabel = document.createElement("select");
-    batteryLabel.innerHTML = '<option value="inside">In der Batterie</option><option value="right">Rechts daneben</option><option value="below">Darunter</option>';
-    batteryLabel.value = tile.batteryLabel || "inside";
-    fields.batteryLabel = batteryLabel;
-    labelWrap.appendChild(batteryLabel);
-    batteryWrap.append(padWrap, labelWrap);
-    body.appendChild(batteryWrap);
-    const syncValueDetails = () => {
-      const mode = interactionSel.value;
-      const toggle = mode === "iconSwitch";
-      staticIconWrap.classList.toggle("hidden", toggle || mode === "battery");
-      toggleIconWrap.classList.toggle("hidden", !toggle);
-      batteryWrap.classList.toggle("hidden", mode !== "battery");
-      const chosenVar = variableById(Number(picker.value));
-      fields.action.disabled = mode === "battery" || !(chosenVar && chosenVar.action);
-      if (mode === "battery") fields.action.checked = false;
-      if (DIM_CONTROLS.includes(mode)) fields.actionKind.value = "dim";
-    };
-    interactionSel.addEventListener("change", syncValueDetails);
-    syncValueDetails();
-    picker.addEventListener("change", () => {
-      const chosen = variableById(Number(picker.value));
-      fields.action.disabled = !(chosen && chosen.action);
-      if (!fields.action.disabled) fields.actionKind.value = chosen.actionKind || "switch";
-      if (!fields.title.value && chosen) fields.title.value = chosen.name;
-      syncValueDetails();
-    });
-  }
-  if (tile.kind === "nav") {
-    fields.target = add("Zielseite", document.createElement("select"));
-    fillTargetSelect(fields.target);
-    fields.target.value = tile.targetPage;
-  }
-  if (tile.kind === "label") {
-    const style = document.createElement("select");
-    style.innerHTML = '<option value="text">Text</option><option value="section">Abschnitt (Frame)</option>';
-    style.value = tile.labelStyle || "text";
-    fields.labelStyle = add("Stil", style);
-    const area = document.createElement("textarea");
-    area.rows = 4;
-    area.value = tile.text || "";
-    fields.text = add("Text", area);
-  }
-  if (tile.kind === "display") {
-    const source = document.createElement("select");
-    source.innerHTML = '<option value="variable">Variable (live)</option><option value="text">Fester Text</option>';
-    source.value = tile.displaySource || "variable";
-    fields.displaySource = add("Quelle", source);
-    const picker = document.createElement("select");
-    picker.innerHTML = '<option value="0">Keine Variable</option>';
-    for (const item of state.variables) {
-      const option = document.createElement("option");
-      option.value = String(item.id);
-      option.textContent = `${item.path ? item.path + " / " : ""}${item.name} (${item.id})`;
-      picker.appendChild(option);
-    }
-    picker.value = String(tile.variableId || 0);
-    const pickBtn = document.createElement("button");
-    pickBtn.type = "button";
-    pickBtn.textContent = "Auswählen";
-    pickBtn.addEventListener("click", () => openVariablePicker("variable"));
-    const pickRow = document.createElement("div");
-    pickRow.className = "pick-row";
-    pickRow.append(picker, pickBtn);
-    add("Variable", pickRow);
-    fields.variable = picker;
-    fields.unit = add("Einheit", text(tile.unit));
-    fields.decimals = add("Nachkommastellen", number(tile.decimals || 0, 0, 3));
-    const area = document.createElement("textarea");
-    area.rows = 3;
-    area.value = tile.text || "";
-    fields.displayText = add("Text (fest)", area);
-    fields.icon = add("Symbol", document.createElement("select"));
-    fillIconSelect(fields.icon, false);
-    fields.icon.value = tile.icon || "";
-  }
-  if (tile.kind === "chart") {
-    const picker = document.createElement("select");
-    picker.innerHTML = '<option value="0">Keine Variable</option>';
-    for (const item of state.variables) {
-      if (item.type !== 1 && item.type !== 2) continue;
-      const option = document.createElement("option");
-      option.value = String(item.id);
-      option.textContent = `${item.path ? item.path + " / " : ""}${item.name} (${item.id})`;
-      picker.appendChild(option);
-    }
-    picker.value = String(tile.variableId || 0);
-    fields.variable = add("Variable", picker);
-    const period = document.createElement("select");
-    period.innerHTML = '<option value="1h">1 Stunde</option><option value="6h">6 Stunden</option><option value="24h">24 Stunden</option><option value="7d">7 Tage</option>';
-    period.value = tile.chartPeriod || "24h";
-    fields.chartPeriod = add("Zeitraum", period);
-    const style = document.createElement("select");
-    style.innerHTML = '<option value="area">Fläche</option><option value="line">Linie</option>';
-    style.value = tile.chartStyle || "area";
-    fields.chartStyle = add("Darstellung", style);
-    fields.unit = add("Einheit", text(tile.unit));
-    fields.decimals = add("Nachkommastellen", number(tile.decimals ?? 1, 0, 3));
-    const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = "Karte im openHAB-Stil: aktueller Wert oben rechts, Verlauf darunter. Variable muss im Archiv protokolliert sein.";
-    body.appendChild(hint);
-    picker.addEventListener("change", () => {
-      const chosen = variableById(Number(picker.value));
-      if (!fields.title.value && chosen) fields.title.value = chosen.name;
-    });
-  }
-  if (tile.kind === "image") {
-    const imgSource = document.createElement("select");
-    imgSource.innerHTML = '<option value="catalog">Katalog (hochgeladen)</option><option value="media">IPS-Medien-Variable</option>';
-    imgSource.value = tile.imageSource || "catalog";
-    fields.imageSource = add("Bildquelle", imgSource);
-    const catalogWrap = document.createElement("div");
-    catalogWrap.dataset.imageSection = "catalog";
-    fields.image = document.createElement("select");
-    fillImageSelect(fields.image);
-    fields.image.value = tile.imageId || "";
-    const catLabel = document.createElement("label");
-    catLabel.textContent = "Bild ";
-    catLabel.appendChild(fields.image);
-    catalogWrap.appendChild(catLabel);
-    body.appendChild(catalogWrap);
-    const mediaWrap = document.createElement("div");
-    mediaWrap.className = "hidden";
-    mediaWrap.dataset.imageSection = "media";
-    const mediaId = tile.mediaObjectId || (tile.imageSource === "media" ? tile.variableId : 0);
-    const mediaLabel = document.createElement("label");
-    mediaLabel.textContent = "Medien-Variable ";
-    fields.imageMedia = detailsVariableSelect(mediaId, isMediaPick);
-    mediaLabel.appendChild(fields.imageMedia);
-    mediaWrap.appendChild(mediaLabel);
-    body.appendChild(mediaWrap);
-    const syncImageDetails = () => {
-      const media = imgSource.value === "media";
-      catalogWrap.classList.toggle("hidden", media);
-      mediaWrap.classList.toggle("hidden", !media);
-    };
-    imgSource.addEventListener("change", syncImageDetails);
-    syncImageDetails();
-    const manage = document.createElement("button");
-    manage.type = "button";
-    manage.textContent = "Bilder verwalten …";
-    manage.addEventListener("click", () => openImages());
-    body.appendChild(manage);
-  }
-  if (tile.kind === "camera") {
-    const source = document.createElement("select");
-    source.innerHTML = '<option value="url">Variable mit Bild-URL</option><option value="media">IPS-Medien-Variable</option>';
-    source.value = tile.cameraSource || "url";
-    fields.cameraSource = add("Quelle", source);
-    const picker = document.createElement("select");
-    picker.innerHTML = '<option value="0">Keine Variable</option>';
-    fields.variable = add("Variable", picker);
-    const refreshPicker = () => {
-      const wantMedia = source.value === "media";
-      picker.innerHTML = '<option value="0">Keine Variable</option>';
-      for (const item of state.variables) {
-        if (wantMedia) {
-          if (!isMediaPick(item)) continue;
-        } else if (isMediaObject(item) || (isMediaPick(item) && !isImageUrlRef(item))) {
-          continue;
-        }
-        const option = document.createElement("option");
-        option.value = String(item.id);
-        option.textContent = `${item.path ? item.path + " / " : ""}${item.name} (${item.id})`;
-        picker.appendChild(option);
-      }
-      picker.value = String(tile.mediaObjectId || tile.variableId || 0);
-    };
-    refreshPicker();
-    source.addEventListener("change", refreshPicker);
-    picker.addEventListener("change", () => {
-      const chosen = variableById(Number(picker.value));
-      if (!fields.title.value && chosen) fields.title.value = chosen.name;
-    });
-  }
-  if (tile.kind === "energyflow") {
-    appendEnergyFlowDetails(body, tile, fields, add, check, number, text);
-  }
-  if (tile.kind === "scene") {
-    const picker = document.createElement("select");
-    picker.innerHTML = '<option value="0">Keine Variable</option>';
-    for (const item of state.variables) {
-      if (!item.action) continue;
-      const option = document.createElement("option");
-      option.value = String(item.id);
-      option.textContent = variablePickLabel(item);
-      picker.appendChild(option);
-    }
-    picker.value = String(tile.variableId || 0);
-    fields.variable = add("Aktions-Variable", picker);
-    fields.actionId = add("Aktions-ID", text(tile.actionId || ""));
-    fields.icon = add("Symbol", document.createElement("select"));
-    fillIconSelect(fields.icon, false);
-    fields.icon.value = tile.icon || "home";
-    fields.confirm = add("Bestätigung an der Anzeige", check(tile.confirm));
-    const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = "Nur Variablen mit IPS-Aktion. Die Anzeige sendet beim Tippen eine Schaltaktion (RequestAction).";
-    body.appendChild(hint);
-    picker.addEventListener("change", () => {
-      const chosen = variableById(Number(picker.value));
-      if (chosen && !fields.title.value) fields.title.value = chosen.name;
-    });
-  }
-  if (tile.kind === "weather") {
-    const tempPicker = document.createElement("select");
-    tempPicker.innerHTML = '<option value="0">Keine Variable</option>';
-    for (const item of state.variables) {
-      if (item.type !== 1 && item.type !== 2) continue;
-      const option = document.createElement("option");
-      option.value = String(item.id);
-      option.textContent = variablePickLabel(item);
-      tempPicker.appendChild(option);
-    }
-    tempPicker.value = String(tile.variableId || 0);
-    fields.variable = add("Temperatur-Variable", tempPicker);
-    fields.unit = add("Einheit", text(tile.unit || "°C"));
-    fields.decimals = add("Nachkommastellen", number(tile.decimals ?? 1, 0, 3));
-    const forecastPicker = document.createElement("select");
-    forecastPicker.innerHTML = '<option value="0">Keine Prognose</option>';
-    for (const item of state.variables) {
-      if (item.type !== 3) continue;
-      const option = document.createElement("option");
-      option.value = String(item.id);
-      option.textContent = variablePickLabel(item);
-      forecastPicker.appendChild(option);
-    }
-    forecastPicker.value = String(tile.forecastVariableId || 0);
-    fields.forecast = add("Prognose-Variable (Text)", forecastPicker);
-    fields.icon = add("Symbol", document.createElement("select"));
-    fillIconSelect(fields.icon, false);
-    fields.icon.value = tile.icon || "sun";
-    tempPicker.addEventListener("change", () => {
-      const chosen = variableById(Number(tempPicker.value));
-      if (chosen && !fields.title.value) fields.title.value = chosen.name;
-      if (chosen && chosen.unit && !fields.unit.value) fields.unit.value = chosen.unit;
-    });
-  }
-  if (tile.kind === "presence") {
-    const picker = document.createElement("select");
-    picker.innerHTML = '<option value="0">Keine Variable</option>';
-    for (const item of state.variables) {
-      const option = document.createElement("option");
-      option.value = String(item.id);
-      option.textContent = variablePickLabel(item);
-      picker.appendChild(option);
-    }
-    picker.value = String(tile.variableId || 0);
-    fields.variable = add("Variable", picker);
-    const mode = document.createElement("select");
-    mode.innerHTML = '<option value="home">Anwesenheit</option><option value="alarm">Alarm</option>';
-    mode.value = tile.presenceMode || "home";
-    fields.presenceMode = add("Modus", mode);
-    picker.addEventListener("change", () => {
-      const chosen = variableById(Number(picker.value));
-      if (chosen && !fields.title.value) fields.title.value = chosen.name;
-    });
-  }
-  if (tile.kind === "separator") {
-    const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = "Horizontale Trennlinie über die volle Rasterbreite der Zeile.";
-    body.appendChild(hint);
-  }
-  dialog.returnValue = "";
-  dialog.showModal();
-  dialog.onclose = () => {
-    if (dialog.returnValue !== "ok") return;
-    tile.title = fields.title.value;
-    const col = Number(fields.col.value) - 1;
-    const row = Number(fields.row.value) - 1;
-    const colSpan = Number(fields.colSpan.value) || 1;
-    const rowSpan = Number(fields.rowSpan.value) || 1;
-    if (fits(tile, col, row, colSpan, rowSpan, tile.tileId)) {
-      Object.assign(tile, { col, row, colSpan, rowSpan });
-    } else {
-      setStatus("Position oder Größe passt nicht ins Raster. Übrige Angaben wurden übernommen.");
-    }
-    if (fields.icon && tile.kind === "nav") tile.icon = fields.icon.value;
-    if (tile.kind === "value") {
-      const chosen = variableById(Number(fields.variable.value));
-      tile.variableId = chosen ? chosen.id : 0;
-      tile.unit = fields.unit.value;
-      tile.decimals = Number(fields.decimals.value) || 0;
-      const mode = fields.interaction.value || "switch";
-      delete tile.control;
-      delete tile.iconMode;
-      delete tile.iconOn;
-      delete tile.iconOff;
-      delete tile.icon;
-      if (mode === "iconSwitch") {
-        tile.iconMode = "toggle";
-        tile.iconOn = fields.iconOn.value;
-        tile.iconOff = fields.iconOff.value;
-      } else if (mode !== "battery" && fields.icon) {
-        tile.icon = fields.icon.value;
-      }
-      if (mode === "combo") {
-        if (!["dimSwitch", "slider", "combo"].includes(tile.control)) tile.control = "combo";
-      }
-      else if (mode === "battery") {
-        tile.control = "battery";
-        tile.valueMin = Number(fields.valueMin.value);
-        tile.valueMax = Number(fields.valueMax.value);
-        tile.batteryPad = Number(fields.batteryPad.value) || 8;
-        tile.batteryLabel = fields.batteryLabel.value || "inside";
-        delete tile.actionId;
-        delete tile.actionKind;
-        tile.confirm = false;
-      } else if (fields.action.checked && chosen && chosen.action) {
-        tile.actionId = tile.actionId || `a-${tile.tileId}`;
-        tile.actionKind = DIM_CONTROLS.includes(mode) ? "dim" : fields.actionKind.value;
-        tile.confirm = fields.confirm.checked;
-        tile.valueMin = Number(fields.valueMin.value);
-        tile.valueMax = Number(fields.valueMax.value);
-        delete tile.batteryPad;
-        delete tile.batteryLabel;
-      } else {
-        delete tile.actionId;
-        if (!DIM_CONTROLS.includes(mode)) delete tile.actionKind;
-        delete tile.valueMin;
-        delete tile.valueMax;
-        delete tile.batteryPad;
-        delete tile.batteryLabel;
-        tile.confirm = false;
-      }
-      if (fields.threshold.value.trim() !== "" && !Number.isNaN(Number(fields.threshold.value))) {
-        tile.threshold = Number(fields.threshold.value);
-        tile.color = fields.color.value;
-      } else {
-        delete tile.threshold;
-        delete tile.color;
-      }
-    }
-    if (tile.kind === "nav") tile.targetPage = fields.target.value;
-    if (tile.kind === "scene") {
-      const chosen = variableById(Number(fields.variable.value));
-      tile.variableId = chosen ? chosen.id : 0;
-      tile.icon = fields.icon.value || "home";
-      if (chosen && chosen.action) {
-        const idRaw = (fields.actionId.value || "").trim();
-        tile.actionId = idRaw && /^[A-Za-z0-9_-]{1,40}$/.test(idRaw) ? idRaw : (tile.actionId || `a-${tile.tileId}`);
-        tile.actionKind = "switch";
-        tile.confirm = fields.confirm.checked;
-      } else {
-        delete tile.actionId;
-        delete tile.actionKind;
-        tile.confirm = false;
-      }
-    }
-    if (tile.kind === "weather") {
-      tile.variableId = Number(fields.variable.value) || 0;
-      const forecastId = Number(fields.forecast.value) || 0;
-      if (forecastId > 0) tile.forecastVariableId = forecastId;
-      else delete tile.forecastVariableId;
-      tile.unit = fields.unit.value || "°C";
-      tile.decimals = Number(fields.decimals.value) || 0;
-      tile.icon = fields.icon.value || "sun";
-    }
-    if (tile.kind === "presence") {
-      tile.variableId = Number(fields.variable.value) || 0;
-      tile.presenceMode = fields.presenceMode.value || "home";
-    }
-    if (tile.kind === "label") {
-      tile.text = fields.text.value;
-      tile.labelStyle = fields.labelStyle ? fields.labelStyle.value : "text";
-      delete tile.size;
-    }
-    if (tile.kind === "display") {
-      tile.displaySource = fields.displaySource.value;
-      tile.icon = fields.icon.value;
-      if (fields.displaySource.value === "text") {
-        tile.text = fields.displayText.value;
-        delete tile.variableId;
-        delete tile.unit;
-        delete tile.decimals;
-      } else {
-        tile.variableId = Number(fields.variable.value) || 0;
-        tile.unit = fields.unit.value;
-        tile.decimals = Number(fields.decimals.value) || 0;
-        delete tile.text;
-      }
-    }
-    if (tile.kind === "chart") {
-      tile.variableId = Number(fields.variable.value) || 0;
-      tile.chartPeriod = fields.chartPeriod.value || "24h";
-      tile.chartStyle = fields.chartStyle.value || "area";
-      tile.unit = fields.unit.value;
-      tile.decimals = Number(fields.decimals.value) || 0;
-    }
-    if (tile.kind === "image") {
-      const source = fields.imageSource.value || "catalog";
-      if (source === "media") {
-        tile.imageSource = "media";
-        delete tile.imageId;
-        const mediaVar = variableById(Number(fields.imageMedia.value));
-        if (mediaVar && isMediaPick(mediaVar)) assignMediaVariable(tile, mediaVar, true);
-        else {
-          tile.variableId = 0;
-          delete tile.mediaObjectId;
-        }
-      } else {
-        tile.imageSource = "catalog";
-        tile.imageId = fields.image.value;
-        delete tile.variableId;
-        delete tile.mediaObjectId;
-      }
-    }
-    if (tile.kind === "energyflow") {
-      tile.flowMode = fields.flowMode.value;
-      tile.homeOverride = fields.homeOverride.checked;
-      tile.unit = fields.flowUnit.value || "W";
-      tile.decimals = Number(fields.flowDecimals.value) || 0;
-      tile.flowThreshold = Number(fields.flowThreshold.value) || 0;
-      for (const key of allFlowVariableKeys()) delete tile[key];
-      const map = flowSlotMap(tile);
-      for (const [slot, propKey] of Object.entries(map)) {
-        const picker = fields[`flowSlot_${slot}`];
-        if (!picker) continue;
-        const id = Number(picker.value) || 0;
-        if (id > 0) tile[propKey] = id;
-      }
-      if (!tile.homeOverride) delete tile.loadVariableId;
-      if (!tile.title) tile.title = "Energiefluss";
-    }
-    if (tile.kind === "camera") {
-      tile.cameraSource = fields.cameraSource ? fields.cameraSource.value : "url";
-      const chosen = treeItemById(Number(fields.variable.value));
-      if (!chosen || Number(fields.variable.value) === 0) {
-        tile.variableId = 0;
-        delete tile.mediaObjectId;
-      } else if (tile.cameraSource === "media") assignCameraMedia(tile, chosen, true);
-      else assignVariable(tile, chosen, true);
-    }
-    markDirty();
-    renderGrid();
-    renderProperties();
-  };
-}
-
 /* ---------- Ansicht-Dialog ---------- */
 
 function openLayoutDialog() {
@@ -3287,7 +2831,11 @@ function openLayoutDialog() {
     background.className = "page-bg";
     fillImageSelect(background);
     background.value = existing && existing.backgroundId ? existing.backgroundId : "";
-    row.append(wrap, background);
+    const pageIcon = document.createElement("select");
+    pageIcon.className = "page-icon";
+    fillIconSelect(pageIcon, true);
+    pageIcon.value = existing && existing.icon ? existing.icon : "";
+    row.append(wrap, background, pageIcon);
     list.appendChild(row);
   }
   dialog.returnValue = "";
@@ -3308,6 +2856,9 @@ function openLayoutDialog() {
       const background = wrap.parentElement.querySelector("select.page-bg");
       if (background && background.value) page.backgroundId = background.value;
       else delete page.backgroundId;
+      const pageIcon = wrap.parentElement.querySelector("select.page-icon");
+      if (pageIcon && pageIcon.value) page.icon = pageIcon.value;
+      else delete page.icon;
       pages.push(page);
     }
     if (!pages.length) pages.push(state.layout.pages[0] || { id: "start", title: "Start", tiles: [] });
@@ -3392,8 +2943,10 @@ function renderVariableTree() {
     summary.innerHTML = `${escapeHtml(key)} <small>(${groups.get(key).length})</small>`;
     details.appendChild(summary);
     for (const variable of groups.get(key).sort((left, right) => left.name.localeCompare(right.name, "de"))) {
+      const bound = boundVariableIds(selectedTile());
       const row = document.createElement("div");
-      row.className = "variable" + (state.pickedVariable && state.pickedVariable.id === variable.id ? " selected" : "");
+      row.className = "variable" + (bound.has(variable.id) ? " bound" : "");
+      row.dataset.variableId = String(variable.id);
       row.draggable = true;
       row.title = `${variable.path ? variable.path + " / " : ""}${variable.name}\nID ${variable.id}${variable.profile ? "\nProfil " + variable.profile : ""}`;
       const mediaBadge = isMediaPick(variable) ? ' <span class="badge badge-media">Medien</span>' : (isImageUrlRef(variable) ? ' <span class="badge badge-media">Bild-URL</span>' : "");
@@ -3403,60 +2956,7 @@ function renderVariableTree() {
         event.dataTransfer.setData("text/homedisplay-variable", String(variable.id));
         event.dataTransfer.effectAllowed = "copy";
       });
-      row.addEventListener("click", () => {
-        const tile = selectedTile();
-        if (tile && tile.kind === "image" && isMediaPick(variable)) {
-          assignMediaVariable(tile, variable);
-          return;
-        }
-        if (tile && tile.kind === "camera" && isMediaPick(variable)) {
-          assignCameraMedia(tile, variable);
-          return;
-        }
-        if (tile && tile.kind === "weather" && variable.type === 3) {
-          tile.forecastVariableId = variable.id;
-          markDirty();
-          renderGrid();
-          renderProperties();
-          setStatus("Prognose-Variable zugewiesen.");
-          return;
-        }
-        if (tile && tile.kind === "value" && tileInteractionMode(tile) === "setpoint" && tile.variableId && tile.variableId !== variable.id && (variable.type === 1 || variable.type === 2)) {
-          tile.setpointVariableId = variable.id;
-          markDirty();
-          renderProperties();
-          setStatus("Sollwert-Variable zugewiesen.");
-          return;
-        }
-        if (tile && tile.kind === "scene") {
-          assignVariable(tile, variable);
-          return;
-        }
-        if (tile && (tile.kind === "value" || tile.kind === "display" || tile.kind === "chart" || tile.kind === "weather" || tile.kind === "presence")) {
-          assignVariable(tile, variable);
-          return;
-        }
-        if (tile && tile.kind === "energyflow") {
-          const slot = $("p-flow-slot") ? $("p-flow-slot").value : "load";
-          assignFlowVariable(tile, slot, variable);
-          return;
-        }
-        if (tile && tile.kind === "camera" && (isImageUrlRef(variable) || !isMediaPick(variable))) {
-          assignVariable(tile, variable);
-          return;
-        }
-        state.pickedVariable = state.pickedVariable && state.pickedVariable.id === variable.id ? null : variable;
-        let hint;
-        if (isMediaPick(variable)) {
-          hint = `„${variable.name}“ gewählt – Bild-/Kamera-Kachel (Medien) oder freie Zelle (legt Bild-Kachel an).`;
-        } else if (isImageUrlRef(variable)) {
-          hint = `„${variable.name}“ gewählt – Kamera-Kachel oder freie Zelle (legt Kamera an).`;
-        } else {
-          hint = `„${variable.name}“ gewählt – freie Zelle anklicken, um eine Wertkachel anzulegen.`;
-        }
-        setHint(state.pickedVariable ? hint : "");
-        renderVariableTree();
-      });
+      row.addEventListener("click", () => {});
       row.addEventListener("dblclick", () => {
         const cell = freeCell(1, 1);
         if (!cell) {
@@ -3472,7 +2972,27 @@ function renderVariableTree() {
     tree.appendChild(details);
   }
   if (!keys.length) tree.innerHTML = '<div class="hint">Keine Variablen gefunden.</div>';
-  if (scrollHost) scrollHost.scrollTop = state.variableTreeScroll;
+  const first = tree.querySelector(".variable.bound");
+  if (first) first.scrollIntoView({ block: "nearest" });
+  else if (scrollHost) scrollHost.scrollTop = state.variableTreeScroll;
+}
+
+function boundVariableIds(tile) {
+  const ids = new Set();
+  if (!tile) return ids;
+  const add = (value) => { const n = Number(value); if (n > 0) ids.add(n); };
+  add(tile.variableId);
+  add(tile.mediaObjectId);
+  add(tile.forecastVariableId);
+  add(tile.setpointVariableId);
+  for (const key of Object.keys(tile)) {
+    if (key.endsWith("VariableId")) add(tile[key]);
+  }
+  for (const step of tile.sceneSteps || []) {
+    add(step.variableId);
+    add(step.colorVariableId);
+  }
+  return ids;
 }
 
 function variableMatches(variable, needle) {
@@ -3525,6 +3045,16 @@ function acceptVariablePicker() {
     tile.setpointVariableId = variable.id;
     markDirty();
     renderProperties();
+  } else if (kind === "sceneStep" || kind === "sceneStepColor") {
+    const tile = selectedTile();
+    const index = Number(pickerState.slot);
+    if (tile && Array.isArray(tile.sceneSteps) && tile.sceneSteps[index]) {
+      if (kind === "sceneStep") tile.sceneSteps[index].variableId = variable.id;
+      else tile.sceneSteps[index].colorVariableId = variable.id;
+      markDirty();
+      renderSceneSteps(tile);
+      renderGrid();
+    }
   } else if (kind === "scene" || kind === "weather" || kind === "presence" || kind === "variable") {
     if (tile.kind === "camera" && isMediaPick(variable)) assignCameraMedia(tile, variable);
     else assignVariable(tile, variable);
@@ -3614,7 +3144,7 @@ function validateLayout(layout) {
           if (!variableArchived(id)) throw new Error(`Diagramm „${tile.title || tile.tileId}“: Variable ${id} ist nicht archiviert.`);
         }
       }
-      if (tile.kind === "scene" && (!tile.actionId || !tile.variableId)) {
+      if (tile.kind === "scene" && !(Array.isArray(tile.sceneSteps) && tile.sceneSteps.some((step) => step.variableId))) {
         throw new Error(`Szene „${tile.title || tile.tileId}“ braucht eine schaltbare Aktions-Variable.`);
       }
       if (tile.kind === "weather" && !tile.variableId) throw new Error(`Wetter „${tile.title || tile.tileId}“ braucht eine Temperaturvariable.`);
@@ -3733,24 +3263,10 @@ $("duplicate-layout").addEventListener("click", () => {
 });
 $("edit-details").addEventListener("click", () => {
   const tile = selectedTile();
-  if (tile) openDetails(tile);
+  if (tile) openTileDialog(tile);
 });
 $("edit-delete").addEventListener("click", deleteSelected);
 $("edit-layout").addEventListener("click", openLayoutDialog);
-$("page-background").addEventListener("change", () => {
-  const page = currentPage();
-  if (!page) return;
-  if ($("page-background").value) page.backgroundId = $("page-background").value;
-  else delete page.backgroundId;
-  markDirty();
-});
-$("page-icon")?.addEventListener("change", () => {
-  const page = currentPage();
-  if (!page) return;
-  if ($("page-icon").value) page.icon = $("page-icon").value;
-  else delete page.icon;
-  markDirty();
-});
 $("color-mono")?.addEventListener("change", () => {
   if (!state.layout) return;
   state.layout.colorMode = $("color-mono").checked ? "mono" : "color";
@@ -3824,7 +3340,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Delete" && state.selected) deleteSelected();
   if (event.key === "Enter" && state.selected) {
     const tile = selectedTile();
-    if (tile) openDetails(tile);
+    if (tile) openTileDialog(tile);
   }
   if (event.ctrlKey && event.key.toLowerCase() === "s") {
     event.preventDefault();
@@ -4090,7 +3606,7 @@ function applyLiveStateToProbeTile(element, tile, live) {
       ohState.innerHTML = escapeHtml(live.text);
     }
     const iconBtn = element.querySelector("[data-icon-toggle]");
-    if (iconBtn && tileInteractionMode(tile) === "iconSwitch") {
+    if (iconBtn && tileInteractionMode(tile) === "switch" && tile.showIcon !== false) {
       const iconId = effectiveIcon(tile, live.value, undefined);
       iconBtn.textContent = iconName(iconId);
       let on = false;
@@ -4101,7 +3617,7 @@ function applyLiveStateToProbeTile(element, tile, live) {
       element.classList.toggle("on", on);
     }
     const sw = element.querySelector(".sw");
-    if (sw && (tile.control || "switch") === "switch" && tileInteractionMode(tile) !== "iconSwitch") {
+    if (sw && tile.control === "switch" && tile.actionId && tile.showIcon === false) {
       let on = false;
       if (typeof live.value === "boolean") on = live.value;
       else if (live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;

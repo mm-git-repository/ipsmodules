@@ -62,6 +62,7 @@ static int64_t started_at;
 static bool layout_held;
 static bool pending_verify;
 static bool online;
+static int64_t state_cache_at;
 static QueueHandle_t actions;
 
 static void remember(const char *key, const char *value)
@@ -1059,7 +1060,9 @@ static void client_task(void *argument)
             sync_cameras_from_state(response);
             sync_media_from_state(response);
             homedisplay_ui_apply_state(response);
-            if (!unchanged) write_cache(STATE_CACHE, response);
+            if (!unchanged && (state_cache_at == 0 || esp_timer_get_time() - state_cache_at > 300000000LL)) {
+                if (write_cache(STATE_CACHE, response)) state_cache_at = esp_timer_get_time();
+            }
             set_online(true);
             confirm_boot();
             homedisplay_ui_status(layout_held ? "Ansicht wartet auf ein neueres Programm" : "Hausanzeige verbunden");

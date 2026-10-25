@@ -396,6 +396,35 @@ final class HomeDisplayPanelSchema
                         $public['iconOn'] = (string) ($tile['iconOn'] ?? 'lightOn');
                         $public['iconOff'] = (string) ($tile['iconOff'] ?? 'lightOff');
                     }
+                    if (array_key_exists('showIcon', $tile) && $tile['showIcon'] === false) {
+                        $public['showIcon'] = false;
+                    }
+                    if (!empty($tile['showStateText'])) {
+                        $public['showStateText'] = true;
+                    }
+                    if ($control === 'combo' || in_array($control, ['dimSwitch', 'slider'], true)) {
+                        if (array_key_exists('dimShowSwitch', $tile) && $tile['dimShowSwitch'] === false) {
+                            $public['dimShowSwitch'] = false;
+                        }
+                        if (array_key_exists('dimShowBar', $tile) && $tile['dimShowBar'] === false) {
+                            $public['dimShowBar'] = false;
+                        }
+                        if (!empty($tile['dimShowStateText'])) {
+                            $public['dimShowStateText'] = true;
+                        }
+                        $tap = (string) ($tile['dimTap'] ?? '');
+                        if (in_array($tap, ['on', 'off'], true)) {
+                            $public['dimTap'] = $tap;
+                        }
+                    }
+                    $textColor = strtolower(trim((string) ($tile['textColor'] ?? '')));
+                    if (preg_match('/^#[0-9a-f]{6}$/', $textColor)) {
+                        $public['textColor'] = $textColor;
+                    }
+                    $textSize = (string) ($tile['textSize'] ?? '');
+                    if (in_array($textSize, ['small', 'large', 'xlarge'], true)) {
+                        $public['textSize'] = $textSize;
+                    }
                 }
                 $tiles[] = $public;
             }
@@ -917,13 +946,32 @@ final class HomeDisplayPanelSchema
             if ($icon !== '' && !in_array($icon, self::ICONS, true)) {
                 throw new InvalidArgumentException('Unbekanntes Symbol: ' . $icon);
             }
-            if ($publish && trim((string) ($tile['actionId'] ?? '')) === '') {
+            $steps = is_array($tile['sceneSteps'] ?? null) ? $tile['sceneSteps'] : [];
+            if ($steps === [] && (int) ($tile['variableId'] ?? 0) > 0) {
+                $steps = [['variableId' => (int) $tile['variableId'], 'value' => true]];
+            }
+            if ($publish && $steps === []) {
+                throw new InvalidArgumentException('Szenenkachel ohne Lampen.');
+            }
+            $actionId = trim((string) ($tile['actionId'] ?? ''));
+            if ($publish && $actionId === '') {
                 throw new InvalidArgumentException('Szenenkachel ohne freigegebene Aktion.');
             }
-            if ($publish && trim((string) ($tile['actionId'] ?? '')) !== '' && (int) ($tile['variableId'] ?? 0) <= 0) {
-                throw new InvalidArgumentException('Szenenkachel ohne Aktions-Variable.');
+            if ($actionId !== '' && !preg_match('/^[A-Za-z0-9_-]{1,40}$/', $actionId)) {
+                throw new InvalidArgumentException('Ungültige actionId.');
             }
-            self::validateAction($tile, $publish);
+            if ($publish) {
+                foreach ($steps as $step) {
+                    if (!is_array($step)) {
+                        throw new InvalidArgumentException('Szenenschritt ungültig.');
+                    }
+                    self::assertSwitchable((int) ($step['variableId'] ?? 0), 'Szenen-Lampe');
+                    $colorId = (int) ($step['colorVariableId'] ?? 0);
+                    if ($colorId > 0) {
+                        self::assertSwitchable($colorId, 'Szenen-Farbe');
+                    }
+                }
+            }
             return;
         }
         if ($kind === 'weather') {
@@ -1045,6 +1093,17 @@ final class HomeDisplayPanelSchema
         }
 
         return 'chart_' . substr($safe, 0, 28) . '.png';
+    }
+
+    private static function assertSwitchable(int $variableId, string $label): void
+    {
+        if ($variableId <= 0 || !function_exists('IPS_VariableExists') || !IPS_VariableExists($variableId)) {
+            throw new InvalidArgumentException($label . ' ohne Variable.');
+        }
+        $variable = IPS_GetVariable($variableId);
+        if ((int) ($variable['VariableAction'] ?? 0) <= 0 && (int) ($variable['VariableCustomAction'] ?? 0) <= 0) {
+            throw new InvalidArgumentException($label . ' ist nicht schaltbar.');
+        }
     }
 
     /** @param array<string, mixed> $tile */

@@ -1479,7 +1479,24 @@ class HomeDisplay extends IPSModuleStrict
         if ($decision['duplicate']) {
             return ['ok' => true, 'duplicate' => true];
         }
-        RequestAction($decision['variableId'], $decision['value']);
+        if (isset($decision['steps']) && is_array($decision['steps'])) {
+            foreach ($decision['steps'] as $step) {
+                try {
+                    $delay = (int) ($step['delayMs'] ?? 0);
+                    if ($delay > 0) {
+                        usleep($delay * 1000);
+                    }
+                    RequestAction((int) $step['variableId'], $step['value']);
+                    if (isset($step['colorVariableId'])) {
+                        RequestAction((int) $step['colorVariableId'], (int) $step['colorValue']);
+                    }
+                } catch (Throwable $error) {
+                    IPS_LogMessage('HomeDisplay', 'Szene: ' . $error->getMessage());
+                }
+            }
+        } else {
+            RequestAction($decision['variableId'], $decision['value']);
+        }
         $runtime[$key] = HomeDisplayPanelActionGuard::remember($entry, trim((string) $body['requestId']), $tileId, time());
         $this->saveRuntime($runtime);
         return ['ok' => true];

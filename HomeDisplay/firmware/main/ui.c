@@ -60,7 +60,19 @@ typedef struct {
     int battery_pad;
     uint32_t base_bg;
     uint32_t on_bg;
+    uint32_t text_color;
     bool own_on;
+    bool own_text;
+    bool show_icon;
+    bool show_state_text;
+    bool dim_show_switch;
+    bool dim_show_bar;
+    bool dim_show_state_text;
+    bool has_threshold;
+    char dim_tap[8];
+    char text_size[8];
+    char status_color[8];
+    float threshold;
 } tile_view_t;
 
 static void ui_wdt_kick(void)
@@ -190,6 +202,7 @@ static char idle_clock_style[12] = "digital";
 static bool idle_active;
 static lv_obj_t *dim_popup;
 static lv_obj_t *dim_slider;
+static lv_obj_t *dim_title_label;
 static tile_view_t *dim_tile;
 static lv_obj_t *analog_clock;
 static lv_obj_t *analog_hour;
@@ -428,18 +441,20 @@ static void tile_event(lv_event_t *event)
     /* Dimmer: Popup; reine Schalter: Zielzustand (Toggle), nicht den Ist-Wert. */
     if (strcmp(tile->control, "dimSwitch") == 0 || strcmp(tile->control, "slider") == 0
         || strcmp(tile->control, "combo") == 0) {
-        open_dim_popup(tile);
+        if (strcmp(tile->dim_tap, "on") != 0 && strcmp(tile->dim_tap, "off") != 0) {
+            open_dim_popup(tile);
+        }
         return;
     }
     int next = tile->value > tile->value_min ? tile->value_min : (tile->value_max > tile->value_min ? tile->value_max : 1);
     tile->value = next;
-    if (tile->icon_label && strcmp(tile->icon_mode, "toggle") == 0) {
+    if (tile->icon_label && tile->show_icon) {
         lv_label_set_text(tile->icon_label, icon_symbol(next > tile->value_min ? tile->icon_on : tile->icon_off));
     }
     if (tile->card) {
         lv_obj_set_style_bg_color(tile->card, lv_color_hex(next > tile->value_min ? tile_on_color(tile) : tile->base_bg), 0);
     }
-    if (tile->label && strcmp(tile->icon_mode, "toggle") != 0) {
+    if (tile->label && tile->show_state_text) {
         label_set_folded(tile->label, next > tile->value_min ? "Ein" : "Aus");
     }
     action_callback(tile->tile_id, tile->action_id, next);
@@ -479,6 +494,9 @@ static void open_dim_popup(tile_view_t *tile)
     int max = tile->value_max > min ? tile->value_max : min + 100;
     lv_slider_set_range(dim_slider, min, max);
     lv_slider_set_value(dim_slider, tile->value, LV_ANIM_OFF);
+    if (dim_title_label) {
+        lv_label_set_text(dim_title_label, tile->title[0] ? tile->title : "Dimmen");
+    }
     lv_obj_clear_flag(dim_popup, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(dim_popup);
 }
@@ -621,7 +639,8 @@ static void knob_event(lv_event_t *event)
     if (locked) return;
     tile_view_t *tile = lv_event_get_user_data(event);
     if (!tile || !tile->track) return;
-    if (lv_event_get_code(event) == LV_EVENT_PRESSING) {
+    lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_CLICKED || code == LV_EVENT_PRESSING) {
         lv_point_t point;
         lv_indev_get_point(lv_indev_get_act(), &point);
         lv_area_t area;
@@ -645,6 +664,7 @@ static void knob_event(lv_event_t *event)
             lv_label_set_text(tile->label, line);
         }
         tile->applying = false;
+        if (code == LV_EVENT_CLICKED) send_level(tile, tile->value);
         return;
     }
     if (lv_event_get_code(event) == LV_EVENT_RELEASED) send_level(tile, tile->value);
@@ -993,10 +1013,34 @@ static void show_page(int index)
         snprintf(view->icon_on, sizeof(view->icon_on), "%s", icon_on ? icon_on : "lightOn");
         snprintf(view->icon_off, sizeof(view->icon_off), "%s", icon_off ? icon_off : "lightOff");
         bool icon_toggle = strcmp(view->icon_mode, "toggle") == 0;
+        view->show_icon = !cJSON_IsFalse(cJSON_GetObjectItem(tile, "showIcon"));
+        view->show_state_text = cJSON_IsTrue(cJSON_GetObjectItem(tile, "showStateText"));
+        view->dim_show_switch = !cJSON_IsFalse(cJSON_GetObjectItem(tile, "dimShowSwitch"));
+        view->dim_show_bar = !cJSON_IsFalse(cJSON_GetObjectItem(tile, "dimShowBar"));
+        view->dim_show_state_text = cJSON_IsTrue(cJSON_GetObjectItem(tile, "dimShowStateText"));
         bool battery = strcmp(view->control, "battery") == 0;
         bool dim_switch = strcmp(view->control, "dimSwitch") == 0;
         bool slider = strcmp(view->control, "slider") == 0;
         bool combo = strcmp(view->control, "combo") == 0;
+        bool dimmer = dim_switch || slider || combo;
+        if (slider) view->dim_show_switch = false;
+        if (dim_switch) view->dim_show_switch = true;
+        const char *tap = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "dimTap"));
+        snprintf(view->dim_tap, sizeof(view->dim_tap), "%s", tap && tap[0] ? tap : "popup");
+        const char *text_size = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "textSize"));
+        snprintf(view->text_size, sizeof(view->text_size), "%s", text_size ? text_size : "normal");
+        const char *text_color = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "textColor"));
+        if (text_color && text_color[0] == '#') {
+            view->text_color = parse_hex_color(text_color, text_fg());
+            view->own_text = true;
+        }
+        cJSON *threshold = cJSON_GetObjectItem(tile, "threshold");
+        if (threshold && cJSON_IsNumber(threshold)) {
+            view->has_threshold = true;
+            view->threshold = (float) threshold->valuedouble;
+            const char *status = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "color"));
+            snprintf(view->status_color, sizeof(view->status_color), "%s", status ? status : "neutral");
+        }
 
         /* Titelzeile: kleines Icon + Text */
         if (show_title) {
@@ -1031,38 +1075,56 @@ static void show_page(int index)
 
         view->label = lv_label_create(view->card);
         lv_label_set_text(view->label, "—");
-        lv_obj_set_style_text_font(view->label, &lv_font_montserrat_28, 0);
+        const lv_font_t *value_font = &lv_font_montserrat_28;
+        if (strcmp(view->text_size, "small") == 0) value_font = &lv_font_montserrat_20;
+        else if (strcmp(view->text_size, "large") == 0) value_font = &lv_font_montserrat_36;
+        else if (strcmp(view->text_size, "xlarge") == 0) value_font = &lv_font_montserrat_48;
+        lv_obj_set_style_text_font(view->label, value_font, 0);
+        if (view->own_text) lv_obj_set_style_text_color(view->label, lv_color_hex(view->text_color), 0);
 
-        if (view->has_action && icon_toggle) {
+        if (view->has_action && dimmer) {
             if (!color_mono && !own_bg) {
                 view->base_bg = theme_button;
                 lv_obj_set_style_bg_color(view->card, lv_color_hex(view->base_bg), 0);
             }
-            view->icon_label = lv_label_create(view->card);
-            lv_label_set_text(view->icon_label, icon_symbol(view->icon_off));
-            lv_obj_set_style_text_font(view->icon_label, &lv_font_montserrat_48, 0);
-            lv_obj_align(view->icon_label, LV_ALIGN_CENTER, 0, 10);
-            lv_obj_add_flag(view->label, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
-        } else if (view->has_action && (dim_switch || slider || combo)) {
-            view->icon_label = lv_label_create(view->card);
-            lv_label_set_text(view->icon_label, LV_SYMBOL_SETTINGS);
-            lv_obj_set_style_text_font(view->icon_label, &lv_font_montserrat_48, 0);
-            lv_obj_align(view->icon_label, LV_ALIGN_CENTER, 0, 8);
-            lv_obj_align(view->label, LV_ALIGN_BOTTOM_MID, 0, -4);
+            if (view->dim_show_switch) {
+                build_power(view);
+                lv_obj_align(view->power, LV_ALIGN_LEFT_MID, 8, 6);
+            }
+            if (view->dim_show_bar) {
+                int width = cell_w * col_span - (view->dim_show_switch ? 96 : 28);
+                if (width < 48) width = 48;
+                build_track(view, width);
+                lv_obj_align(view->track, LV_ALIGN_BOTTOM_MID, view->dim_show_switch ? 16 : 0, -14);
+                if (strcmp(view->dim_tap, "on") == 0) {
+                    lv_obj_add_flag(view->track, LV_OBJ_FLAG_CLICKABLE);
+                    lv_obj_add_event_cb(view->track, knob_event, LV_EVENT_CLICKED, view);
+                }
+            }
+            if (view->dim_show_state_text) {
+                lv_label_set_text(view->label, "Aus");
+                lv_obj_align(view->label, LV_ALIGN_TOP_RIGHT, -4, 2);
+            } else {
+                lv_obj_add_flag(view->label, LV_OBJ_FLAG_HIDDEN);
+            }
             lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
         } else if (view->has_action) {
-            /* Ein/Aus-Schalter: grosse Flaeche, Aus = Buttonfarbe */
             if (!color_mono && !own_bg) {
                 view->base_bg = theme_button;
                 lv_obj_set_style_bg_color(view->card, lv_color_hex(view->base_bg), 0);
             }
-            view->icon_label = lv_label_create(view->card);
-            lv_label_set_text(view->icon_label, LV_SYMBOL_POWER);
-            lv_obj_set_style_text_font(view->icon_label, &lv_font_montserrat_48, 0);
-            lv_obj_align(view->icon_label, LV_ALIGN_CENTER, 0, 8);
-            lv_obj_align(view->label, LV_ALIGN_BOTTOM_MID, 0, -4);
-            lv_label_set_text(view->label, "Aus");
+            if (view->show_icon) {
+                view->icon_label = lv_label_create(view->card);
+                lv_label_set_text(view->icon_label, icon_toggle ? icon_symbol(view->icon_off) : LV_SYMBOL_POWER);
+                lv_obj_set_style_text_font(view->icon_label, &lv_font_montserrat_48, 0);
+                lv_obj_align(view->icon_label, LV_ALIGN_CENTER, 0, view->show_state_text ? -6 : 4);
+            }
+            if (view->show_state_text) {
+                lv_label_set_text(view->label, "Aus");
+                lv_obj_align(view->label, LV_ALIGN_BOTTOM_MID, 0, -4);
+            } else {
+                lv_obj_add_flag(view->label, LV_OBJ_FLAG_HIDDEN);
+            }
             lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
         } else {
             /* Reine Wertanzeige */
@@ -1198,11 +1260,11 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lvgl_port_init(&port_config);
     const lvgl_port_display_cfg_t display_config = {
         .panel_handle = panel,
-        .buffer_size = HOMEDISPLAY_LCD_H_RES * 80,
+        .buffer_size = HOMEDISPLAY_LCD_H_RES * 20,
         .double_buffer = false,
         .hres = HOMEDISPLAY_LCD_H_RES,
         .vres = HOMEDISPLAY_LCD_V_RES,
-        .flags = {.buff_spiram = true},
+        .flags = {.buff_dma = true, .buff_spiram = false},
     };
     const lvgl_port_display_rgb_cfg_t rgb_config = {};
     lv_disp_t *display = lvgl_port_add_disp_rgb(&display_config, &rgb_config);
@@ -1324,7 +1386,8 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_set_style_radius(dim_card, 12, 0);
     style_flat(dim_card);
     lv_obj_t *dim_title = lv_label_create(dim_card);
-    lv_label_set_text(dim_title, "Helligkeit");
+    dim_title_label = dim_title;
+    lv_label_set_text(dim_title, "Dimmen");
     lv_obj_set_style_text_color(dim_title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(dim_title, &lv_font_montserrat_28, 0);
     lv_obj_align(dim_title, LV_ALIGN_TOP_MID, 0, 16);
@@ -1539,16 +1602,28 @@ void homedisplay_ui_apply_state(const char *json)
                     else lv_obj_clear_state(tiles[index].power, LV_STATE_CHECKED);
                 }
             }
-            if (tiles[index].icon_label && strcmp(tiles[index].icon_mode, "toggle") == 0) {
+            if (tiles[index].icon_label && tiles[index].show_icon) {
                 lv_label_set_text(tiles[index].icon_label, icon_symbol(on ? tiles[index].icon_on : tiles[index].icon_off));
-            } else if (tiles[index].has_action && tiles[index].control[0]
-                       && strcmp(tiles[index].control, "switch") == 0 && tiles[index].label
-                       && strcmp(tiles[index].icon_mode, "toggle") != 0) {
+            }
+            if (tiles[index].has_action && tiles[index].label && tiles[index].show_state_text) {
                 label_set_folded(tiles[index].label, on ? "Ein" : "Aus");
-                if (tiles[index].card) {
-                    lv_obj_set_style_bg_color(tiles[index].card,
-                        lv_color_hex(on ? tile_on_color(&tiles[index]) : tiles[index].base_bg), 0);
+            }
+            if (tiles[index].has_action && tiles[index].card && tiles[index].control[0]
+                && strcmp(tiles[index].control, "switch") == 0) {
+                lv_obj_set_style_bg_color(tiles[index].card,
+                    lv_color_hex(on ? tile_on_color(&tiles[index]) : tiles[index].base_bg), 0);
+            }
+            if (tiles[index].dim_show_state_text && tiles[index].label) {
+                label_set_folded(tiles[index].label, on ? "Ein" : "Aus");
+            }
+            if (!tiles[index].has_action && tiles[index].has_threshold && tiles[index].card) {
+                uint32_t bg = tiles[index].base_bg;
+                if (number >= tiles[index].threshold) {
+                    if (strcmp(tiles[index].status_color, "ok") == 0) bg = 0x1E6B3A;
+                    else if (strcmp(tiles[index].status_color, "warn") == 0) bg = 0x8A6A12;
+                    else if (strcmp(tiles[index].status_color, "alarm") == 0) bg = 0x8A2424;
                 }
+                lv_obj_set_style_bg_color(tiles[index].card, lv_color_hex(bg), 0);
             }
             tiles[index].applying = false;
         }
