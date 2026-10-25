@@ -1,10 +1,9 @@
 {
     "id": "{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}",
-    "name": "Hausanzeige Verwaltung",
+    "name": "HomeDisplayVerwaltung",
     "type": 3,
     "vendor": "MM-Modules",
     "aliases": [
-        "HomeDisplayVerwaltung",
         "HomeDisplay Verwaltung"
     ],
     "url": "https://github.com/mm-git-repository/ipsmodules.git",
