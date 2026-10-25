@@ -17,7 +17,7 @@
 #include <string.h>
 
 static const char *TAG = "net";
-static bool connected;
+static volatile bool connected;
 static int retry_delay = 2;
 static int64_t disconnected_at;
 static esp_timer_handle_t retry_timer;
@@ -59,21 +59,30 @@ static void wifi_event(void *argument, esp_event_base_t base, int32_t id, void *
         return;
     }
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (connected) disconnected_at = esp_timer_get_time();
+        wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *) data;
+        int reason = disc ? disc->reason : -1;
+        if (connected) {
+            disconnected_at = esp_timer_get_time();
+        }
         connected = false;
+        ESP_LOGW(TAG, "WLAN getrennt (Grund %d), neuer Versuch in %d s", reason, retry_delay);
         if (disconnected_at && esp_timer_get_time() - disconnected_at > 300000000) {
             ESP_LOGW(TAG, "Fünf Minuten ohne WLAN, Treiber wird neu gestartet");
+            esp_timer_stop(retry_timer);
             esp_wifi_stop();
             esp_wifi_start();
             disconnected_at = esp_timer_get_time();
             retry_delay = 2;
             return;
         }
+        esp_timer_stop(retry_timer);
         esp_timer_start_once(retry_timer, (uint64_t) retry_delay * 1000000);
         retry_delay = retry_delay >= 60 ? 60 : retry_delay * 2;
         return;
     }
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        /* Alte Retry-Timer stoppen – sonst ruft esp_wifi_connect() bei bestehender Verbindung einen Disconnect aus. */
+        esp_timer_stop(retry_timer);
         connected = true;
         retry_delay = 2;
         disconnected_at = 0;
@@ -104,7 +113,23 @@ void homedisplay_wifi_start(const char *ssid, const char *password)
 
 bool homedisplay_wifi_connected(void)
 {
-    return connected;
+    if (connected) {
+        return true;
+    }
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        return false;
+    }
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEFAULT");
+    if (netif == NULL) {
+        return false;
+    }
+    esp_netif_ip_info_t ip;
+    if (esp_netif_get_ip_info(netif, &ip) != ESP_OK || ip.ip.addr == 0) {
+        return false;
+    }
+    connected = true;
+    return true;
 }
 
 static const char provisioning_page[] =

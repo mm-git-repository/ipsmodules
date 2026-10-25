@@ -50,6 +50,7 @@ static char last_command[24];
 static int progress;
 static int state_interval = 3;
 static int idle_interval = 15;
+static int manifest_interval_sec = 60;
 static int maintenance_from = 3;
 static int maintenance_to = 5;
 static int last_seq = -1;
@@ -392,25 +393,29 @@ static void copy_string(cJSON *item, char *target, size_t length)
     snprintf(target, length, "%s", value ? value : "");
 }
 
-static esp_err_t download_to_file(const char *path, const char *target)
+static esp_err_t download_to_file(const char *path, const char *target, int timeout_ms, size_t max_bytes)
 {
     char url[260];
     snprintf(url, sizeof(url), "%s%s", base_url, path);
     esp_http_client_config_t config;
     configure_http_client(&config, url);
-    config.timeout_ms = 15000;
+    config.timeout_ms = timeout_ms > 0 ? timeout_ms : 15000;
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) return ESP_ERR_NO_MEM;
     char header[64];
     snprintf(header, sizeof(header), "Bearer %s", token);
     esp_http_client_set_header(client, "Authorization", header);
+    esp_task_wdt_reset();
     esp_err_t error = esp_http_client_open(client, 0);
     if (error != ESP_OK) {
+        ESP_LOGW(TAG, "Download-Open %s: %s", path, esp_err_to_name(error));
         esp_http_client_cleanup(client);
         return error;
     }
     esp_http_client_fetch_headers(client);
-    if (esp_http_client_get_status_code(client) != 200) {
+    int status = esp_http_client_get_status_code(client);
+    if (status != 200) {
+        ESP_LOGW(TAG, "Download HTTP %d auf %s", status, path);
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return ESP_FAIL;
@@ -424,14 +429,27 @@ static esp_err_t download_to_file(const char *path, const char *target)
         return ESP_FAIL;
     }
     char buffer[1024];
+    size_t total = 0;
+    int64_t deadline = esp_timer_get_time() + (int64_t) config.timeout_ms * 1000;
     while (true) {
         esp_task_wdt_reset();
+        if (esp_timer_get_time() > deadline) {
+            ESP_LOGW(TAG, "Download-Timeout %s nach %u Byte", path, (unsigned) total);
+            error = ESP_ERR_TIMEOUT;
+            break;
+        }
         int read = esp_http_client_read(client, buffer, sizeof(buffer));
         if (read < 0) {
             error = ESP_FAIL;
             break;
         }
         if (read == 0) break;
+        total += (size_t) read;
+        if (max_bytes > 0 && total > max_bytes) {
+            ESP_LOGW(TAG, "Download zu groß %s (%u Byte)", path, (unsigned) total);
+            error = ESP_ERR_INVALID_SIZE;
+            break;
+        }
         if (fwrite(buffer, 1, read, file) != (size_t) read) {
             error = ESP_FAIL;
             break;
@@ -459,7 +477,7 @@ static void fetch_one_image(const char *id, const char *file)
     char path[64];
     snprintf(path, sizeof(path), "/v1/images/%s", id);
     homedisplay_ui_status("Lade Bilder");
-    if (download_to_file(path, target) != ESP_OK) {
+    if (download_to_file(path, target, 15000, 2 * 1024 * 1024) != ESP_OK) {
         ESP_LOGW(TAG, "Bild %s konnte nicht geladen werden", id);
     }
 }
@@ -535,11 +553,16 @@ static void fetch_one_camera(const char *tile_id, const char *file)
     snprintf(target, sizeof(target), "/storage/%s", file);
     char path[80];
     snprintf(path, sizeof(path), "/v1/camera/%s", tile_id);
-    homedisplay_ui_status("Lade Kamera");
-    if (download_to_file(path, target) != ESP_OK) {
+    char status[96];
+    snprintf(status, sizeof(status), "Lade Kamera\n%s", tile_id);
+    homedisplay_ui_status(status);
+    ESP_LOGI(TAG, "Kamera laden %s", tile_id);
+    /* Kurzes Timeout: IPS/ONVIF darf den Start der Ansicht nicht blockieren. */
+    if (download_to_file(path, target, 8000, 900 * 1024) != ESP_OK) {
         ESP_LOGW(TAG, "Kamera %s konnte nicht geladen werden", tile_id);
         return;
     }
+    ESP_LOGI(TAG, "Kamera geladen %s", tile_id);
     homedisplay_ui_refresh_camera(tile_id, file);
 }
 
@@ -659,7 +682,7 @@ static void fetch_one_media(const char *tile_id, const char *file)
     char path[80];
     snprintf(path, sizeof(path), "/v1/media/%s", tile_id);
     homedisplay_ui_status("Lade Medien");
-    if (download_to_file(path, target) != ESP_OK) {
+    if (download_to_file(path, target, 10000, 2 * 1024 * 1024) != ESP_OK) {
         ESP_LOGW(TAG, "Medien %s konnte nicht geladen werden", tile_id);
         return;
     }
@@ -718,6 +741,8 @@ static void apply_config_document(const char *json)
     if (item) state_interval = item->valueint;
     item = cJSON_GetObjectItem(document, "idleStateIntervalSec");
     if (item) idle_interval = item->valueint;
+    item = cJSON_GetObjectItem(document, "manifestIntervalSec");
+    if (item && item->valueint >= 15) manifest_interval_sec = item->valueint;
     item = cJSON_GetObjectItem(document, "maintenanceFrom");
     if (item) maintenance_from = item->valueint;
     item = cJSON_GetObjectItem(document, "maintenanceTo");
@@ -825,28 +850,38 @@ static void pull_manifest(char *response, size_t length)
         ui_setup("Noch keine Vorlage\nIn IPS: Layout zuweisen\nund veröffentlichen");
         return;
     }
-    if (strcmp(next_layout, layout_sha) == 0) {
-        ui_setup("Vorlage aktuell\nLade Live-Werte …");
+    if (strcmp(next_layout, layout_sha) == 0 && homedisplay_ui_layout_ready()) {
         return;
+    }
+    if (strcmp(next_layout, layout_sha) == 0 && read_cache(LAYOUT_CACHE, response, length)) {
+        homedisplay_ui_apply_layout(response);
+        if (homedisplay_ui_layout_ready()) {
+            return;
+        }
     }
     ui_setup("Hole Vorlage vom Server\nLayout wird geladen …");
     if (request("/v1/layout", "GET", NULL, response, length) != ESP_OK) {
         ui_setup("Vorlage nicht erreichbar\n/v1/layout fehlgeschlagen");
         return;
     }
-    ui_setup("Verarbeite Vorlage\nLade Bilder und Medien …");
+    ui_setup("Verarbeite Vorlage\nLade Katalogbilder …");
     esp_task_wdt_reset();
     fetch_images(response);
     esp_task_wdt_reset();
-    fetch_layout_cameras(response);
-    esp_task_wdt_reset();
-    fetch_layout_media(response);
-    esp_task_wdt_reset();
+    /* Ansicht zuerst zeigen – Kameras/Medien kommen danach bzw. über /v1/state,
+     * damit eine hängende ONVIF-Kamera den Start nicht blockiert. */
+    ui_setup("Verarbeite Vorlage\nZeichne Ansicht …");
     snprintf(layout_sha, sizeof(layout_sha), "%s", next_layout);
     homedisplay_ui_apply_layout(response);
     write_cache(LAYOUT_CACHE, response);
     remember("layout_sha", layout_sha);
     last_seq = -1;
+    esp_task_wdt_reset();
+    ui_setup("Ansicht geladen\nLade Kameras und Medien …");
+    fetch_layout_cameras(response);
+    esp_task_wdt_reset();
+    fetch_layout_media(response);
+    esp_task_wdt_reset();
 }
 
 static void post_action(const char *tile_id, const char *action_id, int value)
@@ -923,6 +958,7 @@ static void confirm_boot(void)
 static void client_task(void *argument)
 {
     (void) argument;
+    ESP_LOGI(TAG, "Client gestartet");
     started_at = esp_timer_get_time();
     esp_task_wdt_add(NULL);
     const esp_partition_t *running = esp_ota_get_running_partition();
@@ -949,14 +985,26 @@ static void client_task(void *argument)
         vTaskDelete(NULL);
         return;
     }
-    restore_cache(response, response_length);
+    /* Config aus Cache; Layout erst nach WLAN und ohne Bild-Decode (sonst grüner Schirm / WDT). */
+    if (read_cache(CONFIG_CACHE, response, response_length)) {
+        apply_config_document(response);
+        recall("config_sha", config_sha, sizeof(config_sha));
+    }
+    /* Layout-SHA aus NVS behalten – nur echte Manifest-Aenderungen neu zeichnen. */
+    recall("layout_sha", layout_sha, sizeof(layout_sha));
     esp_task_wdt_reset();
     ensure_pairing_code();
     homedisplay_ui_set_pairing_code(pairing_code);
+    ui_setup("Warte auf WLAN …\nSSID und Empfang prüfen");
+    while (!homedisplay_wifi_connected()) {
+        esp_task_wdt_reset();
+        homedisplay_serial_poll();
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    ui_setup("WLAN verbunden\nStarte Synchronisation …");
     if (token[0] == '\0') {
         pair_until_token();
     } else {
-        ui_setup("Bereits gekoppelt\nStarte Synchronisation …");
         /* OTA-Rollback vermeiden, sobald WLAN + Token stehen – nicht erst nach /v1/state. */
         confirm_boot();
     }
@@ -980,10 +1028,19 @@ static void client_task(void *argument)
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
         }
+        if (base_url[0] == '\0') {
+            ui_setup("WLAN verbunden\nSuche Dienst (mDNS) …");
+            discover();
+            if (base_url[0] == '\0') {
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                continue;
+            }
+        }
         if (now >= next_manifest) {
             pull_manifest(response, response_length);
-            int jitter = esp_random() % 60;
-            next_manifest = now + (int64_t) (900 + jitter) * 1000000;
+            int jitter = esp_random() % 15;
+            int interval = manifest_interval_sec > 10 ? manifest_interval_sec : 60;
+            next_manifest = now + (int64_t) (interval + jitter) * 1000000;
             maybe_update();
         }
         send_queued_action();
@@ -1032,5 +1089,9 @@ static void client_task(void *argument)
 void homedisplay_client_start(void)
 {
     actions = xQueueCreate(4, sizeof(action_message_t));
-    xTaskCreate(client_task, "homedisplay", 16384, NULL, 4, NULL);
+    BaseType_t ok = xTaskCreate(client_task, "homedisplay", 12288, NULL, 4, NULL);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "Client-Task konnte nicht gestartet werden (Speicher)");
+        homedisplay_ui_status("Fehler\nClient-Task: zu wenig Speicher");
+    }
 }

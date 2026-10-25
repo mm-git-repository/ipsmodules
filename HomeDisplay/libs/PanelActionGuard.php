@@ -76,13 +76,8 @@ final class HomeDisplayPanelActionGuard
     public static function value(array $tile, mixed $current, mixed $value): mixed
     {
         $kind = (string) ($tile['actionKind'] ?? 'switch');
-        if ($kind === 'switch' || is_bool($current)) {
-            if (is_bool($value)) {
-                return $value;
-            }
-            if (is_int($value) && ($value === 0 || $value === 1)) {
-                return $value === 1;
-            }
+        /* Schalten: immer umschalten. Absolute 0/1 vom Panel waren oft der Ist-Wert und haben nichts geändert. */
+        if ($kind === 'switch') {
             return !((bool) $current);
         }
         if (!is_numeric($value)) {

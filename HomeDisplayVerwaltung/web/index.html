@@ -68,6 +68,10 @@
     </label>
     <span id="display-profile-meta" class="hint"></span>
     <label><input id="show-tabs" type="checkbox" checked> Reiterleiste an der Anzeige</label>
+    <label><input id="color-mono" type="checkbox"> Schwarz/Weiß</label>
+    <label>Hintergrund <input id="theme-bg" type="color" value="#102033"></label>
+    <label>Buttons <input id="theme-button" type="color" value="#2a4f7c"></label>
+    <label>Akzent <input id="theme-accent" type="color" value="#ffb547"></label>
   </div>
 
   <div id="workspace">
@@ -82,8 +86,7 @@
             <div class="palette-item" draggable="true" data-kind="value" data-control="combo">Kombischalter</div>
             <div class="palette-item" draggable="true" data-kind="value" data-control="battery">Batterie</div>
             <div class="palette-item" draggable="true" data-kind="nav">Seitenwechsler</div>
-            <div class="palette-item" draggable="true" data-kind="display">Nur Anzeige</div>
-            <div class="palette-item" draggable="true" data-kind="chart">Diagramm</div>
+                        <div class="palette-item" draggable="true" data-kind="chart">Diagramm</div>
             <div class="palette-item" draggable="true" data-kind="scene">Szene</div>
             <div class="palette-item" draggable="true" data-kind="weather">Wetter</div>
             <div class="palette-item" draggable="true" data-kind="presence">Anwesenheit</div>
@@ -92,8 +95,7 @@
             <div class="palette-item" draggable="true" data-kind="image">Bild</div>
             <div class="palette-item" draggable="true" data-kind="camera">Kamera</div>
             <div class="palette-item" draggable="true" data-kind="separator">Trennlinie</div>
-            <div class="palette-item" draggable="true" data-kind="system">Anzeigestatus</div>
-          </div>
+                      </div>
         </div>
       </div>
       <div id="variable-panel">
@@ -125,6 +127,9 @@
       <div id="prop-page" class="hidden">
         <label>Hintergrund dieser Seite
           <select id="page-background"></select>
+        </label>
+        <label>Seiten-Symbol (Reiter)
+          <select id="page-icon"></select>
         </label>
         <p class="hint">Gilt für die aktive Seite (Tabs). An der Anzeige sichtbar, im Editor-Raster nicht.</p>
       </div>
@@ -231,8 +236,18 @@
           <p class="hint">Horizontale Trennlinie über die volle Breite der Zeile. Nur Titel optional.</p>
         </div>
         <div data-for="value">
+          <label>Quelle
+            <select id="p-displaysource">
+              <option value="variable">Variable</option>
+              <option value="text">Fester Text</option>
+            </select>
+          </label>
+          <div id="p-display-text" class="hidden">
+            <label>Text <textarea id="p-display-textarea" rows="3"></textarea></label>
+          </div>
           <div class="row">
-            <label>Einheit <input id="p-unit"></label>
+            <label>Prefix <input id="p-prefix"></label>
+            <label>Suffix / Einheit <input id="p-unit"></label>
             <label>Nachkommastellen <input id="p-decimals" type="number" min="0" max="3" value="0"></label>
           </div>
           <label>Schalter / Bedienung
@@ -312,28 +327,7 @@
           <label>Text <textarea id="p-text" rows="3"></textarea></label>
           <p class="hint">Text wird automatisch auf die Kachelgröße skaliert.</p>
         </div>
-        <div data-for="display">
-          <label>Quelle
-            <select id="p-displaysource">
-              <option value="variable">Variable (live)</option>
-              <option value="text">Fester Text</option>
-            </select>
-          </label>
-          <div id="p-display-variable">
-            <label>Variable <input id="p-display-varpick" readonly placeholder="Aus dem Variablenbaum wählen"></label>
-            <div class="row">
-              <label>Einheit <input id="p-display-unit"></label>
-              <label>Nachkommastellen <input id="p-display-decimals" type="number" min="0" max="3" value="0"></label>
-            </div>
-          </div>
-          <div id="p-display-text" class="hidden">
-            <label>Text <textarea id="p-display-textarea" rows="3"></textarea></label>
-          </div>
-          <label>Symbol (optional)
-            <select id="p-display-icon"></select>
-          </label>
-          <p class="hint">Nur Anzeige – ohne Schalten. Wert und Symbol füllen die Kachel.</p>
-        </div>
+        <div data-for="display" class="hidden"></div>
         <div data-for="energyflow">
           <label>Modus (Batterie)
             <select id="p-flow-mode">

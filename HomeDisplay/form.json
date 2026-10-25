@@ -111,6 +111,22 @@
             ]
         },
         {
+            "type": "Select",
+            "name": "IdleClockStyle",
+            "caption": "Uhrstil (Ruheanzeige)",
+            "options": [
+                {"caption": "Digital", "value": "digital"},
+                {"caption": "Analog", "value": "analog"}
+            ]
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "IdleTimeoutSec",
+            "caption": "Uhr nach (Sekunden)",
+            "minimum": 5,
+            "maximum": 3600
+        },
+        {
             "type": "CheckBox",
             "name": "NightDim",
             "caption": "Nachts dimmen"

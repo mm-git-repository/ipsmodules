@@ -116,7 +116,7 @@ esp_err_t homedisplay_board_init(esp_lcd_panel_handle_t *panel, esp_lcd_touch_ha
         .data_width = 16,
         .bits_per_pixel = 16,
         .num_fbs = 1,
-        .bounce_buffer_size_px = HOMEDISPLAY_LCD_H_RES * 10,
+        .bounce_buffer_size_px = HOMEDISPLAY_LCD_H_RES * 20,
         .sram_trans_align = 4,
         .psram_trans_align = 64,
         .hsync_gpio_num = 46,

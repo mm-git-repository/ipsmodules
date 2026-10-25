@@ -20,7 +20,26 @@ const DISPLAY_PROFILES = {
   "firebeetle-epd-400x300": { label: "FireBeetle E-Ink 4,2\" (400×300)", width: 400, height: 300, defaultColumns: 3, defaultRows: 4, maxColumns: 3, maxRows: 4 },
   "firebeetle-epd-800x480": { label: "FireBeetle E-Ink 7,5\" (800×480)", width: 800, height: 480, defaultColumns: 4, defaultRows: 6, maxColumns: 4, maxRows: 6 }
 };
-const KIND_NAMES = { value: "Wert", display: "Nur Anzeige", chart: "Diagramm", energyflow: "Energiefluss", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", system: "Anzeigestatus", scene: "Szene", weather: "Wetter", presence: "Anwesenheit" };
+
+function migrateLayoutKinds(layout) {
+  if (!layout || !Array.isArray(layout.pages)) return;
+  for (const page of layout.pages) {
+    if (!Array.isArray(page.tiles)) continue;
+    page.tiles = page.tiles.filter((t) => (t.kind || "value") !== "system").map((t) => {
+      if (t.kind === "display") {
+        t.kind = "value";
+        if (!t.displaySource) {
+          t.displaySource = (t.text && !t.variableId) ? "text" : "variable";
+        }
+        delete t.actionId;
+        delete t.control;
+      }
+      return t;
+    });
+  }
+}
+
+const KIND_NAMES = { value: "Wert", display: "Wert", chart: "Diagramm", energyflow: "Energiefluss", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", scene: "Szene", weather: "Wetter", presence: "Anwesenheit" };
 const CHART_PERIOD_LABELS = { "1h": "1 Stunde", "6h": "6 Stunden", "24h": "24 Stunden", "7d": "7 Tage" };
 const FLOW_SLOT_LABELS = {
   signed: {
@@ -659,12 +678,46 @@ function probeSourceMode() {
   return picked ? picked.value : "draft";
 }
 
+const THEME_DEFAULTS = { background: "#102033", button: "#2a4f7c", accent: "#ffb547" };
+
+function normalizeTheme(theme) {
+  const colors = { ...THEME_DEFAULTS };
+  if (!theme) return colors;
+  for (const key of Object.keys(colors)) {
+    const value = String(theme[key] || "").trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(value)) colors[key] = value.toLowerCase();
+  }
+  return colors;
+}
+
+function readThemeInputs() {
+  return normalizeTheme({
+    background: $("theme-bg")?.value,
+    button: $("theme-button")?.value,
+    accent: $("theme-accent")?.value,
+  });
+}
+
+function applyTheme(theme) {
+  const colors = normalizeTheme(theme);
+  const root = document.documentElement;
+  root.style.setProperty("--theme-bg", colors.background);
+  root.style.setProperty("--theme-button", colors.button);
+  root.style.setProperty("--theme-accent", colors.accent);
+  if ($("theme-bg")) $("theme-bg").value = colors.background;
+  if ($("theme-button")) $("theme-button").value = colors.button;
+  if ($("theme-accent")) $("theme-accent").value = colors.accent;
+  return colors;
+}
+
 function editorLayoutSnapshot() {
   if (!state.layout) return null;
   const layout = JSON.parse(JSON.stringify(state.layout));
   layout.columns = Number($("columns").value) || layout.columns;
   layout.rows = Number($("rows").value) || layout.rows;
   layout.showTabs = $("show-tabs").checked;
+  layout.colorMode = $("color-mono")?.checked ? "mono" : "color";
+  layout.theme = readThemeInputs();
   layout.displayProfile = $("display-profile").value || layout.displayProfile;
   return layout;
 }
@@ -786,6 +839,9 @@ function selectLayout(layout) {
   state.layout.columns = state.layout.columns || prof.defaultColumns;
   state.layout.rows = state.layout.rows || prof.defaultRows;
   if (state.layout.showTabs === undefined) state.layout.showTabs = true;
+  if (state.layout.colorMode === undefined) state.layout.colorMode = "color";
+  state.layout.theme = applyTheme(state.layout.theme);
+  migrateLayoutKinds(state.layout);
   state.layout.pages = (state.layout.pages || []).filter((page) => PAGES.some((item) => item[0] === page.id));
   if (!state.layout.pages.length) state.layout.pages = [{ id: "start", title: "Start", tiles: [] }];
   for (const page of state.layout.pages) {
@@ -798,6 +854,10 @@ function selectLayout(layout) {
   $("columns").value = state.layout.columns;
   $("rows").value = state.layout.rows;
   $("show-tabs").checked = state.layout.showTabs;
+  if ($("color-mono")) {
+    $("color-mono").checked = state.layout.colorMode === "mono";
+    document.getElementById("editor-screen")?.classList.toggle("mono", state.layout.colorMode === "mono");
+  }
   fillProfileSelect($("display-profile"), state.layout.displayProfile);
   applyGridAspect();
   renderLayoutSelect();
@@ -908,6 +968,19 @@ function renderPageBackground() {
   fillImageSelect(select);
   select.value = page && page.backgroundId ? page.backgroundId : "";
   select.disabled = !page;
+  const iconSel = $("page-icon");
+  if (iconSel) {
+    const cur = page && page.icon ? page.icon : "";
+    iconSel.innerHTML = '<option value="">(kein Symbol)</option>';
+    for (const icon of ICONS) {
+      const o = document.createElement("option");
+      o.value = icon;
+      o.textContent = icon;
+      iconSel.appendChild(o);
+    }
+    iconSel.value = cur;
+    iconSel.disabled = !page;
+  }
 }
 
 function tileAt(col, row) {
@@ -1023,7 +1096,7 @@ async function refreshEditorTilePreviews() {
       normalizeMediaTileBindings(tile);
       if (!panelId) {
         state.tilePreviewErrors[tile.tileId] = "camera";
-        state.tilePreviewErrorDetails[tile.tileId] = "Keine Hausanzeige-Instanz im System – bitte zuerst eine HomeDisplay-Anzeige anlegen.";
+        state.tilePreviewErrorDetails[tile.tileId] = "Keine Hausanzeige-Instanz im System – bitte zuerst eine Hausanzeige anlegen.";
         continue;
       }
       const result = await call("probeImage", { id: panelId, tileId: tile.tileId, tile });
@@ -1172,6 +1245,14 @@ function buildTileElement(tile, context) {
       if (labelPos !== "inside") element.classList.add(`label-${labelPos}`, "label-outside");
     }
     if (control === "setpoint") element.classList.add("setpoint");
+    const switchTile = Boolean(tile.actionId) && (interaction === "iconSwitch" || control === "switch");
+    if (switchTile) {
+      element.classList.add("as-switch");
+      let on = Boolean(demoOn);
+      if (live && typeof live.value === "boolean") on = live.value;
+      else if (live && live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
+      element.classList.toggle("on", on);
+    }
     const iconSwitch = interaction === "iconSwitch";
     const iconId = effectiveIcon(tile, live ? live.value : undefined, demoOn);
     const kicker = INTERACTION_NAMES[interaction] || CONTROL_NAMES[control] || `${iconName(iconId)}${tile.actionId ? " · schaltbar" : ""}`;
@@ -1237,9 +1318,6 @@ function buildTileElement(tile, context) {
     element.innerHTML = `${editorKicker(mode, tile.presenceMode === "alarm" ? "Alarm" : "Anwesenheit")}<div class="tile-scale">${ohCardMarkup(label, escapeHtml(stateLine), `<div class="presence-badge ${active ? "on" : "off"}"></div>`)}</div>`;
   } else if (tile.kind === "separator") {
     element.innerHTML = `<div class="line"></div>`;
-  } else if (tile.kind === "system") {
-    element.innerHTML = `${editorKicker(mode, "Anzeigestatus")}<div class="tile-scale"><div class="name"></div><div class="text">Programm · WLAN · Laufzeit · Datenalter</div></div>`;
-    element.querySelector(".name").textContent = tile.title || "Anzeige";
   } else if (tile.kind === "image") {
     if ((tile.imageSource || "catalog") === "media") {
       normalizeMediaTileBindings(tile);
@@ -1447,6 +1525,7 @@ function bindTileControls(element, tile, mode, live) {
       const next = !on;
       iconToggle.setAttribute("aria-pressed", next ? "true" : "false");
       iconToggle.textContent = iconName(next ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff"));
+      element.classList.toggle("on", next);
       if (mode === "edit") {
         state.editorIconDemo[tile.tileId] = next;
         return;
@@ -1462,6 +1541,7 @@ function bindTileControls(element, tile, mode, live) {
       const wasOn = sw.classList.contains("on");
       if (control === "switch") {
         sw.classList.toggle("on");
+        element.classList.toggle("on", sw.classList.contains("on"));
         if (mode === "probe" && tile.actionId) sendProbeAction(tile, { switchToggle: true });
         return;
       }
@@ -1670,10 +1750,12 @@ function addTile(kind, col, row, variable, control) {
   const stamp = Date.now().toString(36);
   const tile = { tileId: `t${stamp}`, kind, title: "", col, row, colSpan: 1, rowSpan: 1 };
   if (kind === "value") {
+    tile.displaySource = "variable";
     tile.icon = DIM_CONTROLS.includes(control) || control === "battery" ? (control === "battery" ? "energy" : "light") : "energy";
     tile.variableId = 0;
     tile.unit = DIM_CONTROLS.includes(control) || control === "battery" ? "%" : "";
     tile.decimals = 0;
+    tile.prefix = "";
     if (control === "battery") {
       tile.control = "battery";
       tile.valueMin = 0;
@@ -1683,6 +1765,14 @@ function addTile(kind, col, row, variable, control) {
       tile.actionKind = "dim";
       tile.valueMin = 0;
       tile.valueMax = 100;
+      tile.actionId = tile.actionId || ("a" + stamp);
+    } else if (control) {
+      tile.control = control;
+      tile.actionKind = "switch";
+      tile.actionId = tile.actionId || ("a" + stamp);
+    } else {
+      /* Reine Wertanzeige – kein Schalten */
+      tile.displaySource = "variable";
     }
     if (variable) assignVariable(tile, variable, true);
   } else if (kind === "nav") {
@@ -1691,13 +1781,6 @@ function addTile(kind, col, row, variable, control) {
     tile.icon = "";
   } else if (kind === "label") {
     tile.text = "Text";
-  } else if (kind === "display") {
-    tile.displaySource = "variable";
-    tile.icon = "info";
-    tile.variableId = 0;
-    tile.unit = "";
-    tile.decimals = 0;
-    if (variable) assignVariable(tile, variable, true);
   } else if (kind === "chart") {
     tile.colSpan = Math.min(2, state.layout.columns);
     tile.rowSpan = Math.min(2, state.layout.rows);
@@ -1750,14 +1833,6 @@ function addTile(kind, col, row, variable, control) {
   } else if (kind === "separator") {
     tile.colSpan = Math.max(1, state.layout.columns);
     if (!fits(null, col, row, tile.colSpan, 1, null)) tile.colSpan = 1;
-  } else if (kind === "system") {
-    tile.title = "Anzeige";
-    tile.colSpan = Math.min(2, state.layout.columns);
-    tile.rowSpan = Math.min(2, state.layout.rows);
-    if (!fits(null, col, row, tile.colSpan, tile.rowSpan, null)) {
-      tile.colSpan = 1;
-      tile.rowSpan = 1;
-    }
   } else if (kind === "image") {
     if (isMediaPick(variable)) {
       bindMediaToTile(tile, variable, "image");
@@ -2071,13 +2146,13 @@ function renderProperties() {
   const displaySource = tile.displaySource || "variable";
   if ($("p-displaysource")) {
     $("p-displaysource").value = displaySource;
-    $("p-display-variable").classList.toggle("hidden", displaySource !== "variable");
-    $("p-display-text").classList.toggle("hidden", displaySource !== "text");
+    $("p-display-text")?.classList.toggle("hidden", displaySource !== "text");
   }
   if ($("p-display-varpick")) {
     const dv = variableById(tile.variableId);
     $("p-display-varpick").value = dv ? `${dv.path ? dv.path + " / " : ""}${dv.name} (${dv.id})` : "";
   }
+  if ($("p-prefix")) $("p-prefix").value = tile.prefix || "";
   if ($("p-display-unit")) $("p-display-unit").value = tile.unit || "";
   if ($("p-display-decimals")) $("p-display-decimals").value = tile.decimals || 0;
   if ($("p-display-textarea")) $("p-display-textarea").value = tile.text || "";
@@ -2408,7 +2483,7 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-scene-actionid", "p-scene-icon", "p-scene-confirm", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode"]) {
+for (const id of ["p-title", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-scene-actionid", "p-scene-icon", "p-scene-confirm", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
@@ -2420,8 +2495,8 @@ for (const id of ["p-display-textarea"]) {
 if ($("p-displaysource")) {
   $("p-displaysource").addEventListener("change", () => {
     const source = $("p-displaysource").value;
-    $("p-display-variable").classList.toggle("hidden", source !== "variable");
-    $("p-display-text").classList.toggle("hidden", source !== "text");
+    $("p-display-text")?.classList.toggle("hidden", source !== "text");
+    applyProperties();
   });
 }
 if ($("p-camerasource")) {
@@ -2928,12 +3003,6 @@ function openDetails(tile) {
       if (chosen && !fields.title.value) fields.title.value = chosen.name;
     });
   }
-  if (tile.kind === "system") {
-    const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = "Die Anzeige füllt diese Kachel selbst (Programm, WLAN, IP, Laufzeit, Speicher, Datenalter). Mindestens 2×2 Zellen empfohlen.";
-    body.appendChild(hint);
-  }
   if (tile.kind === "separator") {
     const hint = document.createElement("p");
     hint.className = "hint";
@@ -3426,6 +3495,8 @@ async function store(publish) {
     state.layout.columns = Number($("columns").value) || 2;
     state.layout.rows = Number($("rows").value) || 4;
     state.layout.showTabs = $("show-tabs").checked;
+    state.layout.colorMode = $("color-mono")?.checked ? "mono" : "color";
+    state.layout.theme = readThemeInputs();
     state.layout.displayProfile = $("display-profile").value || defaultProfileId();
     validateLayout(state.layout);
     if (publish) {
@@ -3518,6 +3589,26 @@ $("page-background").addEventListener("change", () => {
   else delete page.backgroundId;
   markDirty();
 });
+$("page-icon")?.addEventListener("change", () => {
+  const page = currentPage();
+  if (!page) return;
+  if ($("page-icon").value) page.icon = $("page-icon").value;
+  else delete page.icon;
+  markDirty();
+});
+$("color-mono")?.addEventListener("change", () => {
+  if (!state.layout) return;
+  state.layout.colorMode = $("color-mono").checked ? "mono" : "color";
+  document.getElementById("editor-screen")?.classList.toggle("mono", $("color-mono").checked);
+  markDirty();
+});
+for (const id of ["theme-bg", "theme-button", "theme-accent"]) {
+  $(id)?.addEventListener("input", () => {
+    if (!state.layout) return;
+    state.layout.theme = applyTheme(readThemeInputs());
+    markDirty();
+  });
+}
 $("layout-select").addEventListener("change", () => {
   const layout = state.catalog.layouts.find((item) => item.id === $("layout-select").value);
   if (!layout) return;
@@ -3540,6 +3631,7 @@ for (const id of ["columns", "rows", "show-tabs"]) {
     state.layout.columns = columns;
     state.layout.rows = rows;
     state.layout.showTabs = $("show-tabs").checked;
+    if ($("color-mono")) state.layout.colorMode = $("color-mono").checked ? "mono" : "color";
     markDirty();
     renderGrid();
     renderProperties();
@@ -3851,6 +3943,7 @@ function applyLiveStateToProbeTile(element, tile, live) {
       else if (typeof live.value === "number") on = live.value > (tile.valueMin ?? 0);
       else if (live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
       iconBtn.setAttribute("aria-pressed", on ? "true" : "false");
+      element.classList.toggle("on", on);
     }
     const sw = element.querySelector(".sw");
     if (sw && (tile.control || "switch") === "switch" && tileInteractionMode(tile) !== "iconSwitch") {
@@ -3858,6 +3951,7 @@ function applyLiveStateToProbeTile(element, tile, live) {
       if (typeof live.value === "boolean") on = live.value;
       else if (live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
       sw.classList.toggle("on", on);
+      element.classList.toggle("on", on);
     }
     if (live.value != null && live.value !== "" && element.querySelector(".dim-ctl")) {
       const pct = dimPercentFromTile(tile, live);

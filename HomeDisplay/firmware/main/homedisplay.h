@@ -7,7 +7,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_touch.h"
 
-#define HOMEDISPLAY_FIRMWARE_VERSION "0.4.3"
+#define HOMEDISPLAY_FIRMWARE_VERSION "0.5.8"
 #define HOMEDISPLAY_LCD_H_RES 1024
 #define HOMEDISPLAY_LCD_V_RES 600
 
@@ -25,6 +25,7 @@ void homedisplay_ui_status(const char *text);
 void homedisplay_ui_set_pairing_code(const char *code);
 void homedisplay_ui_setup_progress(const char *detail);
 void homedisplay_ui_apply_layout(const char *json);
+bool homedisplay_ui_layout_ready(void);
 void homedisplay_ui_apply_config(const char *json);
 void homedisplay_ui_apply_state(const char *json);
 void homedisplay_ui_refresh_camera(const char *tile_id, const char *file);

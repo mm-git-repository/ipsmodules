@@ -57,7 +57,7 @@ final class HomeDisplayPanelSchema
     ];
 
     /** system: Diagnosekachel, die das Panel selbst mit Firmware, WLAN, Laufzeit und Datenalter füllt. */
-    public const KINDS = ['value', 'display', 'chart', 'energyflow', 'nav', 'label', 'image', 'camera', 'separator', 'system', 'scene', 'weather', 'presence'];
+    public const KINDS = ['value', 'display', 'chart', 'energyflow', 'nav', 'label', 'image', 'camera', 'separator', 'scene', 'weather', 'presence'];
 
     public const LABEL_STYLES = ['text', 'section'];
 
@@ -91,6 +91,7 @@ final class HomeDisplayPanelSchema
         if ($rows < 1 || $rows > $maxRows) {
             throw new InvalidArgumentException('Das Raster hat zu viele Zeilen für das Display-Profil.');
         }
+        self::theme($layout);
         $pages = $layout['pages'] ?? null;
         if (!is_array($pages) || $pages === []) {
             throw new InvalidArgumentException('Ansicht ohne Seite.');
@@ -139,6 +140,9 @@ final class HomeDisplayPanelSchema
                 }
                 $seen[$tileId] = true;
                 $kind = (string) ($tile['kind'] ?? 'value');
+                if ($kind === 'system') {
+                    continue; /* Legacy Anzeigestatus – nicht mehr gültig */
+                }
                 if (!in_array($kind, self::KINDS, true)) {
                     throw new InvalidArgumentException('Unbekannte Kachelart: ' . $kind);
                 }
@@ -199,6 +203,16 @@ final class HomeDisplayPanelSchema
                     continue;
                 }
                 $kind = (string) ($tile['kind'] ?? 'value');
+                if ($kind === 'system') {
+                    continue;
+                }
+                if ($kind === 'display') {
+                    $kind = 'value';
+                    if (!isset($tile['displaySource'])) {
+                        $tile['displaySource'] = isset($tile['text']) && (string) $tile['text'] !== '' && (int) ($tile['variableId'] ?? 0) <= 0
+                            ? 'text' : 'variable';
+                    }
+                }
                 $public = [
                     'tileId' => (string) $tile['tileId'],
                     'kind' => $kind,
@@ -266,21 +280,7 @@ final class HomeDisplayPanelSchema
                         ? (string) ($tile['presenceMode'] ?? 'home')
                         : 'home';
                 }
-                if ($kind === 'display') {
-                    $source = (string) ($tile['displaySource'] ?? 'variable');
-                    $public['displaySource'] = in_array($source, ['variable', 'text'], true) ? $source : 'variable';
-                    if ($public['displaySource'] === 'text') {
-                        $public['text'] = (string) ($tile['text'] ?? '');
-                    } else {
-                        $public['variableId'] = (int) ($tile['variableId'] ?? 0);
-                        $public['unit'] = (string) ($tile['unit'] ?? '');
-                        $public['decimals'] = max(0, min(3, (int) ($tile['decimals'] ?? 0)));
-                    }
-                    $icon = (string) ($tile['icon'] ?? '');
-                    if ($icon !== '') {
-                        $public['icon'] = $icon;
-                    }
-                }
+
                 if ($kind === 'image') {
                     $source = (string) ($tile['imageSource'] ?? 'catalog');
                     if ($source === 'media') {
@@ -315,13 +315,37 @@ final class HomeDisplayPanelSchema
                     $public['socDecimals'] = max(0, min(1, (int) ($tile['socDecimals'] ?? 0)));
                 }
                 if ($kind === 'value') {
+                    $source = (string) ($tile['displaySource'] ?? 'variable');
+                    $public['displaySource'] = in_array($source, ['variable', 'text'], true) ? $source : 'variable';
+                    if ($public['displaySource'] === 'text') {
+                        $public['text'] = (string) ($tile['text'] ?? '');
+                    } else {
+                        $public['variableId'] = (int) ($tile['variableId'] ?? 0);
+                        $public['decimals'] = max(0, min(3, (int) ($tile['decimals'] ?? 0)));
+                    }
+                    $prefix = trim((string) ($tile['prefix'] ?? ''));
+                    $suffix = trim((string) ($tile['suffix'] ?? ''));
+                    if ($suffix === '') {
+                        $suffix = trim((string) ($tile['unit'] ?? ''));
+                    }
+                    if ($prefix !== '') {
+                        $public['prefix'] = $prefix;
+                    }
+                    if ($suffix !== '') {
+                        $public['suffix'] = $suffix;
+                        $public['unit'] = $suffix;
+                    }
+                    $icon = (string) ($tile['icon'] ?? '');
+                    if ($icon !== '' && in_array($icon, self::ICONS, true)) {
+                        $public['icon'] = $icon;
+                    }
                     $actionId = trim((string) ($tile['actionId'] ?? ''));
                     $control = (string) ($tile['control'] ?? 'switch');
                     if (!in_array($control, self::CONTROLS, true)) {
                         $control = 'switch';
                     }
-                    $public['control'] = $control;
                     if ($actionId !== '') {
+                        $public['control'] = $control;
                         $public['actionId'] = $actionId;
                         $public['actionKind'] = (string) ($tile['actionKind'] ?? 'switch');
                         $public['confirm'] = (bool) ($tile['confirm'] ?? false);
@@ -379,6 +403,10 @@ final class HomeDisplayPanelSchema
                 'title' => (string) ($page['title'] ?? self::PAGES[$page['id']] ?? ''),
                 'tiles' => $tiles,
             ];
+            $pageIcon = (string) ($page['icon'] ?? '');
+            if ($pageIcon !== '' && in_array($pageIcon, self::ICONS, true)) {
+                $publicPage['icon'] = $pageIcon;
+            }
             $background = (string) ($page['backgroundId'] ?? '');
             if ($background !== '') {
                 $publicPage['backgroundId'] = $background;
@@ -395,11 +423,33 @@ final class HomeDisplayPanelSchema
             'columns' => max(1, (int) ($layout['columns'] ?? 2)),
             'rows' => max(1, (int) ($layout['rows'] ?? 4)),
             'showTabs' => !array_key_exists('showTabs', $layout) || (bool) $layout['showTabs'],
+            'colorMode' => ((string) ($layout['colorMode'] ?? 'color') === 'mono') ? 'mono' : 'color',
+            'theme' => self::theme($layout),
             'displayProfile' => $profileId,
             'targetWidth' => (int) $profile['width'],
             'targetHeight' => (int) $profile['height'],
             'pages' => $pages,
         ];
+    }
+
+    /** @param array<string, mixed> $layout @return array{background: string, button: string, accent: string} */
+    public static function theme(array $layout): array
+    {
+        $defaults = ['background' => '#102033', 'button' => '#2a4f7c', 'accent' => '#ffb547'];
+        $theme = is_array($layout['theme'] ?? null) ? $layout['theme'] : [];
+        $out = [];
+        foreach ($defaults as $key => $fallback) {
+            $value = strtolower(trim((string) ($theme[$key] ?? '')));
+            if ($value === '') {
+                $out[$key] = $fallback;
+                continue;
+            }
+            if (!preg_match('/^#[0-9a-f]{6}$/', $value)) {
+                throw new InvalidArgumentException('Ungültige Farbe für ' . $key . '.');
+            }
+            $out[$key] = $value;
+        }
+        return $out;
     }
 
     public static function defaultProfileId(): string
@@ -583,7 +633,7 @@ final class HomeDisplayPanelSchema
         $pages[] = ['id' => 'system', 'title' => 'System', 'tiles' => [
             ['tileId' => 'system-title', 'kind' => 'label', 'text' => 'System', 'size' => 'large', 'col' => 0, 'row' => 0, 'colSpan' => 2, 'rowSpan' => 1],
             ['tileId' => 'system-home', 'kind' => 'nav', 'icon' => 'home', 'title' => 'Start', 'targetPage' => 'start', 'col' => 2, 'row' => 0, 'colSpan' => 1, 'rowSpan' => 1],
-            ['tileId' => 'system-info', 'kind' => 'system', 'title' => 'Panel', 'col' => 0, 'row' => 1, 'colSpan' => 3, 'rowSpan' => 3],
+            ['tileId' => 'system-info', 'kind' => 'label', 'text' => 'Geraeteinfos: Serial-Menue', 'col' => 0, 'row' => 1, 'colSpan' => 3, 'rowSpan' => 1],
         ]];
         return [
             'name' => $name,
@@ -672,6 +722,20 @@ final class HomeDisplayPanelSchema
     private static function validateKind(array $tile, string $kind, array $pageIds, bool $publish): void
     {
         if ($kind === 'value') {
+            $source = (string) ($tile['displaySource'] ?? 'variable');
+            if (!in_array($source, ['variable', 'text'], true)) {
+                throw new InvalidArgumentException('Unbekannte Anzeigequelle.');
+            }
+            if ($source === 'text') {
+                if ($publish && trim((string) ($tile['text'] ?? '')) === '') {
+                    throw new InvalidArgumentException('Wertkachel ohne Text.');
+                }
+                $icon = (string) ($tile['icon'] ?? '');
+                if ($icon !== '' && !in_array($icon, self::ICONS, true)) {
+                    throw new InvalidArgumentException('Unbekanntes Symbol: ' . $icon);
+                }
+                return;
+            }
             $iconMode = (string) ($tile['iconMode'] ?? 'static');
             if ($iconMode === 'toggle') {
                 foreach (['iconOn', 'iconOff'] as $key) {
@@ -679,8 +743,11 @@ final class HomeDisplayPanelSchema
                         throw new InvalidArgumentException('Unbekanntes Symbol: ' . (string) ($tile[$key] ?? ''));
                     }
                 }
-            } elseif (!in_array((string) ($tile['icon'] ?? ''), self::ICONS, true)) {
-                throw new InvalidArgumentException('Unbekanntes Symbol: ' . (string) ($tile['icon'] ?? ''));
+            } else {
+                $icon = (string) ($tile['icon'] ?? '');
+                if ($icon !== '' && !in_array($icon, self::ICONS, true)) {
+                    throw new InvalidArgumentException('Unbekanntes Symbol: ' . $icon);
+                }
             }
             $decimals = (int) ($tile['decimals'] ?? 0);
             if ($decimals < 0 || $decimals > 3) {
@@ -688,6 +755,13 @@ final class HomeDisplayPanelSchema
             }
             if (isset($tile['color']) && !in_array((string) $tile['color'], self::COLORS, true)) {
                 throw new InvalidArgumentException('Unbekannte Farbe.');
+            }
+            $actionId = trim((string) ($tile['actionId'] ?? ''));
+            if ($actionId === '' && !isset($tile['control'])) {
+                if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) ($tile['variableId'] ?? 0)))) {
+                    throw new InvalidArgumentException('Wertkachel ohne Variable.');
+                }
+                return;
             }
             $control = (string) ($tile['control'] ?? 'switch');
             if (!in_array($control, self::CONTROLS, true)) {
@@ -877,7 +951,7 @@ final class HomeDisplayPanelSchema
             return;
         }
         if ($kind === 'system') {
-            return;
+            return; /* Legacy: wird beim Veröffentlichen übersprungen */
         }
         if ($kind === 'image') {
             $source = (string) ($tile['imageSource'] ?? 'catalog');

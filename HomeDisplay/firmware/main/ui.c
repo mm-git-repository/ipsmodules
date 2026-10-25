@@ -2,17 +2,32 @@
 
 #include "cJSON.h"
 #include "esp_lcd_panel_ops.h"
+#include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "esp_netif.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "lvgl.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+
+static const char *TAG_UI = "ui";
 
 #define TILE_MAX 48
+
+/* true nur wenn show_page vom Client-Task kommt – dann LVGL-Lock zwischen Kacheln freigeben. */
+static bool show_page_may_yield;
+static bool color_mono;
+static uint32_t theme_bg = 0x102033;
+static uint32_t theme_button = 0x2A4F7C;
+static uint32_t theme_accent = 0xFFB547;
+static int64_t idle_timeout_us = 60000000;
 
 typedef struct {
     char tile_id[40];
@@ -42,7 +57,96 @@ typedef struct {
     char icon_on[24];
     char icon_off[24];
     int battery_pad;
+    uint32_t base_bg;
 } tile_view_t;
+
+static void ui_wdt_kick(void)
+{
+    if (esp_task_wdt_status(NULL) == ESP_OK) {
+        esp_task_wdt_reset();
+    }
+}
+
+static uint32_t kind_bg(const char *kind)
+{
+    if (color_mono) {
+        if (kind && (strcmp(kind, "camera") == 0 || strcmp(kind, "image") == 0)) return 0x101010;
+        if (kind && strcmp(kind, "nav") == 0) return 0x2A2A2A;
+        return 0x1A1A1A;
+    }
+    if (!kind) return 0x1D3350;
+    if (strcmp(kind, "nav") == 0) return theme_button;
+    if (strcmp(kind, "display") == 0 || strcmp(kind, "scene") == 0 || strcmp(kind, "value") == 0) return 0x1D3350;
+    if (strcmp(kind, "weather") == 0) return 0x1A3348;
+    if (strcmp(kind, "chart") == 0) return 0x1A2D45;
+    if (strcmp(kind, "presence") == 0) return 0x1F2D3F;
+    if (strcmp(kind, "energyflow") == 0) return 0x152238;
+    if (strcmp(kind, "camera") == 0 || strcmp(kind, "image") == 0) return 0x0B1626;
+    return 0x1D3350;
+}
+
+static uint32_t accent_on(void) { return color_mono ? 0xFFFFFF : theme_accent; }
+static uint32_t accent_tab(void) { return color_mono ? 0xFFFFFF : theme_accent; }
+static uint32_t accent_tab_bg(void) { return color_mono ? 0x333333 : theme_button; }
+static uint32_t text_fg(void) { return color_mono ? 0xFFFFFF : 0xF4F7FB; }
+
+static void fold_german(char *dst, size_t dst_len, const char *src)
+{
+    if (!dst || dst_len == 0) return;
+    size_t o = 0;
+    if (!src) { dst[0] = '\0'; return; }
+    for (const unsigned char *p = (const unsigned char *)src; *p && o + 1 < dst_len; ) {
+        if (p[0] == 0xC3) {
+            unsigned char c = p[1];
+            const char *rep = NULL;
+            if (c == 0xA4 || c == 0x84) rep = (c == 0x84) ? "Ae" : "ae";
+            else if (c == 0xB6 || c == 0x96) rep = (c == 0x96) ? "Oe" : "oe";
+            else if (c == 0xBC || c == 0x9C) rep = (c == 0x9C) ? "Ue" : "ue";
+            else if (c == 0x9F) rep = "ss";
+            if (rep) {
+                for (const char *r = rep; *r && o + 1 < dst_len; r++) dst[o++] = *r;
+                p += 2;
+                continue;
+            }
+        }
+        if ((p[0] & 0xE0) == 0xC0 && !p[1]) break;
+        if ((p[0] & 0xF0) == 0xE0 && (!p[1] || !p[2])) break;
+        if ((p[0] & 0xF8) == 0xF0 && (!p[1] || !p[2] || !p[3])) break;
+        dst[o++] = (char)*p++;
+    }
+    dst[o] = '\0';
+}
+
+static void label_set_folded(lv_obj_t *label, const char *src)
+{
+    char buf[320];
+    fold_german(buf, sizeof(buf), src ? src : "");
+    lv_label_set_text(label, buf);
+}
+
+static void style_flat(lv_obj_t *obj)
+{
+    if (!obj) return;
+    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_outline_width(obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_border_width(obj, 0, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, LV_PART_SCROLLBAR);
+    lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+}
+
+/* Status als leichte Flächenfarbe – keine Rahmenlinien am linken Rand. */
+static void apply_status_color(tile_view_t *view, const char *color)
+{
+    if (!view || !view->card) return;
+    uint32_t bg = view->base_bg;
+    if (color && strcmp(color, "ok") == 0) bg = 0x1E6B3A;
+    else if (color && strcmp(color, "warn") == 0) bg = 0x8A6A12;
+    else if (color && strcmp(color, "alarm") == 0) bg = 0x8A2424;
+    lv_obj_set_style_bg_color(view->card, lv_color_hex(bg), 0);
+    style_flat(view->card);
+}
 
 static lv_obj_t *status_label;
 static lv_obj_t *info_label;
@@ -57,7 +161,6 @@ static char setup_pair_code[8];
 static char last_boot_title[120];
 static char last_boot_detail[280];
 static char last_setup_detail[512];
-static char last_status_bar[320];
 static char last_info_line[96];
 static char last_system_report[320];
 static lv_obj_t *home_button;
@@ -75,6 +178,15 @@ static int tile_count;
 static int page_index;
 static int columns = 2;
 static int idle_mode;
+static char idle_clock_style[12] = "digital";
+static bool idle_active;
+static lv_obj_t *dim_popup;
+static lv_obj_t *dim_slider;
+static tile_view_t *dim_tile;
+static lv_obj_t *analog_clock;
+static lv_obj_t *analog_hour;
+static lv_obj_t *analog_min;
+static char last_state_json[8192];
 static int day_brightness = 70;
 static int night_brightness = 15;
 static int night_from = 22;
@@ -120,13 +232,13 @@ static void set_boot_message(const char *title, const char *detail)
     snprintf(last_boot_title, sizeof(last_boot_title), "%s", head);
     snprintf(last_boot_detail, sizeof(last_boot_detail), "%s", sub);
 
-    lv_label_set_text(boot_title, head);
+    label_set_folded(boot_title, head);
     bool code_mode = is_pairing_code(sub);
     if (setup_pair_code[0] && boot_code) {
         lv_label_set_text(boot_code, setup_pair_code);
         lv_obj_clear_flag(boot_code, LV_OBJ_FLAG_HIDDEN);
         if (sub[0] && !code_mode) {
-            lv_label_set_text(boot_detail, sub);
+            label_set_folded(boot_detail, sub);
             lv_obj_clear_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
         } else if (code_mode) {
             lv_obj_add_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
@@ -139,14 +251,14 @@ static void set_boot_message(const char *title, const char *detail)
         } else {
             lv_obj_add_flag(boot_code, LV_OBJ_FLAG_HIDDEN);
             if (sub[0]) {
-                lv_label_set_text(boot_detail, sub);
+                label_set_folded(boot_detail, sub);
                 lv_obj_clear_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
             } else {
                 lv_obj_add_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
             }
         }
     } else if (boot_detail) {
-        lv_label_set_text(boot_detail, sub);
+        label_set_folded(boot_detail, sub);
         if (sub[0]) {
             lv_obj_clear_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -197,7 +309,7 @@ static void build_boot_layer(lv_obj_t *screen)
 {
     boot_layer = lv_obj_create(screen);
     lv_obj_set_size(boot_layer, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES);
-    lv_obj_set_style_bg_color(boot_layer, lv_color_hex(0x0B1628), 0);
+    lv_obj_set_style_bg_color(boot_layer, lv_color_hex(0x000000), 0);
     lv_obj_set_style_border_width(boot_layer, 0, 0);
     lv_obj_set_style_pad_all(boot_layer, 0, 0);
     lv_obj_clear_flag(boot_layer, LV_OBJ_FLAG_SCROLLABLE);
@@ -205,10 +317,10 @@ static void build_boot_layer(lv_obj_t *screen)
     lv_obj_t *card = lv_obj_create(boot_layer);
     lv_obj_set_size(card, 920, 480);
     lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_hex(0x132338), 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(0x2A4F7C), 0);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_set_style_radius(card, 12, 0);
     lv_obj_set_style_pad_all(card, 32, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -218,14 +330,14 @@ static void build_boot_layer(lv_obj_t *screen)
     lv_obj_set_width(boot_title, 840);
     lv_label_set_long_mode(boot_title, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(boot_title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(boot_title, lv_color_hex(0xF4F7FB), 0);
+    lv_obj_set_style_text_color(boot_title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(boot_title, &lv_font_montserrat_48, 0);
     lv_label_set_text(boot_title, "Hausanzeige startet");
 
     boot_code = lv_label_create(card);
     lv_obj_set_width(boot_code, 840);
     lv_obj_set_style_text_align(boot_code, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(boot_code, lv_color_hex(0xFFB547), 0);
+    lv_obj_set_style_text_color(boot_code, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(boot_code, &lv_font_montserrat_48, 0);
     lv_label_set_text(boot_code, "");
     lv_obj_add_flag(boot_code, LV_OBJ_FLAG_HIDDEN);
@@ -234,28 +346,20 @@ static void build_boot_layer(lv_obj_t *screen)
     lv_obj_set_width(boot_detail, 840);
     lv_label_set_long_mode(boot_detail, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(boot_detail, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(boot_detail, lv_color_hex(0xB7C4D4), 0);
-    lv_obj_set_style_text_font(boot_detail, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_line_space(boot_detail, 8, 0);
+    lv_obj_set_style_text_color(boot_detail, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(boot_detail, &lv_font_montserrat_36, 0);
+    lv_obj_set_style_text_line_space(boot_detail, 10, 0);
     lv_label_set_text(boot_detail, "");
 
     boot_footer = lv_label_create(boot_layer);
-    lv_obj_set_style_text_color(boot_footer, lv_color_hex(0x6E849C), 0);
-    lv_obj_set_style_text_font(boot_footer, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(boot_footer, lv_color_hex(0xAAAAAA), 0);
+    lv_obj_set_style_text_font(boot_footer, &lv_font_montserrat_28, 0);
     char footer[64];
     snprintf(footer, sizeof(footer), "Firmware %s", HOMEDISPLAY_FIRMWARE_VERSION);
     lv_label_set_text(boot_footer, footer);
     lv_obj_align(boot_footer, LV_ALIGN_BOTTOM_MID, 0, -28);
 }
 static homedisplay_action_fn action_callback;
-
-static lv_color_t color_for(const char *name)
-{
-    if (name && strcmp(name, "ok") == 0) return lv_color_hex(0x1E6B3A);
-    if (name && strcmp(name, "warn") == 0) return lv_color_hex(0x8A6A12);
-    if (name && strcmp(name, "alarm") == 0) return lv_color_hex(0x8A2424);
-    return lv_color_hex(0x1D3350);
-}
 
 static const char *icon_symbol(const char *icon)
 {
@@ -291,6 +395,8 @@ static void note_touch(void)
     touch_counter++;
 }
 
+static void open_dim_popup(tile_view_t *tile);
+
 static void tile_event(lv_event_t *event)
 {
     note_touch();
@@ -311,8 +417,97 @@ static void tile_event(lv_event_t *event)
         return;
     }
     confirm_tile[0] = '\0';
-    lv_label_set_text(tile->label, "wird ausgeführt");
-    action_callback(tile->tile_id, tile->action_id, tile->value);
+    /* Dimmer: Popup; reine Schalter: Zielzustand (Toggle), nicht den Ist-Wert. */
+    if (strcmp(tile->control, "dimSwitch") == 0 || strcmp(tile->control, "slider") == 0
+        || strcmp(tile->control, "combo") == 0) {
+        open_dim_popup(tile);
+        return;
+    }
+    int next = tile->value > tile->value_min ? tile->value_min : (tile->value_max > tile->value_min ? tile->value_max : 1);
+    tile->value = next;
+    if (tile->icon_label && strcmp(tile->icon_mode, "toggle") == 0) {
+        lv_label_set_text(tile->icon_label, icon_symbol(next > tile->value_min ? tile->icon_on : tile->icon_off));
+    }
+    if (tile->card) {
+        lv_obj_set_style_bg_color(tile->card, lv_color_hex(next > tile->value_min ? accent_on() : tile->base_bg), 0);
+    }
+    if (tile->label) label_set_folded(tile->label, "wird ausgeführt");
+    action_callback(tile->tile_id, tile->action_id, next);
+}
+
+static void show_page(int index);
+static void send_level(tile_view_t *tile, int value);
+static void close_dim_popup(void)
+{
+    if (dim_popup) {
+        lv_obj_add_flag(dim_popup, LV_OBJ_FLAG_HIDDEN);
+    }
+    dim_tile = NULL;
+}
+
+static void dim_slider_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_RELEASED || !dim_tile) return;
+    note_touch();
+    int value = (int) lv_slider_get_value(dim_slider);
+    send_level(dim_tile, value);
+    close_dim_popup();
+}
+
+static void dim_popup_close_event(lv_event_t *event)
+{
+    (void) event;
+    note_touch();
+    close_dim_popup();
+}
+
+static void open_dim_popup(tile_view_t *tile)
+{
+    if (!tile || !dim_popup || !dim_slider) return;
+    dim_tile = tile;
+    int min = tile->value_min;
+    int max = tile->value_max > min ? tile->value_max : min + 100;
+    lv_slider_set_range(dim_slider, min, max);
+    lv_slider_set_value(dim_slider, tile->value, LV_ANIM_OFF);
+    lv_obj_clear_flag(dim_popup, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(dim_popup);
+}
+
+static void set_idle_visible(bool idle)
+{
+    idle_active = idle;
+    if (idle) {
+        if (page_bar) lv_obj_add_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
+        if (home_button) lv_obj_add_flag(home_button, LV_OBJ_FLAG_HIDDEN);
+        if (info_label) lv_obj_add_flag(info_label, LV_OBJ_FLAG_HIDDEN);
+        if (grid) lv_obj_add_flag(grid, LV_OBJ_FLAG_HIDDEN);
+        if (clock_layer) {
+            lv_obj_clear_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(clock_layer);
+        }
+    } else {
+        if (clock_layer) lv_obj_add_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
+        if (grid) lv_obj_clear_flag(grid, LV_OBJ_FLAG_HIDDEN);
+        if (home_button) lv_obj_clear_flag(home_button, LV_OBJ_FLAG_HIDDEN);
+        if (info_label) lv_obj_clear_flag(info_label, LV_OBJ_FLAG_HIDDEN);
+        if (page_bar && layout_root && !cJSON_IsFalse(cJSON_GetObjectItem(layout_root, "showTabs"))) {
+            cJSON *pages = cJSON_GetObjectItem(layout_root, "pages");
+            if (cJSON_GetArraySize(pages) > 1) lv_obj_clear_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+static void update_analog_hands(int hour, int minute)
+{
+    if (!analog_hour || !analog_min) return;
+    /* einfache Zeiger als Labels mit Winkeln ueber Rotation (LVGL 8: transform) */
+    (void) hour;
+    (void) minute;
+    char line[16];
+    snprintf(line, sizeof(line), "%02d", hour % 12 == 0 ? 12 : hour % 12);
+    lv_label_set_text(analog_hour, line);
+    snprintf(line, sizeof(line), "%02d", minute);
+    lv_label_set_text(analog_min, line);
 }
 
 static void show_page(int index);
@@ -361,6 +556,23 @@ static int json_int(cJSON *object, const char *key, int fallback)
     return cJSON_IsNumber(item) ? item->valueint : fallback;
 }
 
+static uint32_t parse_hex_color(const char *text, uint32_t fallback)
+{
+    if (!text || text[0] != '#') return fallback;
+    uint32_t value = 0;
+    for (int index = 1; index <= 6; index++) {
+        char digit = text[index];
+        uint32_t nibble;
+        if (digit >= '0' && digit <= '9') nibble = (uint32_t) (digit - '0');
+        else if (digit >= 'a' && digit <= 'f') nibble = (uint32_t) (digit - 'a' + 10);
+        else if (digit >= 'A' && digit <= 'F') nibble = (uint32_t) (digit - 'A' + 10);
+        else return fallback;
+        value = (value << 4) | nibble;
+    }
+    if (text[7] != '\0') return fallback;
+    return value;
+}
+
 static void place_level(tile_view_t *tile, int value)
 {
     if (!tile->track || !tile->knob) return;
@@ -386,7 +598,7 @@ static void send_level(tile_view_t *tile, int value)
     }
     tile->value = value;
     if (value > tile->value_min) tile->level = value;
-    if (tile->label) lv_label_set_text(tile->label, "wird ausgeführt");
+    if (tile->label) label_set_folded(tile->label, "wird ausgeführt");
     action_callback(tile->tile_id, tile->action_id, value);
 }
 
@@ -521,249 +733,321 @@ static void build_battery(tile_view_t *view, int pad)
     place_battery(view, view->value_max);
 }
 
-static void show_background(cJSON *page)
+static bool storage_image_ready_limit(const char *file, size_t max_bytes)
 {
-    if (!page_background) return;
-    const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(page, "backgroundFile"));
     if (!file || !file[0]) {
-        lv_obj_add_flag(page_background, LV_OBJ_FLAG_HIDDEN);
-        return;
+        return false;
     }
     char path[96];
-    snprintf(path, sizeof(path), "S:/%s", file);
-    lv_img_set_src(page_background, path);
-    lv_img_set_pivot(page_background, 0, 0);
-    lv_img_set_zoom(page_background, 256);
-    lv_img_header_t header;
-    if (lv_img_decoder_get_info(path, &header) == LV_RES_OK && header.w > 0 && header.h > 0) {
-        uint32_t zoom_x = (uint32_t) HOMEDISPLAY_LCD_H_RES * 256 / header.w;
-        uint32_t zoom_y = (uint32_t) HOMEDISPLAY_LCD_V_RES * 256 / header.h;
-        uint32_t zoom = zoom_x > zoom_y ? zoom_x : zoom_y;
-        if (zoom < 64) zoom = 64;
-        if (zoom > 1024) zoom = 1024;
-        lv_img_set_zoom(page_background, (uint16_t) zoom);
-        int width = (int) header.w * (int) zoom / 256;
-        int height = (int) header.h * (int) zoom / 256;
-        lv_obj_set_pos(page_background, (HOMEDISPLAY_LCD_H_RES - width) / 2, (HOMEDISPLAY_LCD_V_RES - height) / 2);
-    } else {
-        lv_obj_align(page_background, LV_ALIGN_CENTER, 0, 0);
+    snprintf(path, sizeof(path), "/storage/%s", file);
+    struct stat info;
+    if (stat(path, &info) != 0 || info.st_size <= 0) {
+        return false;
     }
-    lv_obj_clear_flag(page_background, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_background(page_background);
+    if (max_bytes > 0 && (size_t) info.st_size > max_bytes) {
+        ESP_LOGW(TAG_UI, "Bild übersprungen (zu groß): %s (%ld Byte)", file, (long) info.st_size);
+        return false;
+    }
+    return true;
+}
+
+static void show_background(cJSON *page)
+{
+    (void) page;
+    /* Vollbild-Decode verdeckt das Raster und blockiert LVGL. Hintergrund bleibt aus. */
+    if (page_background) {
+        lv_obj_add_flag(page_background, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_background(page_background);
+    }
 }
 
 static void show_page(int index)
 {
+    /* Schlanker Aufbau + Icons/Farben wie Editor. Keine Slider/Bilder beim Paint. */
+    ui_wdt_kick();
     cJSON *pages = layout_root ? cJSON_GetObjectItem(layout_root, "pages") : NULL;
     int count = cJSON_GetArraySize(pages);
     if (count <= 0) return;
     if (index < 0 || index >= count) index = 0;
     page_index = index;
     cJSON *page = cJSON_GetArrayItem(pages, index);
+    ESP_LOGI(TAG_UI, "Zeichne Seite %d/%d (einfach)", index + 1, count);
     show_background(page);
+    ui_wdt_kick();
+    lv_obj_t *screen = grid ? lv_obj_get_parent(grid) : NULL;
+    if (screen) {
+        lv_obj_set_style_bg_color(screen, lv_color_hex(color_mono ? 0x000000 : theme_bg), 0);
+    }
+    if (home_button) {
+        lv_obj_set_style_bg_color(home_button, lv_color_hex(color_mono ? 0x333333 : theme_button), 0);
+    }
     bool show_tabs = !cJSON_IsFalse(cJSON_GetObjectItem(layout_root, "showTabs"));
     lv_obj_clean(page_bar);
     lv_obj_clean(grid);
     tile_count = 0;
     system_label = NULL;
-    if (show_tabs) {
+    ui_wdt_kick();
+    if (status_label) {
+        lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    /* Feste Kopfzeile, Raster absolut darunter. Kein Flex: das hat die Reiter oben und unten verteilt. */
+    const int header_h = 52;
+    const int grid_top = header_h;
+    const int grid_h = HOMEDISPLAY_LCD_V_RES - grid_top;
+    const int grid_w = HOMEDISPLAY_LCD_H_RES;
+    lv_obj_clear_flag(grid, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(grid, 0, grid_top);
+    lv_obj_set_size(grid, grid_w, grid_h);
+    style_flat(grid);
+    if (show_tabs && count > 1) {
+        lv_obj_set_layout(page_bar, 0);
         lv_obj_clear_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_size(grid, 980, 500);
-        for (int item = 0; item < count; item++) {
+        lv_obj_set_pos(page_bar, 52, 6);
+        lv_obj_set_size(page_bar, HOMEDISPLAY_LCD_H_RES - 52 - 110, 40);
+        int tab_x = 0;
+        const int tab_w = 132;
+        for (int item = 0; item < count && item < 6; item++) {
+            if (tab_x + tab_w > HOMEDISPLAY_LCD_H_RES - 52 - 110) break;
             cJSON *candidate = cJSON_GetArrayItem(pages, item);
             lv_obj_t *button = lv_btn_create(page_bar);
+            lv_obj_set_pos(button, tab_x, 0);
+            lv_obj_set_size(button, tab_w - 6, 40);
+            lv_obj_set_style_max_height(button, 40, 0);
+            lv_obj_set_style_pad_all(button, 0, 0);
+            lv_obj_set_style_radius(button, 6, 0);
+            style_flat(button);
+            lv_obj_set_style_bg_color(button, lv_color_hex(item == index ? accent_tab() : accent_tab_bg()), 0);
+            lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
+            lv_obj_set_style_text_color(button, lv_color_hex(item == index ? 0x102033 : text_fg()), 0);
             lv_obj_t *caption = lv_label_create(button);
             const char *title = cJSON_GetStringValue(cJSON_GetObjectItem(candidate, "title"));
-            lv_label_set_text(caption, title ? title : "");
-            if (item == index) lv_obj_set_style_bg_color(button, lv_color_hex(0xFFB547), 0);
+            label_set_folded(caption, title ? title : "");
+            lv_label_set_long_mode(caption, LV_LABEL_LONG_DOT);
+            lv_obj_set_width(caption, tab_w - 16);
+            lv_obj_set_style_text_font(caption, &lv_font_montserrat_20, 0);
+            lv_obj_center(caption);
             lv_obj_add_event_cb(button, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) item);
+            tab_x += tab_w;
         }
     } else {
         lv_obj_add_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_size(grid, 980, 556);
     }
+    if (home_button) lv_obj_move_foreground(home_button);
+    if (info_label) lv_obj_move_foreground(info_label);
     columns = json_int(layout_root, "columns", 2);
     if (columns < 1) columns = 1;
     if (columns > 4) columns = 4;
     int rows = json_int(layout_root, "rows", 4);
     if (rows < 1) rows = 1;
     if (rows > 6) rows = 6;
-    int grid_h = show_tabs ? 500 : 556;
-    int cell_w = 960 / columns;
-    int cell_h = (grid_h - 20) / rows;
+    int cell_w = grid_w / columns;
+    int cell_h = grid_h / rows;
     cJSON *tile = NULL;
     cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
-        if (tile_count >= TILE_MAX) break;
-        tile_view_t *view = &tiles[tile_count++];
-        memset(view, 0, sizeof(*view));
+        if (tile_count >= 24) break;
         const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
+        if (!kind) kind = "value";
+        if (strcmp(kind, "separator") == 0) continue;
+        if (show_page_may_yield) {
+            lvgl_port_unlock();
+            ui_wdt_kick();
+            vTaskDelay(pdMS_TO_TICKS(20));
+            ui_wdt_kick();
+            lvgl_port_lock(0);
+        } else {
+            ui_wdt_kick();
+        }
+
+        tile_view_t *view = &tiles[tile_count];
+        memset(view, 0, sizeof(*view));
         const char *tile_id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
         const char *action_id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "actionId"));
         const char *title = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "title"));
         const char *icon = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "icon"));
-        if (!kind) kind = "value";
         snprintf(view->tile_id, sizeof(view->tile_id), "%s", tile_id ? tile_id : "");
         snprintf(view->title, sizeof(view->title), "%s", title ? title : "");
         view->confirm = cJSON_IsTrue(cJSON_GetObjectItem(tile, "confirm"));
+        view->base_bg = kind_bg(kind);
         int col = json_int(tile, "col", 0);
         int row = json_int(tile, "row", 0);
         int col_span = json_int(tile, "colSpan", 1);
         int row_span = json_int(tile, "rowSpan", 1);
         if (col_span < 1) col_span = 1;
         if (row_span < 1) row_span = 1;
+        ESP_LOGI(TAG_UI, "Kachel %d %s kind=%s heap=%lu", tile_count + 1, view->tile_id, kind,
+                 (unsigned long) (esp_get_free_heap_size() / 1024));
         view->card = lv_obj_create(grid);
-        lv_obj_set_pos(view->card, col * cell_w, row * cell_h);
+        lv_obj_set_pos(view->card, col * cell_w + 4, row * cell_h + 4);
         lv_obj_set_size(view->card, cell_w * col_span - 8, cell_h * row_span - 8);
-        lv_obj_set_style_bg_color(view->card, lv_color_hex(0x1D3350), 0);
-        lv_obj_set_style_border_width(view->card, 0, 0);
+        lv_obj_set_style_radius(view->card, 8, 0);
+        lv_obj_set_style_bg_color(view->card, lv_color_hex(view->base_bg), 0);
+        lv_obj_set_style_bg_opa(view->card, LV_OPA_COVER, 0);
+        lv_obj_set_style_pad_all(view->card, 10, 0);
         lv_obj_set_style_text_color(view->card, lv_color_hex(0xF4F7FB), 0);
+        style_flat(view->card);
         if (strcmp(kind, "nav") == 0) {
             const char *target = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "targetPage"));
             snprintf(view->target_page, sizeof(view->target_page), "%s", target ? target : "");
-            lv_obj_set_style_bg_color(view->card, lv_color_hex(0x2A4F7C), 0);
-            lv_obj_t *name = lv_label_create(view->card);
             char caption[80];
-            snprintf(caption, sizeof(caption), "%s %s", icon && icon[0] ? icon_symbol(icon) : LV_SYMBOL_RIGHT, view->title);
+            snprintf(caption, sizeof(caption), "%s %s",
+                     icon && icon[0] ? icon_symbol(icon) : LV_SYMBOL_RIGHT,
+                     view->title[0] ? view->title : "Weiter");
+            lv_obj_t *name = lv_label_create(view->card);
             lv_label_set_text(name, caption);
             lv_obj_set_style_text_font(name, &lv_font_montserrat_28, 0);
             lv_obj_center(name);
             lv_obj_add_event_cb(view->card, nav_event, LV_EVENT_CLICKED, view);
+            tile_count++;
             continue;
         }
         if (strcmp(kind, "label") == 0) {
             const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "text"));
-            const char *size = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "size"));
             lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
             lv_obj_t *label = lv_label_create(view->card);
             lv_label_set_text(label, text ? text : "");
             lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-            lv_obj_set_width(label, cell_w * col_span - 32);
-            if (size && strcmp(size, "large") == 0) lv_obj_set_style_text_font(label, &lv_font_montserrat_28, 0);
-            lv_obj_align(label, LV_ALIGN_LEFT_MID, 0, 0);
-            continue;
-        }
-        if (strcmp(kind, "separator") == 0) {
-            lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
-            lv_obj_t *line = lv_obj_create(view->card);
-            lv_obj_set_size(line, cell_w * col_span - 40, 2);
-            lv_obj_set_style_bg_color(line, lv_color_hex(0x5A7391), 0);
-            lv_obj_set_style_border_width(line, 0, 0);
-            lv_obj_center(line);
+            lv_obj_set_width(label, cell_w * col_span - 24);
+            lv_obj_set_style_text_font(label, &lv_font_montserrat_20, 0);
+            tile_count++;
             continue;
         }
         if (strcmp(kind, "system") == 0) {
-            lv_obj_set_style_bg_color(view->card, lv_color_hex(0x16293F), 0);
-            lv_obj_t *name = lv_label_create(view->card);
-            lv_label_set_text(name, view->title[0] ? view->title : "Anzeige");
-            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 8, 8);
-            system_label = lv_label_create(view->card);
-            lv_label_set_long_mode(system_label, LV_LABEL_LONG_WRAP);
-            lv_obj_set_width(system_label, cell_w * col_span - 40);
-            lv_label_set_text(system_label, "");
-            lv_obj_align(system_label, LV_ALIGN_TOP_LEFT, 8, 40);
+            /* Anzeigestatus-Kachel entfaellt */
+            lv_obj_del(view->card);
+            view->card = NULL;
             continue;
         }
         if (strcmp(kind, "image") == 0) {
             const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageFile"));
             if (!file || !file[0]) file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "mediaFile"));
-            lv_obj_set_style_bg_color(view->card, lv_color_hex(0x0B1626), 0);
             lv_obj_set_style_pad_all(view->card, 0, 0);
             view->image_img = lv_img_create(view->card);
-            char path[80];
-            snprintf(path, sizeof(path), "S:/%s", file ? file : "");
-            lv_img_set_src(view->image_img, path);
-            lv_obj_set_size(view->image_img, lv_obj_get_width(view->card) - 8, lv_obj_get_height(view->card) - 8);
+            (void) file;
+            lv_obj_set_size(view->image_img, cell_w * col_span - 8, cell_h * row_span - 8);
             lv_obj_center(view->image_img);
+            tile_count++;
             continue;
         }
         if (strcmp(kind, "camera") == 0) {
             const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile"));
-            lv_obj_set_style_bg_color(view->card, lv_color_hex(0x0B1626), 0);
-            lv_obj_set_style_pad_all(view->card, 0, 0);
+            lv_obj_set_style_pad_all(view->card, 4, 0);
             lv_obj_t *name = lv_label_create(view->card);
-            lv_label_set_text(name, view->title[0] ? view->title : "Kamera");
-            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 8, 6);
+            label_set_folded(name, view->title[0] ? view->title : "Kamera");
+            lv_obj_set_style_text_font(name, &lv_font_montserrat_20, 0);
+            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 4, 2);
             view->camera_img = lv_img_create(view->card);
-            char path[80];
-            snprintf(path, sizeof(path), "S:/%s", file ? file : "");
-            lv_img_set_src(view->camera_img, path);
-            lv_obj_set_size(view->camera_img, lv_obj_get_width(view->card) - 16, lv_obj_get_height(view->card) - 36);
-            lv_obj_align(view->camera_img, LV_ALIGN_BOTTOM_MID, 0, -6);
+            (void) file;
+            lv_obj_set_size(view->camera_img, cell_w * col_span - 16, cell_h * row_span - 36);
+            lv_obj_align(view->camera_img, LV_ALIGN_BOTTOM_MID, 0, -4);
+            tile_count++;
             continue;
         }
+        /* value / display (Legacy) und Bedien-Kacheln */
         view->has_action = action_id && action_id[0];
         if (view->has_action) snprintf(view->action_id, sizeof(view->action_id), "%s", action_id);
         const char *control = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "control"));
-        snprintf(view->control, sizeof(view->control), "%s", control ? control : "switch");
+        snprintf(view->control, sizeof(view->control), "%s", control ? control : (view->has_action ? "switch" : ""));
         view->value_min = json_int(tile, "valueMin", 0);
         view->value_max = json_int(tile, "valueMax", 100);
         if (view->value_max <= view->value_min) view->value_max = view->value_min + 100;
         view->level = view->value_max;
+        const char *icon_mode = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconMode"));
+        snprintf(view->icon_mode, sizeof(view->icon_mode), "%s", icon_mode ? icon_mode : "static");
+        const char *icon_on = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOn"));
+        const char *icon_off = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOff"));
+        snprintf(view->icon_on, sizeof(view->icon_on), "%s", icon_on ? icon_on : "lightOn");
+        snprintf(view->icon_off, sizeof(view->icon_off), "%s", icon_off ? icon_off : "lightOff");
+        bool icon_toggle = strcmp(view->icon_mode, "toggle") == 0;
         bool battery = strcmp(view->control, "battery") == 0;
         bool dim_switch = strcmp(view->control, "dimSwitch") == 0;
         bool slider = strcmp(view->control, "slider") == 0;
         bool combo = strcmp(view->control, "combo") == 0;
+
+        /* Titelzeile: kleines Icon + Text */
+        lv_obj_t *title_row_icon = NULL;
+        if (icon && icon[0] && !icon_toggle) {
+            title_row_icon = lv_label_create(view->card);
+            lv_label_set_text(title_row_icon, icon_symbol(icon));
+            lv_obj_set_style_text_font(title_row_icon, &lv_font_montserrat_20, 0);
+            lv_obj_align(title_row_icon, LV_ALIGN_TOP_LEFT, 0, 0);
+        }
+        lv_obj_t *name = lv_label_create(view->card);
+        label_set_folded(name, view->title[0] ? view->title : "—");
+        lv_obj_set_style_text_font(name, &lv_font_montserrat_20, 0);
+        lv_obj_align(name, LV_ALIGN_TOP_LEFT, title_row_icon ? 28 : 0, 2);
+
         if (battery) {
             view->battery_pad = json_int(tile, "batteryPad", 8);
-            if (view->battery_pad < 0) view->battery_pad = 0;
-            if (view->battery_pad > 48) view->battery_pad = 48;
-            lv_obj_set_style_pad_all(view->card, view->battery_pad, 0);
-            lv_obj_t *name = lv_label_create(view->card);
-            lv_label_set_text(name, view->title);
-            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 8, 8);
             build_battery(view, view->battery_pad);
             view->label = lv_label_create(view->card);
             lv_label_set_text(view->label, "—");
             lv_obj_set_style_text_font(view->label, &lv_font_montserrat_28, 0);
-            lv_obj_align(view->label, LV_ALIGN_TOP_RIGHT, -8, 8);
+            lv_obj_align(view->label, LV_ALIGN_TOP_RIGHT, 0, 2);
+            tile_count++;
             continue;
         }
-        const char *icon_mode = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconMode"));
-        snprintf(view->icon_mode, sizeof(view->icon_mode), "%s", icon_mode ? icon_mode : "static");
-        snprintf(view->icon_on, sizeof(view->icon_on), "%s", cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOn")) ? cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOn")) : "lightOn");
-        snprintf(view->icon_off, sizeof(view->icon_off), "%s", cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOff")) ? cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconOff")) : "lightOff");
-        bool icon_toggle = strcmp(view->icon_mode, "toggle") == 0;
-        lv_obj_t *symbol = lv_label_create(view->card);
-        view->icon_label = symbol;
-        lv_label_set_text(symbol, icon_symbol(icon));
-        lv_obj_t *name = lv_label_create(view->card);
-        lv_label_set_text(name, view->title);
+
         view->label = lv_label_create(view->card);
         lv_label_set_text(view->label, "—");
         lv_obj_set_style_text_font(view->label, &lv_font_montserrat_28, 0);
-        if (icon_toggle) {
-            lv_obj_set_style_text_font(symbol, &lv_font_montserrat_28, 0);
-            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 8, 8);
-            lv_obj_align(view->label, LV_ALIGN_TOP_RIGHT, -8, 8);
-            lv_obj_align(symbol, LV_ALIGN_CENTER, 0, 8);
-        } else {
-            lv_obj_align(symbol, LV_ALIGN_TOP_LEFT, 8, 8);
-            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 36, 8);
-            lv_obj_align(view->label, (slider || combo) ? LV_ALIGN_TOP_RIGHT : LV_ALIGN_LEFT_MID, (slider || combo) ? -8 : 36, (slider || combo) ? 8 : 8);
-        }
-        if (dim_switch) {
-            build_power(view);
-            lv_obj_align(view->power, LV_ALIGN_BOTTOM_LEFT, 12, -12);
-        } else if (slider || combo) {
-            int bar = cell_w * col_span - (combo ? 120 : 40);
-            if (bar < 70) bar = 70;
-            if (combo) {
-                build_power(view);
-                lv_obj_align(view->power, LV_ALIGN_BOTTOM_LEFT, 8, -12);
+
+        if (view->has_action && icon_toggle) {
+            if (!color_mono) {
+                view->base_bg = theme_button;
+                lv_obj_set_style_bg_color(view->card, lv_color_hex(view->base_bg), 0);
             }
-            build_track(view, bar);
-            lv_obj_align(view->track, LV_ALIGN_BOTTOM_LEFT, combo ? 72 : 12, -16);
-            place_level(view, view->value_min);
-        } else if (view->has_action || icon_toggle) {
+            view->icon_label = lv_label_create(view->card);
+            lv_label_set_text(view->icon_label, icon_symbol(view->icon_off));
+            lv_obj_set_style_text_font(view->icon_label, &lv_font_montserrat_48, 0);
+            lv_obj_align(view->icon_label, LV_ALIGN_CENTER, 0, 10);
+            lv_obj_align(view->label, LV_ALIGN_BOTTOM_MID, 0, -4);
             lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
+        } else if (view->has_action && (dim_switch || slider || combo)) {
+            view->icon_label = lv_label_create(view->card);
+            lv_label_set_text(view->icon_label, LV_SYMBOL_SETTINGS);
+            lv_obj_set_style_text_font(view->icon_label, &lv_font_montserrat_48, 0);
+            lv_obj_align(view->icon_label, LV_ALIGN_CENTER, 0, 8);
+            lv_obj_align(view->label, LV_ALIGN_BOTTOM_MID, 0, -4);
+            lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
+        } else if (view->has_action) {
+            /* Ein/Aus-Schalter: grosse Flaeche, Aus = Buttonfarbe */
+            if (!color_mono) {
+                view->base_bg = theme_button;
+                lv_obj_set_style_bg_color(view->card, lv_color_hex(view->base_bg), 0);
+            }
+            view->icon_label = lv_label_create(view->card);
+            lv_label_set_text(view->icon_label, LV_SYMBOL_POWER);
+            lv_obj_set_style_text_font(view->icon_label, &lv_font_montserrat_48, 0);
+            lv_obj_align(view->icon_label, LV_ALIGN_CENTER, 0, 8);
+            lv_obj_align(view->label, LV_ALIGN_BOTTOM_MID, 0, -4);
+            lv_label_set_text(view->label, "Aus");
+            lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
+        } else {
+            /* Reine Wertanzeige */
+            if (icon && icon[0]) {
+                view->icon_label = lv_label_create(view->card);
+                lv_label_set_text(view->icon_label, icon_symbol(icon));
+                lv_obj_set_style_text_font(view->icon_label, &lv_font_montserrat_28, 0);
+                lv_obj_align(view->icon_label, LV_ALIGN_LEFT_MID, 0, 8);
+            }
+            lv_obj_align(view->label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
         }
+        tile_count++;
     }
     lv_obj_add_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
+    idle_active = false;
+    lv_obj_clear_flag(grid, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(grid);
+    if (page_bar && !lv_obj_has_flag(page_bar, LV_OBJ_FLAG_HIDDEN)) lv_obj_move_foreground(page_bar);
+    if (home_button) lv_obj_move_foreground(home_button);
+    if (info_label) lv_obj_move_foreground(info_label);
+    if (boot_layer) lv_obj_add_flag(boot_layer, LV_OBJ_FLAG_HIDDEN);
+    ESP_LOGI(TAG_UI, "Seite fertig (%d Kacheln)", tile_count);
 }
 
 static void apply_backlight(void)
 {
-    if (idle_mode == 2 && homedisplay_ui_busy() == false && esp_timer_get_time() - touched_at > 60000000) {
+    if (idle_mode == 2 && homedisplay_ui_busy() == false && esp_timer_get_time() - touched_at > idle_timeout_us) {
         homedisplay_board_backlight(false);
         return;
     }
@@ -783,40 +1067,19 @@ static void clock_tick(lv_timer_t *timer)
     (void) day_brightness;
     (void) night_brightness;
     char info[96];
-    const char *wifi = wifi_rssi == 0 ? LV_SYMBOL_CLOSE : wifi_rssi > -67 ? LV_SYMBOL_WIFI : LV_SYMBOL_WARNING;
-    if (online) {
-        snprintf(info, sizeof(info), "%s  %02d:%02d", wifi, hour, (seconds / 60) % 60);
-    } else {
-        int64_t stale = (esp_timer_get_time() - offline_since) / 1000000;
-        if (stale < 60) snprintf(info, sizeof(info), "%s  veraltet seit %lld s  %02d:%02d", wifi, (long long) stale, hour, (seconds / 60) % 60);
-        else snprintf(info, sizeof(info), "%s  veraltet seit %lld min  %02d:%02d", wifi, (long long) (stale / 60), hour, (seconds / 60) % 60);
-    }
+    /* Nur Ziffern – LVGL-Symbole wirken auf dem RGB-Panel unscharf. */
+    snprintf(info, sizeof(info), "%02d:%02d", hour, (seconds / 60) % 60);
+    (void) wifi_rssi;
     if (boot_screen_active) {
         apply_backlight();
         return;
     }
+    if (info_label) {
+        lv_obj_set_style_text_color(info_label, lv_color_hex(online ? 0xF4F7FB : 0x6E849C), 0);
+    }
     if (strcmp(last_info_line, info) != 0) {
         snprintf(last_info_line, sizeof(last_info_line), "%s", info);
         lv_label_set_text(info_label, info);
-    }
-    if (system_label) {
-        char report[320];
-        esp_netif_ip_info_t ip = {0};
-        esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-        if (netif) esp_netif_get_ip_info(netif, &ip);
-        int64_t uptime = esp_timer_get_time() / 1000000;
-        int64_t age = online ? 0 : (esp_timer_get_time() - offline_since) / 1000000;
-        snprintf(report, sizeof(report),
-                 "Programm %s\nWLAN %d dBm   IP " IPSTR "\nLaufzeit %lld h %lld min\nFreier Speicher %lu KB (min. %lu KB)\nDienst %s   Datenalter %lld s\nBilder %lu   Berührungen %lu",
-                 HOMEDISPLAY_FIRMWARE_VERSION, wifi_rssi, IP2STR(&ip.ip),
-                 (long long) (uptime / 3600), (long long) ((uptime % 3600) / 60),
-                 (unsigned long) (esp_get_free_heap_size() / 1024), (unsigned long) (esp_get_minimum_free_heap_size() / 1024),
-                 online ? "verbunden" : "getrennt", (long long) age,
-                 (unsigned long) frame_counter, (unsigned long) touch_counter);
-        if (strcmp(last_system_report, report) != 0) {
-            snprintf(last_system_report, sizeof(last_system_report), "%s", report);
-            lv_label_set_text(system_label, report);
-        }
     }
     if (test_layer && !lv_obj_has_flag(test_layer, LV_OBJ_FLAG_HIDDEN)) {
         char line[160];
@@ -832,12 +1095,27 @@ static void clock_tick(lv_timer_t *timer)
         apply_backlight();
         return;
     }
-    bool idle = esp_timer_get_time() - touched_at > 60000000;
+    bool idle = esp_timer_get_time() - touched_at > idle_timeout_us;
     if (idle && idle_mode == 0) {
-        char line[16];
-        snprintf(line, sizeof(line), "%02d:%02d", hour, (seconds / 60) % 60);
-        lv_label_set_text(clock_label, line);
-        lv_obj_clear_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
+        int minute = (seconds / 60) % 60;
+        if (!idle_active) set_idle_visible(true);
+        bool analog = strcmp(idle_clock_style, "analog") == 0;
+        if (analog_clock) {
+            if (analog) lv_obj_clear_flag(analog_clock, LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_add_flag(analog_clock, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (clock_label) {
+            if (analog) lv_obj_add_flag(clock_label, LV_OBJ_FLAG_HIDDEN);
+            else {
+                lv_obj_clear_flag(clock_label, LV_OBJ_FLAG_HIDDEN);
+                char line[16];
+                snprintf(line, sizeof(line), "%02d:%02d", hour, minute);
+                lv_label_set_text(clock_label, line);
+            }
+        }
+        if (analog) update_analog_hands(hour, minute);
+    } else if (idle_active) {
+        set_idle_visible(false);
     } else if (idle_mode != 0) {
         lv_obj_add_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
     }
@@ -846,6 +1124,7 @@ static void clock_tick(lv_timer_t *timer)
 
 static void build_test_layer(lv_obj_t *screen)
 {
+    /* Schlank halten: keine hunderte LVGL-Objekte beim Boot (RAM + Zeichenzeit). */
     static const uint32_t bars[8] = {0xFFFFFF, 0xFFFF00, 0x00FFFF, 0x00FF00, 0xFF00FF, 0xFF0000, 0x0000FF, 0x000000};
     test_layer = lv_obj_create(screen);
     lv_obj_set_size(test_layer, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES);
@@ -856,26 +1135,11 @@ static void build_test_layer(lv_obj_t *screen)
     lv_obj_set_style_bg_color(test_layer, lv_color_hex(0x000000), 0);
     for (int index = 0; index < 8; index++) {
         lv_obj_t *bar = lv_obj_create(test_layer);
-        lv_obj_set_size(bar, HOMEDISPLAY_LCD_H_RES / 8, 360);
+        lv_obj_set_size(bar, HOMEDISPLAY_LCD_H_RES / 8, HOMEDISPLAY_LCD_V_RES);
         lv_obj_set_pos(bar, index * (HOMEDISPLAY_LCD_H_RES / 8), 0);
         lv_obj_set_style_radius(bar, 0, 0);
         lv_obj_set_style_border_width(bar, 0, 0);
         lv_obj_set_style_bg_color(bar, lv_color_hex(bars[index]), 0);
-    }
-    for (int index = 0; index <= 16; index++) {
-        lv_obj_t *line = lv_obj_create(test_layer);
-        lv_obj_set_size(line, 1, 240);
-        lv_obj_set_pos(line, index * 64 - (index == 16 ? 1 : 0), 360);
-        lv_obj_set_style_border_width(line, 0, 0);
-        lv_obj_set_style_bg_color(line, lv_color_hex(0x808080), 0);
-    }
-    for (int index = 0; index < 256; index += 2) {
-        lv_obj_t *step = lv_obj_create(test_layer);
-        lv_obj_set_size(step, 8, 60);
-        lv_obj_set_pos(step, index * 4, 360);
-        lv_obj_set_style_border_width(step, 0, 0);
-        lv_obj_set_style_radius(step, 0, 0);
-        lv_obj_set_style_bg_color(step, lv_color_make(index, index, index), 0);
     }
     test_label = lv_label_create(test_layer);
     lv_obj_set_style_text_color(test_label, lv_color_hex(0xFFFFFF), 0);
@@ -892,7 +1156,7 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lvgl_port_init(&port_config);
     const lvgl_port_display_cfg_t display_config = {
         .panel_handle = panel,
-        .buffer_size = HOMEDISPLAY_LCD_H_RES * 72,
+        .buffer_size = HOMEDISPLAY_LCD_H_RES * 80,
         .double_buffer = false,
         .hres = HOMEDISPLAY_LCD_H_RES,
         .vres = HOMEDISPLAY_LCD_V_RES,
@@ -905,7 +1169,10 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
 
     lvgl_port_lock(0);
     lv_obj_t *screen = lv_scr_act();
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0x102033), 0);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(screen, 0, 0);
+    style_flat(screen);
     lv_obj_add_event_cb(screen, gesture_event, LV_EVENT_GESTURE, NULL);
     page_background = lv_img_create(screen);
     lv_obj_clear_flag(page_background, LV_OBJ_FLAG_CLICKABLE);
@@ -914,45 +1181,99 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     status_label = lv_label_create(screen);
     lv_obj_set_style_text_color(status_label, lv_color_hex(0xF4F7FB), 0);
     lv_obj_set_style_text_font(status_label, &lv_font_montserrat_20, 0);
-    lv_label_set_text(status_label, "Hausanzeige sucht den Dienst");
-    lv_obj_align(status_label, LV_ALIGN_TOP_LEFT, 56, 6);
+    lv_label_set_text(status_label, "");
+    lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
     info_label = lv_label_create(screen);
-    lv_obj_set_style_text_color(info_label, lv_color_hex(0xB7C4D4), 0);
-    lv_obj_set_style_text_font(info_label, &lv_font_montserrat_20, 0);
-    lv_label_set_text(info_label, "");
-    lv_obj_align(info_label, LV_ALIGN_TOP_RIGHT, -16, 6);
+    lv_obj_set_style_text_color(info_label, lv_color_hex(0xF4F7FB), 0);
+    lv_obj_set_style_text_font(info_label, &lv_font_montserrat_28, 0);
+    lv_label_set_text(info_label, "--:--");
+    lv_obj_align(info_label, LV_ALIGN_TOP_RIGHT, -12, 6);
     home_button = lv_btn_create(screen);
-    lv_obj_set_size(home_button, 40, 28);
-    lv_obj_set_pos(home_button, 12, 2);
+    lv_obj_set_size(home_button, 40, 32);
+    lv_obj_set_pos(home_button, 8, 4);
     lv_obj_set_style_bg_color(home_button, lv_color_hex(0x2A4F7C), 0);
+    lv_obj_set_style_radius(home_button, 6, 0);
+    style_flat(home_button);
     lv_obj_t *home_symbol = lv_label_create(home_button);
     lv_label_set_text(home_symbol, LV_SYMBOL_HOME);
     lv_obj_center(home_symbol);
     lv_obj_add_event_cb(home_button, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) 0);
     page_bar = lv_obj_create(screen);
-    lv_obj_set_size(page_bar, 980, 48);
-    lv_obj_align(page_bar, LV_ALIGN_TOP_MID, 0, 32);
-    lv_obj_set_flex_flow(page_bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_layout(page_bar, 0);
+    lv_obj_set_size(page_bar, HOMEDISPLAY_LCD_H_RES - 52 - 110, 40);
+    lv_obj_set_pos(page_bar, 52, 6);
+    lv_obj_set_style_pad_all(page_bar, 0, 0);
     lv_obj_set_style_bg_opa(page_bar, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(page_bar, 0, 0);
+    lv_obj_set_style_radius(page_bar, 0, 0);
+    style_flat(page_bar);
     grid = lv_obj_create(screen);
-    lv_obj_set_size(grid, 980, 500);
-    lv_obj_align(grid, LV_ALIGN_BOTTOM_MID, 0, -8);
+    lv_obj_set_pos(grid, 0, 48);
+    lv_obj_set_size(grid, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES - 48);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(grid, 0, 0);
+    lv_obj_set_style_pad_all(grid, 0, 0);
+    lv_obj_set_style_radius(grid, 0, 0);
+    style_flat(grid);
     clock_layer = lv_obj_create(screen);
     lv_obj_set_size(clock_layer, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES);
-    lv_obj_set_style_bg_color(clock_layer, lv_color_hex(0x102033), 0);
+    lv_obj_set_style_bg_color(clock_layer, lv_color_hex(0x000000), 0);
+    style_flat(clock_layer);
     clock_label = lv_label_create(clock_layer);
-    lv_obj_set_style_text_font(clock_label, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(clock_label, lv_color_hex(0xF4F7FB), 0);
+    lv_obj_set_style_text_font(clock_label, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(clock_label, lv_color_hex(0xFFFFFF), 0);
     lv_label_set_text(clock_label, "--:--");
     lv_obj_center(clock_label);
+    analog_clock = lv_obj_create(clock_layer);
+    lv_obj_set_size(analog_clock, 360, 360);
+    lv_obj_center(analog_clock);
+    lv_obj_set_style_radius(analog_clock, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(analog_clock, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_border_color(analog_clock, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_width(analog_clock, 4, 0);
+    style_flat(analog_clock);
+    analog_hour = lv_label_create(analog_clock);
+    lv_obj_set_style_text_font(analog_hour, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(analog_hour, lv_color_hex(0xFFFFFF), 0);
+    lv_label_set_text(analog_hour, "12");
+    lv_obj_align(analog_hour, LV_ALIGN_CENTER, 0, -40);
+    analog_min = lv_label_create(analog_clock);
+    lv_obj_set_style_text_font(analog_min, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(analog_min, lv_color_hex(0xFFFFFF), 0);
+    lv_label_set_text(analog_min, "00");
+    lv_obj_align(analog_min, LV_ALIGN_CENTER, 0, 40);
+    lv_obj_add_flag(analog_clock, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(clock_layer, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) 0);
+    dim_popup = lv_obj_create(screen);
+    lv_obj_set_size(dim_popup, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES);
+    lv_obj_set_style_bg_color(dim_popup, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(dim_popup, LV_OPA_80, 0);
+    style_flat(dim_popup);
+    lv_obj_t *dim_card = lv_obj_create(dim_popup);
+    lv_obj_set_size(dim_card, 720, 200);
+    lv_obj_center(dim_card);
+    lv_obj_set_style_bg_color(dim_card, lv_color_hex(0x1A1A1A), 0);
+    lv_obj_set_style_radius(dim_card, 12, 0);
+    style_flat(dim_card);
+    lv_obj_t *dim_title = lv_label_create(dim_card);
+    lv_label_set_text(dim_title, "Helligkeit");
+    lv_obj_set_style_text_color(dim_title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(dim_title, &lv_font_montserrat_28, 0);
+    lv_obj_align(dim_title, LV_ALIGN_TOP_MID, 0, 16);
+    dim_slider = lv_slider_create(dim_card);
+    lv_obj_set_width(dim_slider, 600);
+    lv_obj_align(dim_slider, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_add_event_cb(dim_slider, dim_slider_event, LV_EVENT_RELEASED, NULL);
+    lv_obj_t *dim_close = lv_btn_create(dim_card);
+    lv_obj_set_size(dim_close, 120, 40);
+    lv_obj_align(dim_close, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_t *dim_close_lbl = lv_label_create(dim_close);
+    lv_label_set_text(dim_close_lbl, "OK");
+    lv_obj_center(dim_close_lbl);
+    lv_obj_add_event_cb(dim_close, dim_popup_close_event, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(dim_popup, LV_OBJ_FLAG_HIDDEN);
     build_test_layer(screen);
     build_boot_layer(screen);
-    set_boot_message("Hausanzeige startet", "Display bereit");
+    set_boot_message("Hausanzeige startet", "Anzeige bereit");
     lvgl_port_unlock();
     touched_at = esp_timer_get_time();
     offline_since = touched_at;
@@ -987,7 +1308,7 @@ void homedisplay_ui_setup_progress(const char *detail)
         lv_obj_clear_flag(boot_code, LV_OBJ_FLAG_HIDDEN);
     }
     if (boot_detail) {
-        lv_label_set_text(boot_detail, detail);
+        label_set_folded(boot_detail, detail);
         lv_obj_clear_flag(boot_detail, LV_OBJ_FLAG_HIDDEN);
     }
     if (boot_layer) {
@@ -1009,7 +1330,6 @@ void homedisplay_ui_status(const char *text)
     }
     char title[120];
     char detail[280];
-    char bar[320];
     split_status_text(text, title, sizeof(title), detail, sizeof(detail));
     if (boot_screen_active && setup_pair_code[0] && detail[0]) {
         homedisplay_ui_setup_progress(detail);
@@ -1022,20 +1342,9 @@ void homedisplay_ui_status(const char *text)
     if (boot_screen_active && boot_layer) {
         set_boot_message(title, detail);
     }
+    /* Statuszeile links oben absichtlich ausgeblendet. */
     if (status_label) {
-        if (strchr(text, '\n')) {
-            snprintf(bar, sizeof(bar), "%s", title);
-            if (detail[0]) {
-                size_t used = strlen(bar);
-                snprintf(bar + used, sizeof(bar) - used, " · %s", detail);
-            }
-        } else {
-            snprintf(bar, sizeof(bar), "%s", text);
-        }
-        if (strcmp(last_status_bar, bar) != 0) {
-            snprintf(last_status_bar, sizeof(last_status_bar), "%s", bar);
-            lv_label_set_text(status_label, bar);
-        }
+        lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
     }
     lvgl_port_unlock();
 }
@@ -1053,11 +1362,32 @@ void homedisplay_ui_apply_layout(const char *json)
     }
     if (layout_root) cJSON_Delete(layout_root);
     layout_root = root;
-    lvgl_port_lock(0);
+    const char *cm = cJSON_GetStringValue(cJSON_GetObjectItem(root, "colorMode"));
+    color_mono = cm && strcmp(cm, "mono") == 0;
+    cJSON *theme = cJSON_GetObjectItem(root, "theme");
+    theme_bg = 0x102033;
+    theme_button = 0x2A4F7C;
+    theme_accent = 0xFFB547;
+    if (cJSON_IsObject(theme)) {
+        theme_bg = parse_hex_color(cJSON_GetStringValue(cJSON_GetObjectItem(theme, "background")), theme_bg);
+        theme_button = parse_hex_color(cJSON_GetStringValue(cJSON_GetObjectItem(theme, "button")), theme_button);
+        theme_accent = parse_hex_color(cJSON_GetStringValue(cJSON_GetObjectItem(theme, "accent")), theme_accent);
+    }
+    ESP_LOGI(TAG_UI, "Layout anwenden (%d Seiten, mono=%d)", count, (int) color_mono);
     last_setup_detail[0] = '\0';
-    hide_boot_screen();
+    /* Boot-Screen erst nach dem Zeichnen ausblenden – sonst sieht man RGB-Müll (grün). */
+    show_page_may_yield = true;
+    lvgl_port_lock(0);
     show_page(0);
+    hide_boot_screen();
     lvgl_port_unlock();
+    show_page_may_yield = false;
+    ESP_LOGI(TAG_UI, "Layout fertig (%d Kacheln)", tile_count);
+}
+
+bool homedisplay_ui_layout_ready(void)
+{
+    return layout_root != NULL;
 }
 
 void homedisplay_ui_apply_config(const char *json)
@@ -1066,6 +1396,19 @@ void homedisplay_ui_apply_config(const char *json)
     if (!root) return;
     cJSON *item = cJSON_GetObjectItem(root, "idleMode");
     if (item) idle_mode = item->valueint;
+    item = cJSON_GetObjectItem(root, "idleClockStyle");
+    if (cJSON_IsString(item) && item->valuestring) {
+        snprintf(idle_clock_style, sizeof(idle_clock_style), "%s", item->valuestring);
+    }
+    item = cJSON_GetObjectItem(root, "idleTimeoutSec");
+    if (cJSON_IsNumber(item)) {
+        int seconds = item->valueint;
+        if (seconds < 5) seconds = 5;
+        if (seconds > 3600) seconds = 3600;
+        idle_timeout_us = (int64_t) seconds * 1000000;
+    } else {
+        idle_timeout_us = 60000000;
+    }
     item = cJSON_GetObjectItem(root, "dayBrightness");
     if (item) day_brightness = item->valueint;
     item = cJSON_GetObjectItem(root, "nightBrightness");
@@ -1086,6 +1429,9 @@ void homedisplay_ui_apply_state(const char *json)
         cJSON_Delete(root);
         return;
     }
+    if (json && json[0]) {
+        snprintf(last_state_json, sizeof(last_state_json), "%s", json);
+    }
     cJSON *now = cJSON_GetObjectItem(root, "now");
     if (now) homedisplay_ui_set_time((int64_t) now->valuedouble);
     lvgl_port_lock(0);
@@ -1098,8 +1444,8 @@ void homedisplay_ui_apply_state(const char *json)
         if (!tile_id) continue;
         for (int index = 0; index < tile_count; index++) {
             if (strcmp(tiles[index].tile_id, tile_id) != 0) continue;
-            if (tiles[index].label) lv_label_set_text(tiles[index].label, text ? text : "—");
-            if (tiles[index].card) lv_obj_set_style_bg_color(tiles[index].card, color_for(color), 0);
+            if (tiles[index].label) label_set_folded(tiles[index].label, text ? text : "-");
+            apply_status_color(&tiles[index], color);
             int number = tiles[index].value;
             bool has_number = false;
             if (cJSON_IsNumber(value)) {
@@ -1112,18 +1458,26 @@ void homedisplay_ui_apply_state(const char *json)
             if (!has_number) continue;
             tiles[index].applying = true;
             tiles[index].value = number;
-            if (strcmp(tiles[index].control, "battery") == 0) {
+            bool on = number > tiles[index].value_min;
+            if (tiles[index].battery_fill && tiles[index].battery_shell) {
                 place_battery(&tiles[index], number);
-            } else {
-                if (number > tiles[index].value_min) tiles[index].level = number;
+            } else if (tiles[index].track) {
+                if (on) tiles[index].level = number;
                 place_level(&tiles[index], number);
                 if (tiles[index].power) {
-                    if (number > tiles[index].value_min) lv_obj_add_state(tiles[index].power, LV_STATE_CHECKED);
+                    if (on) lv_obj_add_state(tiles[index].power, LV_STATE_CHECKED);
                     else lv_obj_clear_state(tiles[index].power, LV_STATE_CHECKED);
                 }
-                if (tiles[index].icon_label && strcmp(tiles[index].icon_mode, "toggle") == 0) {
-                    bool on = number > tiles[index].value_min;
-                    lv_label_set_text(tiles[index].icon_label, icon_symbol(on ? tiles[index].icon_on : tiles[index].icon_off));
+            }
+            if (tiles[index].icon_label && strcmp(tiles[index].icon_mode, "toggle") == 0) {
+                lv_label_set_text(tiles[index].icon_label, icon_symbol(on ? tiles[index].icon_on : tiles[index].icon_off));
+            } else if (tiles[index].has_action && tiles[index].control[0]
+                       && strcmp(tiles[index].control, "switch") == 0 && tiles[index].label
+                       && strcmp(tiles[index].icon_mode, "toggle") != 0) {
+                label_set_folded(tiles[index].label, on ? "Ein" : "Aus");
+                if (tiles[index].card) {
+                    lv_obj_set_style_bg_color(tiles[index].card,
+                        lv_color_hex(on ? accent_on() : tiles[index].base_bg), 0);
                 }
             }
             tiles[index].applying = false;
@@ -1136,8 +1490,10 @@ void homedisplay_ui_apply_state(const char *json)
 void homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
 {
     if (!tile_id || !tile_id[0] || !file || !file[0]) return;
+    if (!storage_image_ready_limit(file, 400 * 1024)) return;
     char path[96];
     snprintf(path, sizeof(path), "S:/%s", file);
+    ui_wdt_kick();
     lvgl_port_lock(0);
     for (int index = 0; index < tile_count; index++) {
         if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].camera_img) {
@@ -1151,8 +1507,10 @@ void homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
 void homedisplay_ui_refresh_image(const char *tile_id, const char *file)
 {
     if (!tile_id || !tile_id[0] || !file || !file[0]) return;
+    if (!storage_image_ready_limit(file, 400 * 1024)) return;
     char path[96];
     snprintf(path, sizeof(path), "S:/%s", file);
+    ui_wdt_kick();
     lvgl_port_lock(0);
     for (int index = 0; index < tile_count; index++) {
         if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].image_img) {

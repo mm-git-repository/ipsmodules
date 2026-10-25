@@ -30,6 +30,8 @@ class HomeDisplay extends IPSModuleStrict
         $this->RegisterPropertyString('DisplayProfile', 'waveshare-5b-1024x600');
         $this->RegisterPropertyString('ConfigId', 'config-standard');
         $this->RegisterPropertyInteger('IdleMode', 0);
+        $this->RegisterPropertyString('IdleClockStyle', 'digital');
+        $this->RegisterPropertyInteger('IdleTimeoutSec', 60);
         $this->RegisterPropertyBoolean('NightDim', true);
         $this->RegisterPropertyInteger('DayBrightness', 70);
         $this->RegisterPropertyInteger('NightBrightness', 15);
@@ -900,6 +902,10 @@ class HomeDisplay extends IPSModuleStrict
             'id' => 'anzeige-' . $instanceId,
             'version' => 1,
             'idleMode' => (int) IPS_GetProperty($instanceId, 'IdleMode'),
+            'idleClockStyle' => in_array((string) @IPS_GetProperty($instanceId, 'IdleClockStyle'), ['digital', 'analog'], true)
+                ? (string) IPS_GetProperty($instanceId, 'IdleClockStyle') : 'digital',
+            'idleTimeoutSec' => max(5, min(3600, (int) @IPS_GetProperty($instanceId, 'IdleTimeoutSec') ?: 60)),
+            'manifestIntervalSec' => 60,
             'nightDim' => (bool) IPS_GetProperty($instanceId, 'NightDim'),
             'dayBrightness' => (int) IPS_GetProperty($instanceId, 'DayBrightness'),
             'nightBrightness' => (int) IPS_GetProperty($instanceId, 'NightBrightness'),
@@ -1076,15 +1082,22 @@ class HomeDisplay extends IPSModuleStrict
                     $tiles[] = $this->presenceStateTile($tile, $tileId);
                     continue;
                 }
+                if ($kind === 'system') {
+                    continue;
+                }
                 if ($kind !== 'value' && $kind !== 'display') {
                     continue;
                 }
+                $source = (string) ($tile['displaySource'] ?? 'variable');
                 $variableId = (int) ($tile['variableId'] ?? 0);
                 $text = '—';
                 $quality = 'empty';
                 $value = null;
                 $color = 'neutral';
-                if ($variableId > 0 && IPS_VariableExists($variableId)) {
+                if ($source === 'text') {
+                    $text = $this->formatPrefixed(trim((string) ($tile['text'] ?? '')), $tile);
+                    $quality = $text !== '' ? 'ok' : 'empty';
+                } elseif ($variableId > 0 && IPS_VariableExists($variableId)) {
                     $text = $this->formatVariable($variableId, $tile);
                     $quality = 'ok';
                     $raw = GetValue($variableId);
@@ -1429,8 +1442,24 @@ class HomeDisplay extends IPSModuleStrict
         } else {
             $text = trim((string) $raw);
         }
-        $unit = trim((string) ($tile['unit'] ?? ''));
-        return $unit === '' ? $text : $text . ' ' . $unit;
+        return $this->formatPrefixed($text, $tile);
+    }
+
+    /** @param array<string, mixed> $tile */
+    private function formatPrefixed(string $text, array $tile): string
+    {
+        $prefix = trim((string) ($tile['prefix'] ?? ''));
+        $suffix = trim((string) ($tile['suffix'] ?? ''));
+        if ($suffix === '') {
+            $suffix = trim((string) ($tile['unit'] ?? ''));
+        }
+        if ($prefix !== '') {
+            $text = $prefix . (str_ends_with($prefix, ' ') ? '' : ' ') . $text;
+        }
+        if ($suffix !== '') {
+            $text = $text . (str_starts_with($suffix, ' ') || str_starts_with($suffix, '°') ? '' : ' ') . $suffix;
+        }
+        return $text;
     }
 
     /** @param array{id: int, token: string} $device @param array<string, mixed> $body @param array<string, mixed>|null $tileOverride Nur für SimulateAction (Editor/Prüfung). */
