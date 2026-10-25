@@ -223,6 +223,7 @@ final class HomeDisplayPanelSchema
                     'colSpan' => max(1, (int) ($tile['colSpan'] ?? 1)),
                     'rowSpan' => max(1, (int) ($tile['rowSpan'] ?? 1)),
                 ];
+                self::publishTileChrome($public, $tile);
                 $group = trim((string) ($tile['group'] ?? ''));
                 if ($group !== '') {
                     $public['group'] = mb_substr($group, 0, 40);
@@ -430,6 +431,24 @@ final class HomeDisplayPanelSchema
             'targetHeight' => (int) $profile['height'],
             'pages' => $pages,
         ];
+    }
+
+    /** @param array<string, mixed> $public @param array<string, mixed> $tile */
+    private static function publishTileChrome(array &$public, array $tile): void
+    {
+        if (array_key_exists('showTitle', $tile) && $tile['showTitle'] === false) {
+            $public['showTitle'] = false;
+        }
+        $align = (string) ($tile['titleAlign'] ?? '');
+        if (in_array($align, ['center', 'right'], true)) {
+            $public['titleAlign'] = $align;
+        }
+        foreach (['bgColor', 'onColor'] as $key) {
+            $value = strtolower(trim((string) ($tile[$key] ?? '')));
+            if (preg_match('/^#[0-9a-f]{6}$/', $value)) {
+                $public[$key] = $value;
+            }
+        }
     }
 
     /** @param array<string, mixed> $layout @return array{background: string, button: string, accent: string} */

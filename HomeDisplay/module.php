@@ -1112,7 +1112,6 @@ class HomeDisplay extends IPSModuleStrict
                     }
                 }
                 if (isset($pending[$tileId])) {
-                    $text = 'wird ausgeführt';
                     $quality = 'pending';
                 }
                 $tiles[] = [

@@ -894,10 +894,10 @@ static void post_action(const char *tile_id, const char *action_id, int value)
     xQueueSend(actions, &message, 0);
 }
 
-static void send_queued_action(void)
+static bool send_queued_action(void)
 {
     action_message_t message;
-    if (!actions || xQueueReceive(actions, &message, 0) != pdTRUE) return;
+    if (!actions || xQueueReceive(actions, &message, 0) != pdTRUE) return false;
     char request_id[20];
     snprintf(request_id, sizeof(request_id), "%08lx%08lx", (unsigned long) esp_random(), (unsigned long) esp_random());
     char body[220];
@@ -908,6 +908,7 @@ static void send_queued_action(void)
         vTaskDelay(pdMS_TO_TICKS(500));
         request("/v1/actions", "POST", body, response, sizeof(response));
     }
+    return true;
 }
 
 static void send_health(char *response, size_t length)
@@ -1082,7 +1083,13 @@ static void client_task(void *argument)
         int wait = homedisplay_ui_busy() ? state_interval : idle_interval;
         if (!online) wait = failures > 10 ? 30 : 5;
         if (wait < 2) wait = 2;
-        vTaskDelay(pdMS_TO_TICKS(wait * 1000));
+        /* Kurz takten, damit ein Tipp nicht bis zum Ende des Intervalls liegen bleibt. */
+        for (int elapsed = 0; elapsed < wait * 1000; elapsed += 120) {
+            esp_task_wdt_reset();
+            homedisplay_serial_poll();
+            if (send_queued_action()) break;
+            vTaskDelay(pdMS_TO_TICKS(120));
+        }
     }
 }
 

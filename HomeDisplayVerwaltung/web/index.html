@@ -81,8 +81,6 @@
         <div id="palette-items-scroll">
           <div class="palette-items">
             <div class="palette-item" draggable="true" data-kind="value">Wert</div>
-            <div class="palette-item" draggable="true" data-kind="value" data-control="dimSwitch">Dimmschalter</div>
-            <div class="palette-item" draggable="true" data-kind="value" data-control="slider">Dimmbalken</div>
             <div class="palette-item" draggable="true" data-kind="value" data-control="combo">Kombischalter</div>
             <div class="palette-item" draggable="true" data-kind="value" data-control="battery">Batterie</div>
             <div class="palette-item" draggable="true" data-kind="nav">Seitenwechsler</div>
@@ -136,16 +134,28 @@
       <form id="prop-form" class="hidden">
         <label>Art <input id="p-kind" readonly></label>
         <label>Titel <input id="p-title"></label>
+        <label><input id="p-show-title" type="checkbox" checked> Titel anzeigen</label>
+        <label>Titelposition
+          <select id="p-title-align">
+            <option value="left">Links</option>
+            <option value="center">Mitte</option>
+            <option value="right">Rechts</option>
+          </select>
+        </label>
         <label>Gruppe (Frame)
           <input id="p-group" placeholder="z. B. Wohnzimmer" maxlength="40">
         </label>
-        <div class="row">
+        <div class="row hidden">
           <label>Spalte <input id="p-col" type="number" min="1"></label>
           <label>Zeile <input id="p-row" type="number" min="1"></label>
         </div>
-        <div class="row">
+        <div class="row hidden">
           <label>Breite <input id="p-colspan" type="number" min="1" max="4" value="1"></label>
           <label>Höhe <input id="p-rowspan" type="number" min="1" max="6" value="1"></label>
+        </div>
+        <div class="row">
+          <label><input id="p-own-bg" type="checkbox"> Eigene Farbe <input id="p-bg-color" type="color" value="#2a4f7c"></label>
+          <label id="p-own-on-wrap"><input id="p-own-on" type="checkbox"> Farbe Ein <input id="p-on-color" type="color" value="#ffb547"></label>
         </div>
         <div data-for="nav">
           <label>Symbol
@@ -153,7 +163,7 @@
           </label>
         </div>
         <div data-for="value camera chart">
-          <label>Variable <input id="p-variable" readonly placeholder="Aus dem Variablenbaum wählen"></label>
+          <label>Variable <span class="pick-row"><input id="p-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="variable">Auswählen</button></span></label>
         </div>
         <div data-for="chart">
           <label>Zeitraum
@@ -204,7 +214,7 @@
           </label>
         </div>
         <div data-for="scene">
-          <label>Aktions-Variable <input id="p-scene-variable" readonly placeholder="Schaltbare Variable aus dem Baum wählen"></label>
+          <label>Aktions-Variable <span class="pick-row"><input id="p-scene-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="scene">Auswählen</button></span></label>
           <label>Aktions-ID <input id="p-scene-actionid" placeholder="Automatisch (a-Kennung)" maxlength="40" pattern="[A-Za-z0-9_-]*"></label>
           <label>Symbol
             <select id="p-scene-icon"></select>
@@ -213,17 +223,17 @@
           <p class="hint">Variable mit IPS-Aktion (Skript). Tippen an der Anzeige löst die Aktion aus — wie eine openHAB-Szene.</p>
         </div>
         <div data-for="weather">
-          <label>Temperatur-Variable <input id="p-weather-variable" readonly placeholder="Zahlvariable aus dem Baum"></label>
+          <label>Temperatur-Variable <span class="pick-row"><input id="p-weather-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="weather">Auswählen</button></span></label>
           <div class="row">
             <label>Einheit <input id="p-weather-unit"></label>
             <label>Nachkommastellen <input id="p-weather-decimals" type="number" min="0" max="3" value="1"></label>
           </div>
-          <label>Prognose (optional) <input id="p-weather-forecast" readonly placeholder="Textvariable im Baum anklicken"></label>
+          <label>Prognose (optional) <span class="pick-row"><input id="p-weather-forecast" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="forecast">Auswählen</button></span></label>
           <label>Symbol <select id="p-weather-icon"></select></label>
           <p class="hint">Temperatur: Variable im Baum anklicken. Prognose: danach Textvariable anklicken (Fußzeile der Karte).</p>
         </div>
         <div data-for="presence">
-          <label>Variable <input id="p-presence-variable" readonly placeholder="z. B. Anwesenheit oder Alarm"></label>
+          <label>Variable <span class="pick-row"><input id="p-presence-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="presence">Auswählen</button></span></label>
           <label>Modus
             <select id="p-presence-mode">
               <option value="home">Anwesenheit</option>
@@ -245,7 +255,7 @@
           <div id="p-display-text" class="hidden">
             <label>Text <textarea id="p-display-textarea" rows="3"></textarea></label>
           </div>
-          <div class="row">
+          <div class="row" id="p-value-format">
             <label>Prefix <input id="p-prefix"></label>
             <label>Suffix / Einheit <input id="p-unit"></label>
             <label>Nachkommastellen <input id="p-decimals" type="number" min="0" max="3" value="0"></label>
@@ -254,16 +264,14 @@
             <select id="p-interaction">
               <option value="switch">Schalter (Ein/Aus)</option>
               <option value="iconSwitch">Icon-Schalter</option>
-              <option value="dimSwitch">Dimmschalter</option>
-              <option value="slider">Nur Dimmer</option>
-              <option value="combo">Kombi</option>
+              <option value="combo">Kombischalter</option>
               <option value="battery">Batterie (Ladestand)</option>
               <option value="blinds">Rolladen</option>
               <option value="setpoint">Setpoint (Heizung)</option>
             </select>
           </label>
           <div id="p-setpoint-wrap" class="hidden">
-            <label>Sollwert-Variable <input id="p-setpoint-var" readonly placeholder="Aus dem Baum wählen"></label>
+            <label>Sollwert-Variable <span class="pick-row"><input id="p-setpoint-var" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="setpoint">Auswählen</button></span></label>
             <label>Schritt <input id="p-setpoint-step" type="number" step="0.1" value="0.5"></label>
           </div>
           <div id="p-icon-static">
@@ -292,6 +300,13 @@
             </label>
           </div>
           <div id="p-dim-wrap" class="hidden">
+            <label id="p-combo-variant-wrap">Art des Schalters
+              <select id="p-combo-variant">
+                <option value="switch">Schalter + Balken</option>
+                <option value="barOnly">Nur Balken</option>
+                <option value="switchTap">Schalter + Balken, Antippen springt</option>
+              </select>
+            </label>
             <div class="row">
               <label><input id="p-dim-show-percent" type="checkbox" checked> Prozent am Balken</label>
               <label>Anordnung
@@ -301,9 +316,9 @@
                 </select>
               </label>
             </div>
-            <label>Leiste antippen
+            <label id="p-dim-tap-wrap">Leiste antippen
               <select id="p-dim-tap">
-                <option value="auto">Standard (Kombi/Rolladen ja, reiner Dimmer nein)</option>
+                <option value="auto">Standard</option>
                 <option value="on">Immer – Springen zur Position</option>
                 <option value="off">Nur Griff ziehen</option>
               </select>
@@ -340,20 +355,20 @@
             <select id="p-flow-slot"></select>
           </label>
           <div id="p-flow-grid-vars">
-            <label>Netz Bezug <input id="p-flow-grid-import" readonly placeholder="Pflicht"></label>
-            <label>Netz Einspeisung <input id="p-flow-grid-export" readonly placeholder="Pflicht"></label>
+            <label>Netz Bezug <span class="pick-row"><input id="p-flow-grid-import" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="gridImport">Auswählen</button></span></label>
+            <label>Netz Einspeisung <span class="pick-row"><input id="p-flow-grid-export" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="gridExport">Auswählen</button></span></label>
           </div>
           <div id="p-flow-signed">
-            <label>Batterie (±) <input id="p-flow-battery" readonly placeholder="Pflicht"></label>
+            <label>Batterie (±) <span class="pick-row"><input id="p-flow-battery" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="battery">Auswählen</button></span></label>
           </div>
           <div id="p-flow-split" class="hidden">
-            <label>Batterie Laden <input id="p-flow-battery-charge" readonly placeholder="Pflicht"></label>
-            <label>Batterie Entladen <input id="p-flow-battery-discharge" readonly placeholder="Pflicht"></label>
+            <label>Batterie Laden <span class="pick-row"><input id="p-flow-battery-charge" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="batteryCharge">Auswählen</button></span></label>
+            <label>Batterie Entladen <span class="pick-row"><input id="p-flow-battery-discharge" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="batteryDischarge">Auswählen</button></span></label>
           </div>
-          <label>PV-Erzeugung <input id="p-flow-pv" readonly placeholder="Pflicht"></label>
+          <label>PV-Erzeugung <span class="pick-row"><input id="p-flow-pv" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="pv">Auswählen</button></span></label>
           <label><input id="p-flow-home-override" type="checkbox" checked> Hausverbrauch aus Variable (sonst berechnet)</label>
-          <label id="p-flow-load-wrap">Hausverbrauch <input id="p-flow-load" readonly placeholder="Pflicht wenn oben aktiv"></label>
-          <label>SOC (optional) <input id="p-flow-soc" readonly placeholder="Ladestand %"></label>
+          <label id="p-flow-load-wrap">Hausverbrauch <span class="pick-row"><input id="p-flow-load" readonly placeholder="Pflicht wenn oben aktiv"><button type="button" class="pick-var" data-pick="flow" data-slot="load">Auswählen</button></span></label>
+          <label>SOC (optional) <span class="pick-row"><input id="p-flow-soc" readonly placeholder="Ladestand %"><button type="button" class="pick-var" data-pick="flow" data-slot="soc">Auswählen</button></span></label>
           <div class="row">
             <label>Einheit <input id="p-flow-unit" value="W"></label>
             <label>Nachkommastellen <input id="p-flow-decimals" type="number" min="0" max="3" value="0"></label>
@@ -373,7 +388,7 @@
             <img id="p-image-preview" alt="">
           </div>
           <div id="p-image-media" class="hidden">
-            <label>Medien-Variable <input id="p-image-variable" readonly placeholder="Aus dem Variablenbaum (Typ Medien)"></label>
+            <label>Medien-Variable <span class="pick-row"><input id="p-image-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="image">Auswählen</button></span></label>
             <p class="hint">Integer-Variable mit Media-ID oder Medienobjekt (Typ Bild) aus dem Baum. IP-Symcon liefert die Bilddatei.</p>
           </div>
         </div>
@@ -513,6 +528,18 @@
   </dialog>
 
   <input id="import-file" type="file" accept="application/json" class="hidden">
+  <dialog id="var-picker">
+    <form method="dialog">
+      <h3 id="var-picker-title">Variable auswählen</h3>
+      <input id="var-picker-search" type="search" placeholder="Name, Pfad, ID oder Profil">
+      <label class="small"><input id="var-picker-actions" type="checkbox"> Nur schaltbare</label>
+      <select id="var-picker-list" size="12"></select>
+      <div class="row">
+        <button type="button" id="var-picker-ok">Übernehmen</button>
+        <button type="submit" value="cancel">Abbrechen</button>
+      </div>
+    </form>
+  </dialog>
   <script src="app.js"></script>
 </body>
 </html>
