@@ -201,7 +201,7 @@ function scaledTileHtml(mainText, iconId, subText) {
 
 function fitTileContentBox(box) {
   if (!box) return;
-  if (box.closest && box.closest(".tile.chart")) {
+  if (box.closest && (box.closest(".tile.chart") || box.querySelector(".dim-ctl"))) {
     box.style.setProperty("--tile-scale", "1");
     return;
   }
@@ -247,6 +247,16 @@ function displayMainText(tile, live) {
   return tile.unit ? `${sample} ${tile.unit}` : sample;
 }
 
+function panelSwitchHtml(tile, title, on, iconId, showIcon) {
+  const align = tile && tile.titleAlign === "center" ? "align-center" : (tile && tile.titleAlign === "right" ? "align-right" : "");
+  const titleHtml = tile && tile.showTitle === false ? "" : `<div class="panel-title ${align}">${escapeHtml(title || "")}</div>`;
+  const iconHtml = showIcon
+    ? `<button type="button" class="panel-icon-btn" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile && tile.onColor)}</button>`
+    : "";
+  const stateHtml = tile && tile.showStateText ? `<div class="panel-state">${on ? "Ein" : "Aus"}</div>` : "";
+  return `<div class="panel-switch">${titleHtml}<div class="panel-icon">${iconHtml}</div>${stateHtml}</div>`;
+}
+
 function ohCardMarkup(label, stateHtml, bodyHtml, footHtml, tile) {
   const foot = footHtml ? `<div class="oh-card-foot">${footHtml}</div>` : "";
   const align = tile && tile.titleAlign === "center" ? "align-center" : (tile && tile.titleAlign === "right" ? "align-right" : "");
@@ -259,7 +269,8 @@ function ohCardMarkup(label, stateHtml, bodyHtml, footHtml, tile) {
   if (tile && tile.textItalic) bits.push(`font-style:italic`);
   if (tile && tile.textUnderline) bits.push(`text-decoration:underline`);
   const style = bits.length ? ` style="${bits.join(";")}"` : "";
-  return `<div class="oh-card"><div class="oh-card-head ${align}"><span class="oh-card-label">${title}</span><span class="oh-card-state"${style}>${stateHtml}</span></div><div class="oh-card-body">${bodyHtml || ""}</div>${foot}</div>`;
+  const state = stateHtml ? `<span class="oh-card-state"${style}>${stateHtml}</span>` : "";
+  return `<div class="oh-card"><div class="oh-card-head ${align}"><span class="oh-card-label">${title}</span>${state}</div><div class="oh-card-body">${bodyHtml || ""}</div>${foot}</div>`;
 }
 
 function normalizeTile(tile) {
@@ -340,10 +351,68 @@ const INTERACTION_HINTS = {
 const DIM_CONTROLS = ["dimSwitch", "slider", "combo"];
 const PROBE_INLINE_CONTROLS = ["switch", "iconSwitch", "dimSwitch", "slider", "combo", "blinds", "setpoint"];
 
+function valueOnOf(tile) {
+  if (tile && tile.valueOn != null && tile.valueOn !== "" && Number.isFinite(Number(tile.valueOn))) return Number(tile.valueOn);
+  return DIM_CONTROLS.includes(tile && tile.control) ? (tile.valueMax ?? 100) : 1;
+}
+
+function valueOffOf(tile) {
+  if (tile && tile.valueOff != null && tile.valueOff !== "" && Number.isFinite(Number(tile.valueOff))) return Number(tile.valueOff);
+  return DIM_CONTROLS.includes(tile && tile.control) ? (tile.valueMin ?? 0) : 0;
+}
+
+function levelBounds(tile) {
+  if (tile && DIM_CONTROLS.includes(tile.control)) return { min: valueOffOf(tile), max: valueOnOf(tile) };
+  return { min: tile && tile.valueMin != null ? tile.valueMin : 0, max: tile && tile.valueMax != null ? tile.valueMax : 100 };
+}
+
+function valueMeansOn(tile, value) {
+  if (typeof value === "boolean") return value;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return false;
+  if (DIM_CONTROLS.includes(tile && tile.control)) return number !== valueOffOf(tile);
+  return number === valueOnOf(tile);
+}
+
+function nextSwitchValue(tile, current) {
+  const on = valueOnOf(tile);
+  const off = valueOffOf(tile);
+  if (typeof current === "boolean") return current ? off : on;
+  return Number(current) === on ? off : on;
+}
+
+function probeLive(tile) {
+  const tiles = probe.snapshot && probe.snapshot.state && probe.snapshot.state.tiles;
+  if (!tile || !Array.isArray(tiles)) return null;
+  return tiles.find((item) => item.tileId === tile.tileId) || null;
+}
+
+function probeToggleTarget(tile, visualOn) {
+  const current = numericLiveValue(tile, probeLive(tile));
+  if (current != null) return nextSwitchValue(tile, current);
+  return nextSwitchValue(tile, visualOn ? valueOnOf(tile) : valueOffOf(tile));
+}
+
+function liveIsOn(tile, live, demoOn) {
+  if (live && typeof live.value === "boolean") return live.value;
+  if (live && typeof live.value === "number" && Number.isFinite(live.value)) return valueMeansOn(tile, live.value);
+  if (live && live.text) {
+    const text = String(live.text).trim();
+    if (/^(true|ein|an|on)$/i.test(text)) return true;
+    if (/^(false|aus|off)$/i.test(text)) return false;
+    const match = text.replace(",", ".").match(/-?\d+(?:\.\d+)?/);
+    if (match) return valueMeansOn(tile, parseFloat(match[0]));
+  }
+  return Boolean(demoOn);
+}
+
 function numericLiveValue(tile, live) {
   if (!live) return null;
   if (typeof live.value === "number" && !Number.isNaN(live.value)) return live.value;
-  if (typeof live.value === "boolean") return live.value ? (tile.valueMax ?? 100) : (tile.valueMin ?? 0);
+  if (typeof live.value === "boolean") {
+    if (DIM_CONTROLS.includes(tile && tile.control) || (tile && tile.control === "switch")) return live.value ? valueOnOf(tile) : valueOffOf(tile);
+    return live.value ? (tile.valueMax ?? 100) : (tile.valueMin ?? 0);
+  }
   if (live.text) {
     const match = String(live.text).replace(",", ".").match(/-?\d+(?:\.\d+)?/);
     if (match) return parseFloat(match[0]);
@@ -352,8 +421,9 @@ function numericLiveValue(tile, live) {
 }
 
 function dimPercentFromTile(tile, live, fallbackPct) {
-  const min = tile.valueMin ?? 0;
-  const max = tile.valueMax ?? 100;
+  const bounds = levelBounds(tile);
+  const min = bounds.min;
+  const max = bounds.max;
   const span = max - min || 1;
   const v = numericLiveValue(tile, live);
   if (v == null) return fallbackPct != null ? fallbackPct : 50;
@@ -361,12 +431,19 @@ function dimPercentFromTile(tile, live, fallbackPct) {
 }
 
 function valueFromDimPercent(tile, pct) {
-  const min = tile.valueMin ?? 0;
-  const max = tile.valueMax ?? 100;
+  const bounds = levelBounds(tile);
+  const min = bounds.min;
+  const max = bounds.max;
   const raw = min + (pct / 100) * (max - min);
   const decimals = tile.decimals != null ? tile.decimals : 0;
   if (decimals <= 0) return Math.round(raw);
   return Math.round(raw * 10 ** decimals) / 10 ** decimals;
+}
+
+function percentForLevel(tile, value) {
+  const bounds = levelBounds(tile);
+  const span = bounds.max - bounds.min || 1;
+  return Math.min(100, Math.max(0, ((Number(value) - bounds.min) / span) * 100));
 }
 
 function dimTapTrackEnabled(tile, control) {
@@ -537,6 +614,7 @@ function syncInteractionPropertyPanels() {
   $("p-dim-tap-wrap")?.classList.toggle("hidden", mode !== "combo" && mode !== "blinds");
   $("p-value-format")?.classList.toggle("hidden", mode === "switch");
   $("p-own-on-wrap")?.classList.toggle("hidden", mode !== "switch" && mode !== "combo");
+  $("p-level-wrap")?.classList.toggle("hidden", mode !== "switch" && mode !== "combo");
   const bgLabel = $("p-own-bg-label");
   if (bgLabel) bgLabel.textContent = mode === "switch" || mode === "combo" ? "Farbe Aus" : "Eigene Farbe";
   if (plain) { /* Anzeige ohne Schaltergrafik */ }
@@ -812,7 +890,7 @@ function effectiveIcon(tile, liveValue, demoOn) {
     let on = demoOn;
     if (on === undefined && liveValue !== undefined && liveValue !== null) {
       if (typeof liveValue === "boolean") on = liveValue;
-      else if (typeof liveValue === "number") on = liveValue > (tile.valueMin ?? 0);
+      else if (typeof liveValue === "number") on = valueMeansOn(tile, liveValue);
       else on = Boolean(liveValue);
     }
     return on ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff");
@@ -1293,28 +1371,46 @@ function buildTileElement(tile, context) {
     const switchTile = interaction === "switch" && Boolean(tile.actionId);
     if (switchTile) {
       element.classList.add("as-switch");
-      let on = Boolean(demoOn);
-      if (live && typeof live.value === "boolean") on = live.value;
-      else if (live && live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
+      const on = liveIsOn(tile, live, demoOn);
       element.classList.toggle("on", on);
     }
     const showIcon = switchTile && tile.showIcon !== false;
-    const iconId = showIcon ? effectiveIcon(Object.assign({}, tile, { iconMode: "toggle" }), live ? live.value : undefined, demoOn) : (tile.icon || "");
+    const dimTile = DIM_CONTROLS.includes(control) || (tile.actionKind === "dim" && control !== "setpoint");
+    const iconId = showIcon ? effectiveIcon(Object.assign({}, tile, { iconMode: "toggle" }), live ? live.value : undefined, demoOn) : (dimTile ? "" : (tile.icon || ""));
     const kicker = INTERACTION_NAMES[interaction] || CONTROL_NAMES[control] || (interaction === "" ? "Wert" : `${iconName(iconId)}${tile.actionId ? " · schaltbar" : ""}`);
     const body = showIcon ? "" : controlMarkup(control, tile, live, demoOn);
     const displayText = live && live.text ? live.text : (variable ? "12,3" : "—");
     const label = tile.title || (variable ? variable.name : "Wert");
     let on = element.classList.contains("on");
-    const stateLine = switchTile
-      ? (tile.showStateText ? (on ? "Ein" : "Aus") : "")
-      : (escapeHtml(displayText) + (body ? "" : (tile.unit ? " " + escapeHtml(tile.unit) : "")));
-    let cardBody;
-    if (showIcon) {
-      cardBody = `<button type="button" class="oh-icon-toggle" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile.onColor)}</button>`;
+    if (mode === "probe" && switchTile) {
+      element.innerHTML = panelSwitchHtml(tile, label, on, iconId, showIcon);
     } else {
-      cardBody = body || (iconId && interaction === "" ? `<div class="oh-card-icon">${iconVisual(iconId, on, tile.onColor)}</div>` : "");
+      const stateLine = switchTile
+        ? (tile.showStateText ? (on ? "Ein" : "Aus") : "")
+        : (interaction === "" ? "" : (escapeHtml(displayText) + (body ? "" : (tile.unit ? " " + escapeHtml(tile.unit) : ""))));
+      let cardBody;
+      if (showIcon) {
+        cardBody = `<button type="button" class="oh-icon-toggle" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile.onColor)}</button>`;
+      } else if (interaction === "") {
+        const align = tile.titleAlign === "center" ? "align-center" : (tile.titleAlign === "right" ? "align-right" : "align-left");
+        const core = live && live.text ? live.text : (!variable ? "—" : ((variable.type === 1 || variable.type === 2) ? "12,3" : "Ein"));
+        const readout = live && live.text ? core : `${tile.prefix ? tile.prefix + " " : ""}${core}${tile.unit ? " " + tile.unit : ""}`;
+        const sizes = { small: "0.85em", large: "1.35em", xlarge: "1.8em" };
+        const bits = [];
+        if (tile.textColor) bits.push(`color:${tile.textColor}`);
+        if (sizes[tile.textSize]) bits.push(`font-size:${sizes[tile.textSize]}`);
+        if (tile.textBold) bits.push("font-weight:700");
+        if (tile.textItalic) bits.push("font-style:italic");
+        if (tile.textUnderline) bits.push("text-decoration:underline");
+        const readoutStyle = bits.length ? ` style="${bits.join(";")}"` : "";
+        const iconStyle = tile.textColor ? ` style="color:${tile.textColor}"` : "";
+        const iconHtml = iconId ? `<div class="oh-card-icon"${iconStyle}>${iconVisual(iconId)}</div>` : "";
+        cardBody = `<div class="value-stack ${align}">${iconHtml}<div class="value-readout"${readoutStyle}>${escapeHtml(readout)}</div></div>`;
+      } else {
+        cardBody = body || "";
+      }
+      element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, stateLine, cardBody, "", tile)}</div>`;
     }
-    element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, stateLine, cardBody, "", tile)}</div>`;
     if (DIM_CONTROLS.includes(control) || control === "blinds" || control === "setpoint" || (control === "switch" && tile.actionId) || (interaction === "switch" && tile.showIcon !== false && tile.actionId)) {
       bindTileControls(element, tile, mode, live);
     }
@@ -1367,7 +1463,11 @@ function buildTileElement(tile, context) {
       ? `<button type="button" class="oh-icon-toggle" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile.onColor)}</button>`
       : "";
     const kicker = steps.length ? `Szene · ${steps.length} Lampen` : "Szene";
-    element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, escapeHtml(stateText), cardBody, "", tile)}</div>`;
+    if (mode === "probe") {
+      element.innerHTML = panelSwitchHtml(tile, label, on, iconId, showIcon);
+    } else {
+      element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, escapeHtml(stateText), cardBody, "", tile)}</div>`;
+    }
     if (tile.actionId) bindTileControls(element, tile, mode, live);
   } else if (tile.kind === "weather") {
     element.classList.add("oh-style", "weather");
@@ -1460,24 +1560,36 @@ function buildTileElement(tile, context) {
     bindDrop(element, tile.col, tile.row, tile);
     if (state.selected === tile.tileId) bindResizeHandles(element, tile);
   }
-  if (mode === "probe" && tile.actionId && !tileHasInlineProbeControl(tile)) {
-    const action = document.createElement("button");
-    action.type = "button";
-    action.textContent = tile.actionKind === "dim" ? "Wert senden" : "Schalten";
-    action.addEventListener("click", (event) => {
-      event.stopPropagation();
-      sendProbeAction(tile);
-    });
-    element.appendChild(action);
-  }
   if (mode === "probe" && tile.kind === "nav" && tile.targetPage) {
     element.style.cursor = "pointer";
     element.addEventListener("click", () => {
       probe.page = tile.targetPage;
       renderProbe();
     });
+  } else if (mode === "probe" && tile.actionId) {
+    const iconSwitch = (tile.kind === "scene" || tileInteractionMode(tile) === "switch") && tile.showIcon !== false;
+    const inline = tileHasInlineProbeControl(tile) || iconSwitch;
+    const panelTap = tile.kind === "scene" || tileInteractionMode(tile) === "switch";
+    if (panelTap) {
+      element.style.cursor = "pointer";
+      element.addEventListener("click", (event) => {
+        if (event.target.closest("[data-icon-toggle], .sw, .ctl, button")) return;
+        const iconBtn = element.querySelector("[data-icon-toggle]");
+        if (iconBtn) {
+          iconBtn.click();
+          return;
+        }
+        sendProbeAction(tile, { value: String(probeToggleTarget(tile, element.classList.contains("on"))) });
+      });
+    } else if (!inline) {
+      element.style.cursor = "pointer";
+      element.addEventListener("click", (event) => {
+        if (event.target.closest("button, .ctl, [data-dim-track]")) return;
+        sendProbeAction(tile);
+      });
+    }
   }
-  if (spanW > 1 || spanH > 1) {
+  if (mode !== "probe" && (spanW > 1 || spanH > 1)) {
     const badge = document.createElement("span");
     badge.className = "span-badge";
     badge.textContent = `${spanW}×${spanH}`;
@@ -1500,9 +1612,8 @@ function dimTrackMarkup(tile, control, live, pct) {
   const showBar = tile.dimShowBar !== false;
   const showValue = tile.dimShowPercent !== false;
   const layout = tile.dimLayout || "horizontal";
-  const min = tile.valueMin ?? 0;
   const numeric = numericLiveValue(tile, live);
-  const swOn = numeric != null ? numeric > min + 0.001 : pct > 2;
+  const swOn = numeric != null ? valueMeansOn(tile, numeric) : pct > 0;
   const swHtml = showSw ? `<span class="sw${swOn ? " on" : ""}"></span>` : "";
   const valueHtml = showValue ? `<span class="ctl-value">${pct} %</span>` : "";
   const stateHtml = tile.dimShowStateText ? `<span class="ctl-value">${swOn ? "Ein" : "Aus"}</span>` : "";
@@ -1524,9 +1635,7 @@ function controlMarkup(control, tile, live, demoOn) {
   }
   if (control === "switch") {
     if (!tile.actionId) return "";
-    let on = Boolean(demoOn);
-    if (live && typeof live.value === "boolean") on = live.value;
-    else if (live && live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
+    let on = liveIsOn(tile, live, demoOn);
     return `<div class="ctl"><span class="sw${on ? " on" : ""}"></span></div>`;
   }
   if (control === "battery") {
@@ -1562,7 +1671,7 @@ function applyDimVisual(element, pct, tile) {
   if (valueEl) valueEl.textContent = `${clamped} %`;
   const control = tile.control || "switch";
   const sw = element.querySelector(".sw");
-  if (sw && control === "combo") sw.classList.toggle("on", clamped > 2);
+  if (sw && control === "combo") sw.classList.toggle("on", clamped > 0);
   element.dataset.lastDimPct = String(clamped);
   return clamped;
 }
@@ -1595,16 +1704,17 @@ function bindTileControls(element, tile, mode, live) {
     iconToggle.addEventListener("pointerdown", stop);
     iconToggle.addEventListener("click", (event) => {
       stop(event);
-      const on = iconToggle.getAttribute("aria-pressed") === "true";
-      const next = !on;
-      iconToggle.setAttribute("aria-pressed", next ? "true" : "false");
-      iconToggle.innerHTML = iconVisual(next ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff"), next, tile.onColor);
-      element.classList.toggle("on", next);
+      const wasOn = iconToggle.getAttribute("aria-pressed") === "true";
+      const target = probeToggleTarget(tile, wasOn);
+      const nowOn = valueMeansOn(tile, target);
+      iconToggle.setAttribute("aria-pressed", nowOn ? "true" : "false");
+      iconToggle.innerHTML = iconVisual(nowOn ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff"), nowOn);
+      element.classList.toggle("on", nowOn);
       if (mode === "edit") {
-        state.editorIconDemo[tile.tileId] = next;
+        state.editorIconDemo[tile.tileId] = nowOn;
         return;
       }
-      if (mode === "probe" && tile.actionId) sendProbeAction(tile, { switchToggle: true });
+      if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(target) });
     });
   }
 
@@ -1613,38 +1723,17 @@ function bindTileControls(element, tile, mode, live) {
     sw.addEventListener("click", (event) => {
       stop(event);
       const wasOn = sw.classList.contains("on");
-      if (control === "switch") {
-        sw.classList.toggle("on");
-        element.classList.toggle("on", sw.classList.contains("on"));
-        if (mode === "probe" && tile.actionId) sendProbeAction(tile, { switchToggle: true });
-        return;
+      const target = probeToggleTarget(tile, wasOn);
+      const nowOn = valueMeansOn(tile, target);
+      if (DIM_CONTROLS.includes(control)) {
+        applyDimVisual(element, percentForLevel(tile, target), tile);
+        sw.classList.toggle("on", nowOn);
+        syncSwitchOffState();
+      } else {
+        sw.classList.toggle("on", nowOn);
+        element.classList.toggle("on", nowOn);
       }
-      if (DIM_CONTROLS.includes(control) && tile.dimShowSwitch !== false) {
-        if (wasOn) {
-          lastPct = applyDimVisual(element, Number(element.dataset.lastDimPct || lastPct) || lastPct, tile);
-          element.dataset.storedDimPct = String(lastPct);
-          sw.classList.remove("on");
-          applyDimVisual(element, 0, tile);
-          syncSwitchOffState();
-          if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(tile.valueMin ?? 0) });
-        } else {
-          sw.classList.add("on");
-          const restore = Number(element.dataset.storedDimPct || element.dataset.lastDimPct || 50) || 50;
-          applyDimVisual(element, restore, tile);
-          syncSwitchOffState();
-          if (mode === "probe" && tile.actionId) {
-            sendProbeAction(tile, { value: String(valueFromDimPercent(tile, Number(element.dataset.lastDimPct || restore))) });
-          }
-        }
-        return;
-      }
-      sw.classList.toggle("on");
-      if (control === "combo") {
-        if (!sw.classList.contains("on")) {
-          applyDimVisual(element, 0, tile);
-          if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(tile.valueMin ?? 0) });
-        } else if (mode === "probe" && tile.actionId) sendProbeAction(tile, { switchToggle: true });
-      }
+      if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(target) });
     });
   }
   syncSwitchOffState();
@@ -1805,7 +1894,7 @@ function addTile(kind, col, row, variable, control) {
   const tile = { tileId: `t${stamp}`, kind, title: "", col, row, colSpan: 1, rowSpan: 1 };
   if (kind === "value") {
     tile.displaySource = "variable";
-    tile.icon = DIM_CONTROLS.includes(control) || control === "battery" ? (control === "battery" ? "energy" : "light") : "energy";
+    if (!DIM_CONTROLS.includes(control)) tile.icon = "energy";
     tile.variableId = 0;
     tile.unit = DIM_CONTROLS.includes(control) || control === "battery" ? "%" : "";
     tile.decimals = 0;
@@ -1819,10 +1908,14 @@ function addTile(kind, col, row, variable, control) {
       tile.actionKind = "dim";
       tile.valueMin = 0;
       tile.valueMax = 100;
+      tile.valueOff = 0;
+      tile.valueOn = 100;
       tile.actionId = tile.actionId || ("a" + stamp);
     } else if (control) {
       tile.control = control;
       tile.actionKind = "switch";
+      tile.valueOff = 0;
+      tile.valueOn = 1;
       tile.actionId = tile.actionId || ("a" + stamp);
     } else {
       /* Reine Wertanzeige – kein Schalten */
@@ -2287,6 +2380,8 @@ function renderProperties() {
       else if (tap === "popup") $("p-dim-tap").value = "popup";
       else $("p-dim-tap").value = tile.control === "blinds" ? "on" : "popup";
     }
+    if ($("p-value-on")) $("p-value-on").value = String(valueOnOf(tile));
+    if ($("p-value-off")) $("p-value-off").value = String(valueOffOf(tile));
   }
   const variable = variableById(tile.variableId);
   const mediaObj = tile.mediaObjectId ? variableById(tile.mediaObjectId) : null;
@@ -2525,6 +2620,7 @@ function applyProperties() {
     }
     if (mode === "combo") {
       tile.control = "combo";
+      delete tile.icon;
       tile.dimShowSwitch = Boolean($("p-dim-show-switch")?.checked);
       tile.dimShowBar = Boolean($("p-dim-show-bar")?.checked);
       if ($("p-dim-show-state-text")?.checked) tile.dimShowStateText = true;
@@ -2557,6 +2653,17 @@ function applyProperties() {
       tile.valueMin = tile.valueMin ?? 0;
       tile.valueMax = tile.valueMax ?? 100;
       if (!tile.unit) tile.unit = "%";
+    }
+    if (mode === "switch" || mode === "combo") {
+      const onRaw = $("p-value-on") ? $("p-value-on").value.trim() : "";
+      const offRaw = $("p-value-off") ? $("p-value-off").value.trim() : "";
+      const onNum = Number(onRaw);
+      const offNum = Number(offRaw);
+      tile.valueOn = onRaw !== "" && Number.isFinite(onNum) ? onNum : (mode === "combo" ? (tile.valueMax ?? 100) : 1);
+      tile.valueOff = offRaw !== "" && Number.isFinite(offNum) ? offNum : (mode === "combo" ? (tile.valueMin ?? 0) : 0);
+    } else {
+      delete tile.valueOn;
+      delete tile.valueOff;
     }
     if (DIM_CONTROLS.includes(mode) || mode === "blinds") {
       if ($("p-dim-show-percent") && !$("p-dim-show-percent").checked) tile.dimShowPercent = false;
@@ -2761,7 +2868,7 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-title-align", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-title-align", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
@@ -3042,16 +3149,10 @@ function iconCode(icon, on) {
   return found && found[2] ? found[2] : 0;
 }
 
-function iconLit(icon, on) {
-  return icon === "lightOn" || (icon === "light" && !!on);
-}
-
-function iconVisual(icon, on, onColor) {
+function iconVisual(icon, on) {
   const code = iconCode(icon, on);
   if (!code) return escapeHtml(iconName(icon));
-  const lit = iconLit(icon, on) && onColor && /^#[0-9a-fA-F]{6}$/.test(onColor);
-  const style = lit ? ` style="color:${onColor}"` : "";
-  return `<span class="mdi"${style}>&#x${code.toString(16)};</span>`;
+  return `<span class="mdi">&#x${code.toString(16)};</span>`;
 }
 
 function labelTextClass(tile) {
@@ -3185,16 +3286,21 @@ function fillVariablePickerList() {
     return variableMatches(variable, needle);
   });
   for (const variable of matches.slice(0, 200)) {
-    const option = document.createElement("option");
-    option.value = String(variable.id);
-    option.textContent = `${variable.path ? variable.path + " / " : ""}${variable.name} (${variable.id})${variable.action ? " · schaltbar" : ""}`;
-    list.appendChild(option);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.dataset.id = String(variable.id);
+    row.textContent = `${variable.path ? variable.path + " / " : ""}${variable.name} (${variable.id})${variable.action ? " · schaltbar" : ""}`;
+    row.addEventListener("click", () => {
+      for (const item of list.querySelectorAll("button.selected")) item.classList.remove("selected");
+      row.classList.add("selected");
+    });
+    list.appendChild(row);
   }
 }
 
 function acceptVariablePicker() {
-  const list = $("var-picker-list");
-  const id = Number(list && list.value);
+  const selected = $("var-picker-list")?.querySelector("button.selected");
+  const id = Number(selected && selected.dataset.id);
   const variable = variableById(id);
   const tile = selectedTile();
   if (!variable || !tile || !pickerState) return;
@@ -3764,29 +3870,43 @@ function applyLiveStateToProbeTile(element, tile, live) {
     const ohFoot = element.querySelector(".oh-card-foot");
     if (ohFoot && live.forecast != null) ohFoot.textContent = live.forecast;
   } else if (tile.kind === "scene") {
-    if (ohState) ohState.textContent = tile.actionId ? "Tippen" : "—";
+    let on = false;
+    if (typeof live.value === "boolean") on = live.value;
+    element.classList.toggle("on", Boolean(tile.actionId) && on);
+    const panelState = element.querySelector(".panel-state");
+    if (panelState) panelState.textContent = on ? "Ein" : "Aus";
+    else if (ohState) ohState.textContent = tile.showStateText ? (on ? "Ein" : "Aus") : (tile.actionId ? "Tippen" : "—");
+    const iconBtn = element.querySelector("[data-icon-toggle]");
+    if (iconBtn && tile.showIcon !== false) {
+      const iconId = on ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff");
+      iconBtn.innerHTML = iconVisual(iconId, on, tile.onColor);
+      iconBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    }
   } else if (tile.kind === "value") {
     if (ohState && live.text != null && live.text !== "") {
       ohState.innerHTML = escapeHtml(live.text);
     }
     const iconBtn = element.querySelector("[data-icon-toggle]");
     if (iconBtn && tileInteractionMode(tile) === "switch" && tile.showIcon !== false) {
-      let on = false;
-      if (typeof live.value === "boolean") on = live.value;
-      else if (typeof live.value === "number") on = live.value > (tile.valueMin ?? 0);
-      else if (live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
+      const on = liveIsOn(tile, live, false);
       const iconId = effectiveIcon(tile, live.value, undefined);
       iconBtn.innerHTML = iconVisual(iconId, on, tile.onColor);
       iconBtn.setAttribute("aria-pressed", on ? "true" : "false");
       element.classList.toggle("on", on);
+      const panelState = element.querySelector(".panel-state");
+      if (panelState && tile.showStateText) panelState.textContent = on ? "Ein" : "Aus";
     }
     const sw = element.querySelector(".sw");
     if (sw && tile.control === "switch" && tile.actionId && tile.showIcon === false) {
-      let on = false;
-      if (typeof live.value === "boolean") on = live.value;
-      else if (live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
+      const on = liveIsOn(tile, live, false);
       sw.classList.toggle("on", on);
       element.classList.toggle("on", on);
+    }
+    const panelState = element.querySelector(".panel-state");
+    if (panelState && tile.showStateText && !(iconBtn && tile.showIcon !== false)) {
+      const on = liveIsOn(tile, live, false);
+      element.classList.toggle("on", on);
+      panelState.textContent = on ? "Ein" : "Aus";
     }
     if (live.value != null && live.value !== "" && element.querySelector(".dim-ctl")) {
       const pct = dimPercentFromTile(tile, live);
@@ -3863,15 +3983,29 @@ async function loadProbeImages(layout, panelId, stateTiles) {
   }
 }
 
+function paintProbeClock() {
+  const el = $("probe-clock");
+  if (!el) return;
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  el.textContent = `${hh}:${mm}`;
+}
+
 function renderProbe() {
   const grid = $("probe-grid");
-  const pages = $("probe-pages");
   const tabs = $("probe-tabs");
+  const home = $("probe-home");
   grid.innerHTML = "";
-  pages.innerHTML = "";
   tabs.innerHTML = "";
+  if (home && !home.dataset.ready) {
+    home.innerHTML = iconVisual("home");
+    home.dataset.ready = "1";
+  }
+  paintProbeClock();
   const layout = probe.snapshot && probe.snapshot.layout;
   if (!layout || !(layout.pages || []).length) {
+    tabs.classList.add("hidden");
     grid.innerHTML = '<div class="hint" style="color:#9fb2c8;padding:12px">Diese Anzeige hat keine Ansicht.</div>';
     return;
   }
@@ -3901,9 +4035,10 @@ function renderProbe() {
     metaText += ` · Anzeige-Hardware: ${profileLabel(panel.displayProfile)}`;
   }
   $("probe-meta").textContent = metaText;
-  if (layout.showTabs) {
+  const showTabs = layout.showTabs !== false && (layout.pages || []).length > 1;
+  if (showTabs) {
     tabs.classList.remove("hidden");
-    for (const page of layout.pages) {
+    for (const page of layout.pages.slice(0, 6)) {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = page.title || page.id;
@@ -3916,17 +4051,6 @@ function renderProbe() {
     }
   } else {
     tabs.classList.add("hidden");
-    for (const page of layout.pages) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = page.title || page.id;
-      if (page.id === probe.page) button.classList.add("active");
-      button.addEventListener("click", () => {
-        probe.page = page.id;
-        renderProbe();
-      });
-      pages.appendChild(button);
-    }
   }
   const current = layout.pages.find((page) => page.id === probe.page);
   applyPageBackground(grid, current || null);
@@ -4020,10 +4144,15 @@ function stopProbeTimer() {
     clearInterval(probe.timer);
     probe.timer = null;
   }
+  if (probe.clockTimer) {
+    clearInterval(probe.clockTimer);
+    probe.clockTimer = null;
+  }
 }
 
 function startProbeTimer() {
   stopProbeTimer();
+  probe.clockTimer = setInterval(paintProbeClock, 1000);
   if (!$("probe-live").checked) return;
   const sec = Math.max(2, Number(probe.snapshot && probe.snapshot.config && probe.snapshot.config.stateIntervalSec) || 3);
   probe.timer = setInterval(() => {
@@ -4137,6 +4266,13 @@ $("probe-panel").addEventListener("change", () => {
   loadProbe(true).catch((error) => setStatus(error.message));
 });
 $("probe-refresh").addEventListener("click", () => loadProbe(true).catch((error) => setStatus(error.message)));
+$("probe-home").addEventListener("click", () => {
+  const layout = probe.snapshot && probe.snapshot.layout;
+  const first = layout && layout.pages && layout.pages[0];
+  if (!first) return;
+  probe.page = first.id;
+  renderProbe();
+});
 $("open-probe").addEventListener("click", openProbe);
 
 /* ---------- Start ---------- */

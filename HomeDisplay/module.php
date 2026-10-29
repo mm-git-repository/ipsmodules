@@ -226,7 +226,7 @@ class HomeDisplay extends IPSModuleStrict
         return $this->encode(['ok' => true, 'tiles' => $state['tiles'] ?? []]);
     }
 
-    /** Führt eine freigegebene Kachelaktion dieser Anzeige aus. Leerer Wert schaltet um. Optional $TileJson = Kachel aus Editor/Prüfung. */
+    /** Führt eine freigegebene Kachelaktion dieser Anzeige aus. Der gesendete Wert ist der Zielwert. Optional $TileJson = Kachel aus Editor/Prüfung. */
     public function SimulateAction(string $TileId, string $ActionId, string $Value = '', string $TileJson = ''): string
     {
         try {

@@ -48,7 +48,7 @@
       <button type="button" id="open-settings">Einstellungen …</button>
     </div>
     <div class="menu">
-      <button type="button" id="open-probe">Prüfen …</button>
+      <button type="button" id="open-probe">Testclient</button>
     </div>
     <span id="title" class="title"></span>
   </div>
@@ -355,6 +355,10 @@
           </div>
           <p id="p-control-hint" class="hint hidden"></p>
           <label><input id="p-action" type="checkbox"> Schaltbar</label>
+          <div id="p-level-wrap" class="hidden">
+            <label>Wert An <input id="p-value-on" type="number" step="any"></label>
+            <label>Wert Aus <input id="p-value-off" type="number" step="any"></label>
+          </div>
           <label><input id="p-confirm" type="checkbox"> Bestätigung an der Anzeige</label>
         </div>
         <div data-for="nav">
@@ -511,7 +515,7 @@
 
   <dialog id="probe-dialog">
     <form method="dialog" class="probe-form">
-      <h3>Prüfen</h3>
+      <h3>Testclient</h3>
       <p class="hint">Live-Vorschau im gewählten Display-Profil. Aktionen werden in IP-Symcon wirklich ausgeführt.</p>
       <div class="probe-toolbar">
         <fieldset class="probe-source">
@@ -522,13 +526,16 @@
         <label class="probe-panel-pick">Panel <select id="probe-panel"></select></label>
         <label class="probe-live-pick"><input id="probe-live" type="checkbox" checked> Live</label>
         <button type="button" id="probe-refresh">Aktualisieren</button>
-        <div id="probe-pages" class="probe-pages"></div>
         <span id="probe-meta" class="hint probe-meta-inline"></span>
       </div>
       <div id="probe-viewport">
         <div id="probe-stage">
           <div id="probe-screen">
-            <div id="probe-tabs" class="hidden"></div>
+            <div id="probe-header">
+              <button type="button" id="probe-home" class="probe-home" aria-label="Startseite"></button>
+              <div id="probe-tabs"></div>
+              <div id="probe-clock">--:--</div>
+            </div>
             <div id="probe-grid"></div>
           </div>
         </div>
@@ -557,7 +564,7 @@
       <h3 id="var-picker-title">Variable auswählen</h3>
       <input id="var-picker-search" type="search" placeholder="Name, Pfad, ID oder Profil">
       <label class="small"><input id="var-picker-actions" type="checkbox"> Nur schaltbare</label>
-      <select id="var-picker-list" size="12"></select>
+      <div id="var-picker-list" role="listbox"></div>
       <div class="row">
         <button type="button" id="var-picker-ok">Übernehmen</button>
         <button type="submit" value="cancel">Abbrechen</button>

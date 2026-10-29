@@ -108,27 +108,51 @@ final class HomeDisplayPanelActionGuard
     }
 
     /**
-     * Zielwert aus Kachelart und aktuellem Wert. Schalten ohne Wert bedeutet Umschalten.
+     * Schreibt den gesendeten Zielwert. Bei Ja/Nein wird 0 zu false und jeder andere Wert zu true.
      *
      * @param array<string, mixed> $tile
      */
     public static function value(array $tile, mixed $current, mixed $value): mixed
     {
         $kind = (string) ($tile['actionKind'] ?? 'switch');
-        /* Schalten: immer umschalten. Absolute 0/1 vom Panel waren oft der Ist-Wert und haben nichts geändert. */
-        if ($kind === 'switch') {
-            return !((bool) $current);
-        }
         if (!is_numeric($value)) {
             throw new InvalidArgumentException('Wert fehlt.');
         }
         $number = (float) $value;
-        $min = array_key_exists('valueMin', $tile) ? (float) $tile['valueMin'] : 0.0;
-        $max = array_key_exists('valueMax', $tile) ? (float) $tile['valueMax'] : 100.0;
-        if ($number < $min || $number > $max) {
-            throw new InvalidArgumentException('Wert außerhalb des zulässigen Bereichs.');
+        if ($kind === 'dim' || $kind === 'position') {
+            [$min, $max] = self::span($tile, $kind === 'dim');
+            if ($number < $min || $number > $max) {
+                throw new InvalidArgumentException('Wert außerhalb des zulässigen Bereichs.');
+            }
         }
-        return is_int($current) ? (int) round($number) : $number;
+        return self::storedValue($current, $number);
+    }
+
+    /**
+     * @param array<string, mixed> $tile
+     * @return array{0: float, 1: float}
+     */
+    private static function span(array $tile, bool $dim): array
+    {
+        if ($dim) {
+            $off = array_key_exists('valueOff', $tile) ? (float) $tile['valueOff'] : (array_key_exists('valueMin', $tile) ? (float) $tile['valueMin'] : 0.0);
+            $on = array_key_exists('valueOn', $tile) ? (float) $tile['valueOn'] : (array_key_exists('valueMax', $tile) ? (float) $tile['valueMax'] : 100.0);
+        } else {
+            $off = array_key_exists('valueMin', $tile) ? (float) $tile['valueMin'] : 0.0;
+            $on = array_key_exists('valueMax', $tile) ? (float) $tile['valueMax'] : 100.0;
+        }
+        return [min($off, $on), max($off, $on)];
+    }
+
+    private static function storedValue(mixed $current, float $number): mixed
+    {
+        if (is_bool($current)) {
+            return $number != 0.0;
+        }
+        if (is_int($current)) {
+            return (int) round($number);
+        }
+        return $number;
     }
 
     /** @param array<string, mixed> $variable */

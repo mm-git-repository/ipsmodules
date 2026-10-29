@@ -887,11 +887,15 @@ static void pull_manifest(char *response, size_t length)
 
 static void post_action(const char *tile_id, const char *action_id, int value)
 {
-    if (!actions) return;
+    if (!actions || !tile_id || !action_id) return;
     action_message_t message = {0};
     snprintf(message.tile, sizeof(message.tile), "%s", tile_id);
     snprintf(message.action, sizeof(message.action), "%s", action_id);
     message.value = value;
+    if (xQueueSend(actions, &message, 0) == pdTRUE) return;
+    /* Volle Schlange: ältesten Tipp verdrängen, damit der letzte ankommt. */
+    action_message_t dropped;
+    xQueueReceive(actions, &dropped, 0);
     xQueueSend(actions, &message, 0);
 }
 
@@ -1099,7 +1103,7 @@ static void client_task(void *argument)
 
 void homedisplay_client_start(void)
 {
-    actions = xQueueCreate(4, sizeof(action_message_t));
+    actions = xQueueCreate(8, sizeof(action_message_t));
     BaseType_t ok = xTaskCreate(client_task, "homedisplay", 12288, NULL, 4, NULL);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Client-Task konnte nicht gestartet werden (Speicher)");

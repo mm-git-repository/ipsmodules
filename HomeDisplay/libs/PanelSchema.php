@@ -383,14 +383,19 @@ final class HomeDisplayPanelSchema
                         $public['suffix'] = $suffix;
                         $public['unit'] = $suffix;
                     }
-                    $icon = (string) ($tile['icon'] ?? '');
-                    if ($icon !== '' && in_array($icon, self::ICONS, true)) {
-                        $public['icon'] = $icon;
-                    }
                     $actionId = trim((string) ($tile['actionId'] ?? ''));
                     $control = (string) ($tile['control'] ?? 'switch');
                     if (!in_array($control, self::CONTROLS, true)) {
                         $control = 'switch';
+                    }
+                    $actionKind = (string) ($tile['actionKind'] ?? '');
+                    $isDimmer = in_array($control, ['dimSwitch', 'slider', 'combo'], true)
+                        || ($actionKind === 'dim' && $control !== 'setpoint');
+                    $icon = (string) ($tile['icon'] ?? '');
+                    if ($isDimmer) {
+                        unset($public['icon']);
+                    } elseif ($icon !== '' && in_array($icon, self::ICONS, true)) {
+                        $public['icon'] = $icon;
                     }
                     if ($actionId !== '') {
                         $public['control'] = $control;
@@ -432,6 +437,15 @@ final class HomeDisplayPanelSchema
                                 $public['dimTapTrack'] = 'off';
                             }
                         }
+                    }
+                    if ($control === 'switch' || in_array($control, ['dimSwitch', 'slider', 'combo'], true)) {
+                        $dim = $control !== 'switch';
+                        $public['valueOn'] = array_key_exists('valueOn', $tile)
+                            ? (float) $tile['valueOn']
+                            : ($dim ? (float) ($tile['valueMax'] ?? 100) : 1.0);
+                        $public['valueOff'] = array_key_exists('valueOff', $tile)
+                            ? (float) $tile['valueOff']
+                            : ($dim ? (float) ($tile['valueMin'] ?? 0) : 0.0);
                     }
                     if ($control === 'setpoint' && isset($tile['setpointVariableId'])) {
                         $public['setpointVariableId'] = (int) $tile['setpointVariableId'];
