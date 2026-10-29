@@ -355,6 +355,10 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
                 $this->sendFile('app.js', 'text/javascript; charset=utf-8');
                 return;
             }
+            if ($method === 'GET' && $route === '/mdi.woff2') {
+                $this->sendFile('mdi.woff2', 'font/woff2');
+                return;
+            }
             if ($method === 'GET' && str_starts_with($route, '/images/')) {
                 $this->sendImage(substr($route, strlen('/images/')));
                 return;

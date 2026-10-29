@@ -1,0 +1,6 @@
+Material Design Icons by Pictogrammers
+https://pictogrammers.com/library/mdi/
+https://github.com/Templarian/MaterialDesign
+
+Licensed under the Apache License, Version 2.0.
+HomeDisplay ships a subset: the editor font mdi.woff2 and the LVGL fonts mdi_28 and mdi_48.

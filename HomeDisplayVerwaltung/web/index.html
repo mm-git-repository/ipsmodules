@@ -208,11 +208,25 @@
           <div id="p-scene-steps"></div>
           <button type="button" id="p-scene-add">Lampe hinzufügen</button>
           <label>Aktions-ID <input id="p-scene-actionid" placeholder="Automatisch (a-Kennung)" maxlength="40" pattern="[A-Za-z0-9_-]*"></label>
-          <label>Symbol
-            <select id="p-scene-icon"></select>
-          </label>
+          <label><input id="p-scene-show-icon" type="checkbox" checked> Icon anzeigen</label>
+          <div id="p-scene-icon-toggle">
+            <label>Symbol Ein <select id="p-scene-iconon"></select></label>
+            <label>Symbol Aus <select id="p-scene-iconoff"></select></label>
+          </div>
+          <label><input id="p-scene-show-state-text" type="checkbox"> Text Ein/Aus anzeigen</label>
           <label><input id="p-scene-confirm" type="checkbox"> Bestätigung an der Anzeige</label>
-          <p class="hint">Jede Zeile setzt beim Tippen eine Lampe auf den gewählten Wert. Farbe optional über eine Integer-Variable (Profil HexColor).</p>
+          <label>Textgröße
+            <select id="p-scene-text-size">
+              <option value="small">Klein</option>
+              <option value="normal">Normal</option>
+              <option value="large">Groß</option>
+              <option value="xlarge">Sehr groß</option>
+            </select>
+          </label>
+          <label><input id="p-scene-text-bold" type="checkbox"> Fett</label>
+          <label><input id="p-scene-text-italic" type="checkbox"> Kursiv</label>
+          <label><input id="p-scene-text-underline" type="checkbox"> Unterstrichen</label>
+          <p class="hint">Jede Zeile setzt beim Tippen eine Lampe auf den gewählten Wert. Farbe optional über eine Integer-Variable (Profil HexColor). Die Kachel zeigt Ein, wenn alle Lampen der Szene aktuell dem hinterlegten Wert entsprechen – Icon und Farbe „Ein“ gelten dann.</p>
         </div>
         <div data-for="weather">
           <label>Temperatur-Variable <span class="pick-row"><input id="p-weather-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="weather">Auswählen</button></span></label>
@@ -235,7 +249,15 @@
           <p class="hint">Variable über Auswählen wählen (meist Ja/Nein). Modus steuert die Darstellung an der Anzeige.</p>
         </div>
         <div data-for="separator">
-          <p class="hint">Horizontale Trennlinie über die volle Breite der Zeile. Nur Titel optional.</p>
+          <label>Ausrichtung
+            <select id="p-sep-orient">
+              <option value="horizontal">Horizontal</option>
+              <option value="vertical">Vertikal</option>
+            </select>
+          </label>
+          <label>Dicke (px) <input id="p-sep-thickness" type="number" min="1" max="12" value="2"></label>
+          <label>Farbe <input id="p-sep-color" type="color" value="#5a7391"></label>
+          <p class="hint">Der Strich liegt auf der Zellenmitte und reicht bis zum Rand, damit aneinandergrenzende Linien wie eine aussehen.</p>
         </div>
         <div data-for="value">
           <label>Quelle
@@ -334,20 +356,25 @@
           <p id="p-control-hint" class="hint hidden"></p>
           <label><input id="p-action" type="checkbox"> Schaltbar</label>
           <label><input id="p-confirm" type="checkbox"> Bestätigung an der Anzeige</label>
-          <label>Aktionsart
-            <select id="p-actionkind">
-              <option value="switch">Schalten</option>
-              <option value="dim">Dimmen</option>
-              <option value="position">Position</option>
-            </select>
-          </label>
         </div>
         <div data-for="nav">
           <label>Zielseite <select id="p-target"></select></label>
         </div>
         <div data-for="label">
           <label>Text <textarea id="p-text" rows="3"></textarea></label>
-          <p class="hint">Text wird automatisch auf die Kachelgröße skaliert.</p>
+          <label>Schriftgröße
+            <select id="p-label-size">
+              <option value="auto">Automatisch</option>
+              <option value="small">Klein</option>
+              <option value="normal">Normal</option>
+              <option value="large">Groß</option>
+              <option value="xlarge">Sehr groß</option>
+            </select>
+          </label>
+          <label><input id="p-label-bold" type="checkbox"> Fett</label>
+          <label><input id="p-label-italic" type="checkbox"> Kursiv</label>
+          <label><input id="p-label-underline" type="checkbox"> Unterstrichen</label>
+          <p class="hint">Automatisch skaliert den Text auf die Kachel. Eine feste Größe und Fett, Kursiv oder Unterstrichen gelten auch auf der Anzeige.</p>
         </div>
         <div data-for="display" class="hidden"></div>
         <div data-for="energyflow">

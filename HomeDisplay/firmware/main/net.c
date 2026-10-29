@@ -3,6 +3,7 @@
 
 #include "esp_event.h"
 #include "esp_http_server.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -96,7 +97,13 @@ void homedisplay_wifi_start(const char *ssid, const char *password)
     esp_event_loop_create_default();
     esp_netif_create_default_wifi_sta();
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_init(&config);
+    ESP_LOGI(TAG, "Speicher vor WLAN: intern %u", (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    esp_err_t started = esp_wifi_init(&config);
+    if (started != ESP_OK) {
+        ESP_LOGE(TAG, "WLAN-Start fehlgeschlagen: %s", esp_err_to_name(started));
+        homedisplay_ui_status("WLAN-Start fehlgeschlagen\nZu wenig Speicher");
+        return;
+    }
     const esp_timer_create_args_t timer_args = {.callback = retry_connect, .name = "wifi-retry"};
     esp_timer_create(&timer_args, &retry_timer);
     esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL);

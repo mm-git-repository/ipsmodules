@@ -22,6 +22,7 @@ final class HomeDisplayPanelSchema
     public const ICONS = [
         'energy', 'temperature', 'light', 'shutter', 'pump', 'valve', 'alarm', 'home', 'clock', 'info',
         'lightOn', 'lightOff', 'humidity', 'sun', 'moon', 'water', 'heat', 'cool', 'fan', 'door', 'lock', 'plug', 'batteryIcon', 'wifi', 'car',
+        'motion', 'window', 'garage', 'smoke', 'thermostat', 'solar', 'camera', 'tv', 'speaker', 'washing', 'bed', 'bell', 'leaf', 'fire',
     ];
 
     public const BATTERY_LABELS = ['inside', 'left', 'right', 'top', 'bottom'];
@@ -235,6 +236,27 @@ final class HomeDisplayPanelSchema
                     $public['text'] = (string) ($tile['text'] ?? '');
                     $labelStyle = (string) ($tile['labelStyle'] ?? 'text');
                     $public['labelStyle'] = in_array($labelStyle, self::LABEL_STYLES, true) ? $labelStyle : 'text';
+                    $textSize = (string) ($tile['textSize'] ?? '');
+                    if (in_array($textSize, ['small', 'normal', 'large', 'xlarge'], true)) {
+                        $public['textSize'] = $textSize;
+                    }
+                    if (!empty($tile['textBold'])) {
+                        $public['textBold'] = true;
+                    }
+                    if (!empty($tile['textItalic'])) {
+                        $public['textItalic'] = true;
+                    }
+                    if (!empty($tile['textUnderline'])) {
+                        $public['textUnderline'] = true;
+                    }
+                }
+                if ($kind === 'separator') {
+                    $public['orientation'] = (string) ($tile['orientation'] ?? '') === 'vertical' ? 'vertical' : 'horizontal';
+                    $public['thickness'] = max(1, min(12, (int) ($tile['thickness'] ?? 2)));
+                    $lineColor = strtolower(trim((string) ($tile['lineColor'] ?? '')));
+                    if (preg_match('/^#[0-9a-f]{6}$/', $lineColor)) {
+                        $public['lineColor'] = $lineColor;
+                    }
                 }
                 if ($kind === 'chart') {
                     $public['chartPeriod'] = HomeDisplayChart::normalizePeriod((string) ($tile['chartPeriod'] ?? '24h'));
@@ -267,6 +289,31 @@ final class HomeDisplayPanelSchema
                     if ($actionId !== '') {
                         $public['actionId'] = $actionId;
                         $public['confirm'] = (bool) ($tile['confirm'] ?? false);
+                    }
+                    $iconMode = (string) ($tile['iconMode'] ?? 'static');
+                    if ($iconMode === 'toggle') {
+                        $public['iconMode'] = 'toggle';
+                        $public['iconOn'] = (string) ($tile['iconOn'] ?? 'lightOn');
+                        $public['iconOff'] = (string) ($tile['iconOff'] ?? 'lightOff');
+                    }
+                    if (array_key_exists('showIcon', $tile) && $tile['showIcon'] === false) {
+                        $public['showIcon'] = false;
+                    }
+                    if (!empty($tile['showStateText'])) {
+                        $public['showStateText'] = true;
+                    }
+                    $textSize = (string) ($tile['textSize'] ?? '');
+                    if (in_array($textSize, ['small', 'normal', 'large', 'xlarge'], true)) {
+                        $public['textSize'] = $textSize;
+                    }
+                    if (!empty($tile['textBold'])) {
+                        $public['textBold'] = true;
+                    }
+                    if (!empty($tile['textItalic'])) {
+                        $public['textItalic'] = true;
+                    }
+                    if (!empty($tile['textUnderline'])) {
+                        $public['textUnderline'] = true;
                     }
                 }
                 if ($kind === 'weather') {
@@ -878,6 +925,24 @@ final class HomeDisplayPanelSchema
             if (isset($tile['size']) && !in_array((string) $tile['size'], self::SIZES, true)) {
                 throw new InvalidArgumentException('Unbekannte Textgröße.');
             }
+            $textSize = (string) ($tile['textSize'] ?? '');
+            if ($textSize !== '' && !in_array($textSize, ['small', 'normal', 'large', 'xlarge'], true)) {
+                throw new InvalidArgumentException('Unbekannte Schriftgröße.');
+            }
+            return;
+        }
+        if ($kind === 'separator') {
+            $orientation = (string) ($tile['orientation'] ?? 'horizontal');
+            if (!in_array($orientation, ['horizontal', 'vertical'], true)) {
+                throw new InvalidArgumentException('Unbekannte Linienausrichtung.');
+            }
+            if (isset($tile['thickness']) && ((int) $tile['thickness'] < 1 || (int) $tile['thickness'] > 12)) {
+                throw new InvalidArgumentException('Liniendicke liegt zwischen 1 und 12.');
+            }
+            $lineColor = strtolower(trim((string) ($tile['lineColor'] ?? '')));
+            if ($lineColor !== '' && !preg_match('/^#[0-9a-f]{6}$/', $lineColor)) {
+                throw new InvalidArgumentException('Unbekannte Linienfarbe.');
+            }
             return;
         }
         if ($kind === 'energyflow') {
@@ -945,6 +1010,18 @@ final class HomeDisplayPanelSchema
             $icon = (string) ($tile['icon'] ?? '');
             if ($icon !== '' && !in_array($icon, self::ICONS, true)) {
                 throw new InvalidArgumentException('Unbekanntes Symbol: ' . $icon);
+            }
+            $iconMode = (string) ($tile['iconMode'] ?? 'static');
+            if ($iconMode === 'toggle') {
+                foreach (['iconOn', 'iconOff'] as $key) {
+                    if (!in_array((string) ($tile[$key] ?? ''), self::ICONS, true)) {
+                        throw new InvalidArgumentException('Unbekanntes Symbol: ' . (string) ($tile[$key] ?? ''));
+                    }
+                }
+            }
+            $textSize = (string) ($tile['textSize'] ?? '');
+            if ($textSize !== '' && !in_array($textSize, ['small', 'normal', 'large', 'xlarge'], true)) {
+                throw new InvalidArgumentException('Unbekannte Textgröße.');
             }
             $steps = is_array($tile['sceneSteps'] ?? null) ? $tile['sceneSteps'] : [];
             if ($steps === [] && (int) ($tile['variableId'] ?? 0) > 0) {
@@ -1192,6 +1269,18 @@ final class HomeDisplayPanelSchema
         if ($kind === 'chart') {
             foreach (HomeDisplayChart::seriesDefinitions($tile) as $def) {
                 $id = (int) ($def['variableId'] ?? 0);
+                if ($id > 0) {
+                    $ids[] = $id;
+                }
+            }
+        }
+        if ($kind === 'scene') {
+            $steps = is_array($tile['sceneSteps'] ?? null) ? $tile['sceneSteps'] : [];
+            foreach ($steps as $step) {
+                if (!is_array($step)) {
+                    continue;
+                }
+                $id = (int) ($step['variableId'] ?? 0);
                 if ($id > 0) {
                     $ids[] = $id;
                 }

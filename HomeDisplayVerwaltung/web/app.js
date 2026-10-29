@@ -9,11 +9,14 @@ const PAGES = [
   ["system", "System"]
 ];
 const ICONS = [
-  ["energy", "Energie"], ["temperature", "Temperatur"], ["light", "Licht"], ["shutter", "Rollladen"],
-  ["pump", "Pumpe"], ["valve", "Ventil"], ["alarm", "Alarm"], ["home", "Haus"], ["clock", "Uhr"], ["info", "Info"],
-  ["lightOn", "Lampe an"], ["lightOff", "Lampe aus"], ["humidity", "Feuchte"], ["sun", "Sonne"], ["moon", "Nacht"],
-  ["water", "Wasser"], ["heat", "Heizung"], ["cool", "Kühlen"], ["fan", "Lüftung"], ["door", "Tür"], ["lock", "Schloss"],
-  ["plug", "Steckdose"], ["batteryIcon", "Akku"], ["wifi", "WLAN"], ["car", "Auto"]
+  ["energy", "Energie", 0xF140B], ["temperature", "Temperatur", 0xF050F], ["light", "Licht", 0xF0335], ["shutter", "Rollladen", 0xF111C],
+  ["pump", "Pumpe", 0xF1402], ["valve", "Ventil", 0xF1066], ["alarm", "Alarm", 0xF078F], ["home", "Haus", 0xF02DC], ["clock", "Uhr", 0xF0150], ["info", "Info", 0xF02FD],
+  ["lightOn", "Lampe an", 0xF0335], ["lightOff", "Lampe aus", 0xF0336], ["humidity", "Feuchte", 0xF058E], ["sun", "Sonne", 0xF0599], ["moon", "Nacht", 0xF0594],
+  ["water", "Wasser", 0xF058C], ["heat", "Heizung", 0xF0438], ["cool", "Kühlen", 0xF0717], ["fan", "Lüftung", 0xF0210], ["door", "Tür", 0xF081A], ["lock", "Schloss", 0xF033E],
+  ["plug", "Steckdose", 0xF06A5], ["batteryIcon", "Akku", 0xF0079], ["wifi", "WLAN", 0xF05A9], ["car", "Auto", 0xF010B],
+  ["motion", "Bewegung", 0xF0D91], ["window", "Fenster", 0xF05AE], ["garage", "Garage", 0xF06D9], ["smoke", "Rauch", 0xF0392], ["thermostat", "Thermostat", 0xF0393],
+  ["solar", "Solar", 0xF0A72], ["camera", "Kamera", 0xF07AE], ["tv", "Fernseher", 0xF0502], ["speaker", "Lautsprecher", 0xF04C3], ["washing", "Waschmaschine", 0xF072A],
+  ["bed", "Bett", 0xF02E3], ["bell", "Klingel", 0xF009A], ["leaf", "Blatt", 0xF032A], ["fire", "Feuer", 0xF0238]
 ];
 const DISPLAY_PROFILES = {
   "waveshare-5b-1024x600": { label: "Waveshare 5B (1024×600)", width: 1024, height: 600, defaultColumns: 3, defaultRows: 4, maxColumns: 4, maxRows: 6 },
@@ -191,7 +194,7 @@ function assignFlowVariable(tile, slot, variable, silent) {
 }
 
 function scaledTileHtml(mainText, iconId, subText) {
-  const icon = iconId ? `<div class="tile-fit-icon">${escapeHtml(iconName(iconId))}</div>` : "";
+  const icon = iconId ? `<div class="tile-fit-icon">${iconVisual(iconId)}</div>` : "";
   const sub = subText ? `<div class="tile-fit-sub">${escapeHtml(subText)}</div>` : "";
   return `<div class="tile-scale tile-fit">${icon}<div class="tile-fit-text">${escapeHtml(mainText || "—")}</div>${sub}</div>`;
 }
@@ -252,6 +255,9 @@ function ohCardMarkup(label, stateHtml, bodyHtml, footHtml, tile) {
   const bits = [];
   if (tile && tile.textColor) bits.push(`color:${tile.textColor}`);
   if (tile && sizes[tile.textSize]) bits.push(`font-size:${sizes[tile.textSize]}`);
+  if (tile && tile.textBold) bits.push(`font-weight:700`);
+  if (tile && tile.textItalic) bits.push(`font-style:italic`);
+  if (tile && tile.textUnderline) bits.push(`text-decoration:underline`);
   const style = bits.length ? ` style="${bits.join(";")}"` : "";
   return `<div class="oh-card"><div class="oh-card-head ${align}"><span class="oh-card-label">${title}</span><span class="oh-card-state"${style}>${stateHtml}</span></div><div class="oh-card-body">${bodyHtml || ""}</div>${foot}</div>`;
 }
@@ -512,15 +518,15 @@ function syncInteractionPropertyPanels() {
     hintEl.textContent = hint;
     hintEl.classList.toggle("hidden", !hint);
   }
+  const kindLabel = $("p-kind")?.closest("label");
+  if (kindLabel) kindLabel.classList.toggle("hidden", mode === "switch");
   const actionLabel = $("p-action")?.closest("label");
   if (actionLabel) actionLabel.classList.toggle("hidden", mode === "battery");
   if (DIM_CONTROLS.includes(mode)) {
-    if ($("p-actionkind")) $("p-actionkind").value = "dim";
     const variable = variableById(tile.variableId);
     if (variable && variable.action && $("p-action")) $("p-action").checked = true;
   }
-  if (mode === "blinds" && $("p-actionkind")) {
-    $("p-actionkind").value = "position";
+  if (mode === "blinds") {
     const variable = variableById(tile.variableId);
     if (variable && variable.action && $("p-action")) $("p-action").checked = true;
   }
@@ -876,7 +882,8 @@ function renderLayoutSelect() {
   if (state.layout && state.layout.id) select.value = state.layout.id;
 }
 
-function selectLayout(layout) {
+function selectLayout(layout, keepPage) {
+  const previousPage = keepPage ? state.page : null;
   state.layout = JSON.parse(JSON.stringify(layout));
   state.layout.baseVersion = layout.version || 0;
   state.layout.displayProfile = state.layout.displayProfile || defaultProfileId();
@@ -896,7 +903,9 @@ function selectLayout(layout) {
       normalizeTile(tile);
     }
   }
-  state.page = state.layout.pages[0].id;
+  state.page = previousPage && state.layout.pages.some((page) => page.id === previousPage)
+    ? previousPage
+    : state.layout.pages[0].id;
   state.selected = null;
   state.dirty = false;
   $("columns").value = state.layout.columns;
@@ -1301,32 +1310,38 @@ function buildTileElement(tile, context) {
       : (escapeHtml(displayText) + (body ? "" : (tile.unit ? " " + escapeHtml(tile.unit) : "")));
     let cardBody;
     if (showIcon) {
-      cardBody = `<button type="button" class="oh-icon-toggle" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${escapeHtml(iconName(iconId))}</button>`;
+      cardBody = `<button type="button" class="oh-icon-toggle" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile.onColor)}</button>`;
     } else {
-      cardBody = body || (iconId && interaction === "" ? `<div class="oh-card-icon">${escapeHtml(iconName(iconId))}</div>` : "");
+      cardBody = body || (iconId && interaction === "" ? `<div class="oh-card-icon">${iconVisual(iconId, on, tile.onColor)}</div>` : "");
     }
     element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, stateLine, cardBody, "", tile)}</div>`;
     if (DIM_CONTROLS.includes(control) || control === "blinds" || control === "setpoint" || (control === "switch" && tile.actionId) || (interaction === "switch" && tile.showIcon !== false && tile.actionId)) {
       bindTileControls(element, tile, mode, live);
     }
   } else if (tile.kind === "nav") {
-    const navIcon = tile.showTitle === false ? "" : (tile.icon ? `<div class="tile-fit-icon">${escapeHtml(iconName(tile.icon))}</div>` : "");
+    const navIcon = tile.showTitle === false ? "" : (tile.icon ? `<div class="tile-fit-icon">${iconVisual(tile.icon)}</div>` : "");
     const align = tile.titleAlign === "center" ? "center" : (tile.titleAlign === "right" ? "right" : "left");
     element.innerHTML = `${editorKicker(mode, `${tile.icon ? iconName(tile.icon) + " · " : ""}Seite`)}<div class="tile-scale" style="text-align:${align}">${navIcon}<div class="name"></div></div>`;
     element.querySelector(".name").textContent = tile.showTitle === false ? "" : (tile.title || pageTitleIn(tile.targetPage));
   } else if (tile.kind === "label") {
+    const textClass = labelTextClass(tile);
+    const text = escapeHtml(tile.text || "Text");
     if ((tile.labelStyle || "text") === "section") {
       element.classList.add("label-section");
-      element.innerHTML = `<div class="section-head">${escapeHtml(tile.text || "Abschnitt")}</div>`;
+      element.innerHTML = `<div class="section-head ${textClass}">${text}</div>`;
+    } else if (tile.textSize && tile.textSize !== "auto") {
+      element.innerHTML = `<div class="tile-scale"><div class="${textClass}">${text}</div></div>`;
     } else {
       element.innerHTML = scaledTileHtml(tile.text || "Text", "", "");
+      const fit = element.querySelector(".tile-fit-text");
+      if (fit) fit.className = `tile-fit-text ${textClass}`;
     }
   } else if (tile.kind === "display") {
     element.classList.add("oh-style");
     const variable = variableById(tile.variableId);
     const label = tile.title || (tile.displaySource === "text" ? "Text" : (variable ? variable.name : "Anzeige"));
     const stateText = escapeHtml(displayMainText(tile, live));
-    const body = tile.icon ? `<div class="oh-card-icon">${escapeHtml(iconName(tile.icon))}</div>` : "";
+    const body = tile.icon ? `<div class="oh-card-icon">${iconVisual(tile.icon)}</div>` : "";
     element.innerHTML = `${editorKicker(mode, "Anzeige")}<div class="tile-scale">${ohCardMarkup(label, stateText, body, "", tile)}</div>`;
   } else if (tile.kind === "chart") {
     element.classList.add("chart");
@@ -1341,13 +1356,25 @@ function buildTileElement(tile, context) {
     element.classList.add("oh-style", "scene");
     const label = tile.title || "Szene";
     const steps = Array.isArray(tile.sceneSteps) ? tile.sceneSteps.filter((step) => step.variableId) : [];
-    element.innerHTML = `${editorKicker(mode, steps.length ? `Szene · ${steps.length} Lampen` : "Szene")}<div class="tile-scale">${ohCardMarkup(label, tile.actionId ? "Tippen" : "—", `<div class="oh-card-icon">${escapeHtml(iconName(tile.icon || "home"))}</div>`)}</div>`;
+    const showIcon = tile.showIcon !== false;
+    let on = Boolean(demoOn);
+    if (live && typeof live.value === "boolean") on = live.value;
+    element.classList.toggle("as-switch", Boolean(tile.actionId));
+    element.classList.toggle("on", Boolean(tile.actionId) && on);
+    const iconId = showIcon ? (on ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff")) : "";
+    const stateText = tile.showStateText ? (on ? "Ein" : "Aus") : (tile.actionId ? "Tippen" : "—");
+    const cardBody = showIcon
+      ? `<button type="button" class="oh-icon-toggle" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile.onColor)}</button>`
+      : "";
+    const kicker = steps.length ? `Szene · ${steps.length} Lampen` : "Szene";
+    element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, escapeHtml(stateText), cardBody, "", tile)}</div>`;
+    if (tile.actionId) bindTileControls(element, tile, mode, live);
   } else if (tile.kind === "weather") {
     element.classList.add("oh-style", "weather");
     const label = tile.title || "Wetter";
     const temp = live && live.text ? escapeHtml(live.text) : escapeHtml(tile.unit ? `12,3 ${tile.unit}` : "12,3 °C");
     const forecast = live && live.forecast ? escapeHtml(live.forecast) : "leicht bewölkt";
-    element.innerHTML = `${editorKicker(mode, "Wetter")}<div class="tile-scale">${ohCardMarkup(label, temp, `<div class="oh-card-icon">${escapeHtml(iconName(tile.icon || "sun"))}</div>`, forecast)}</div>`;
+    element.innerHTML = `${editorKicker(mode, "Wetter")}<div class="tile-scale">${ohCardMarkup(label, temp, `<div class="oh-card-icon">${iconVisual(tile.icon || "sun")}</div>`, forecast)}</div>`;
   } else if (tile.kind === "presence") {
     element.classList.add("oh-style", "presence");
     const label = tile.title || (tile.presenceMode === "alarm" ? "Alarm" : "Anwesenheit");
@@ -1355,6 +1382,10 @@ function buildTileElement(tile, context) {
     const stateLine = active ? (tile.presenceMode === "alarm" ? "ALARM" : "Da") : "Abwesend";
     element.innerHTML = `${editorKicker(mode, tile.presenceMode === "alarm" ? "Alarm" : "Anwesenheit")}<div class="tile-scale">${ohCardMarkup(label, escapeHtml(stateLine), `<div class="presence-badge ${active ? "on" : "off"}"></div>`)}</div>`;
   } else if (tile.kind === "separator") {
+    const vertical = tile.orientation === "vertical";
+    element.classList.add(vertical ? "vertical" : "horizontal");
+    element.style.setProperty("--line-thickness", `${Math.max(1, Math.min(12, Number(tile.thickness) || 2))}px`);
+    element.style.setProperty("--line-color", tile.lineColor || "#5a7391");
     element.innerHTML = `<div class="line"></div>`;
   } else if (tile.kind === "image") {
     if ((tile.imageSource || "catalog") === "media") {
@@ -1538,7 +1569,7 @@ function applyDimVisual(element, pct, tile) {
 
 function bindTileControls(element, tile, mode, live) {
   const control = tile.control || "";
-  const iconSwitch = tileInteractionMode(tile) === "switch" && tile.showIcon !== false && Boolean(tile.actionId);
+  const iconSwitch = (tileInteractionMode(tile) === "switch" || tile.kind === "scene") && tile.showIcon !== false && Boolean(tile.actionId);
   const stop = (event) => {
     event.stopPropagation();
     event.preventDefault();
@@ -1567,7 +1598,7 @@ function bindTileControls(element, tile, mode, live) {
       const on = iconToggle.getAttribute("aria-pressed") === "true";
       const next = !on;
       iconToggle.setAttribute("aria-pressed", next ? "true" : "false");
-      iconToggle.textContent = iconName(next ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff"));
+      iconToggle.innerHTML = iconVisual(next ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff"), next, tile.onColor);
       element.classList.toggle("on", next);
       if (mode === "edit") {
         state.editorIconDemo[tile.tileId] = next;
@@ -1854,7 +1885,11 @@ function addTile(kind, col, row, variable, control) {
     tile.title = tile.title || "Energiefluss";
     if (variable) assignFlowVariable(tile, "pv", variable, true);
   } else if (kind === "separator") {
+    tile.orientation = "horizontal";
+    tile.thickness = 2;
+    tile.lineColor = "#5a7391";
     tile.colSpan = Math.max(1, state.layout.columns);
+    tile.rowSpan = 1;
     if (!fits(null, col, row, tile.colSpan, 1, null)) tile.colSpan = 1;
   } else if (kind === "image") {
     if (isMediaPick(variable)) {
@@ -2073,10 +2108,11 @@ function selectedTile() {
 
 function fillIconSelect(select, allowEmpty) {
   select.innerHTML = allowEmpty ? '<option value="">Kein Symbol</option>' : "";
-  for (const [value, name] of ICONS) {
+  select.classList.add("icon-font");
+  for (const [value, name, code] of ICONS) {
     const option = document.createElement("option");
     option.value = value;
-    option.textContent = name;
+    option.textContent = `${String.fromCodePoint(code)} ${name}`;
     select.appendChild(option);
   }
 }
@@ -2117,10 +2153,13 @@ function renderSceneSteps(tile) {
     const lamp = variableById(step.variableId);
     const colorVar = variableById(step.colorVariableId);
     const boolLamp = lamp && Number(lamp.type) === 0;
+    const on = boolLamp ? step.value !== false && step.value !== 0 && step.value !== "0" : Number(step.value) > 0;
+    const brightness = Number(step.value) > 0 ? Number(step.value) : (Number(step.brightness) || 100);
     const valueField = boolLamp
-      ? `<label><input type="checkbox" data-step="value" ${step.value ? "checked" : ""}> Ein</label>`
-      : `<label>Helligkeit <input data-step="value" type="number" min="0" max="100" value="${Number(step.value) || 0}"></label>`;
+      ? ""
+      : `<label data-step="level-wrap" class="${on ? "" : "hidden"}">Helligkeit <input data-step="value" type="number" min="1" max="100" value="${brightness}"></label>`;
     box.innerHTML = `<label>Lampe <span class="pick-row"><input readonly value="${escapeHtml(variableLabel(lamp))}" placeholder="Auswählen"><button type="button" class="pick-var" data-pick="sceneStep" data-slot="${index}">Auswählen</button></span></label>
+      <label>Zustand <select data-step="power"><option value="off" ${on ? "" : "selected"}>Aus</option><option value="on" ${on ? "selected" : ""}>Ein</option></select></label>
       ${valueField}
       <label><input type="checkbox" data-step="useColor" ${step.colorVariableId ? "checked" : ""}> Farbe setzen</label>
       <div data-step="color" class="${step.colorVariableId ? "" : "hidden"}">
@@ -2129,10 +2168,16 @@ function renderSceneSteps(tile) {
       </div>
       <label>Verzögerung (ms) <input data-step="delay" type="number" min="0" max="10000" value="${Number(step.delayMs) || 0}"></label>
       <button type="button" data-step="remove">Entfernen</button>`;
+    box.querySelector("[data-step=power]")?.addEventListener("change", (event) => {
+      box.querySelector("[data-step=level-wrap]")?.classList.toggle("hidden", event.target.value !== "on");
+      applyProperties();
+    });
+    box.querySelectorAll("[data-step=value], [data-step=delay], [data-step=colorValue], [data-step=useColor]").forEach((field) => {
+      field.addEventListener("change", () => applyProperties());
+    });
     box.querySelector("[data-step=useColor]").addEventListener("change", (event) => {
       box.querySelector("[data-step=color]").classList.toggle("hidden", !event.target.checked);
       if (!event.target.checked) delete step.colorVariableId;
-      collectSceneSteps();
     });
     box.querySelector("[data-step=remove]").addEventListener("click", () => {
       tile.sceneSteps.splice(index, 1);
@@ -2156,8 +2201,23 @@ function collectSceneSteps() {
     const valueEl = row.querySelector("[data-step=value]");
     const useColor = row.querySelector("[data-step=useColor]")?.checked;
     const step = { variableId: Number(prev.variableId) || 0 };
-    if (valueEl && valueEl.type === "checkbox") step.value = valueEl.checked;
-    else step.value = Number(valueEl?.value) || 0;
+    const lamp = variableById(step.variableId);
+    const boolLamp = lamp && Number(lamp.type) === 0;
+    const power = row.querySelector("[data-step=power]")?.value || "on";
+    if (boolLamp) {
+      step.value = power === "on";
+    } else if (power !== "on") {
+      step.value = 0;
+      const remembered = Number(valueEl?.value);
+      if (remembered > 0) step.brightness = remembered;
+      else if (Number(prev.brightness) > 0) step.brightness = Number(prev.brightness);
+    } else {
+      let level = Number(valueEl?.value);
+      if (!(level > 0)) level = Number(prev.brightness) || 100;
+      level = Math.max(1, Math.min(100, level));
+      step.value = level;
+      step.brightness = level;
+    }
     if (useColor && prev.colorVariableId) {
       step.colorVariableId = prev.colorVariableId;
       step.color = row.querySelector("[data-step=colorValue]")?.value || "#ffb547";
@@ -2179,6 +2239,8 @@ function renderProperties() {
     block.classList.toggle("hidden", !block.dataset.for.split(" ").includes(tile.kind));
   }
   $("p-kind").value = KIND_NAMES[tile.kind];
+  const kindLabel = $("p-kind")?.closest("label");
+  if (kindLabel) kindLabel.classList.toggle("hidden", tile.kind === "value" && tileInteractionMode(tile) === "switch");
   $("p-title").value = tile.title || "";
   if ($("p-show-title")) $("p-show-title").checked = tile.showTitle !== false;
   if ($("p-title-align")) $("p-title-align").value = tile.titleAlign || "left";
@@ -2243,7 +2305,7 @@ function renderProperties() {
   const valueInteraction = tile.kind === "value" ? tileInteractionMode(tile) : null;
   $("p-action").disabled = valueInteraction === "battery" || !(variable && variable.action);
   $("p-confirm").checked = Boolean(tile.confirm);
-  $("p-actionkind").value = tile.actionKind || (DIM_CONTROLS.includes(tile.control) ? "dim" : (variable ? variable.actionKind || "switch" : "switch"));
+  if ($("p-actionkind")) $("p-actionkind").value = tile.actionKind || (DIM_CONTROLS.includes(tile.control) ? "dim" : (variable ? variable.actionKind || "switch" : "switch"));
   fillTargetSelect($("p-target"));
   $("p-target").value = tile.targetPage || "";
   $("p-text").value = tile.text || "";
@@ -2288,12 +2350,33 @@ function renderProperties() {
     }
   }
   if (tile.kind === "label" && $("p-label-style")) $("p-label-style").value = tile.labelStyle || "text";
+  if ($("p-label-size")) $("p-label-size").value = tile.textSize || "auto";
+  if ($("p-label-bold")) $("p-label-bold").checked = Boolean(tile.textBold);
+  if ($("p-label-italic")) $("p-label-italic").checked = Boolean(tile.textItalic);
+  if ($("p-label-underline")) $("p-label-underline").checked = Boolean(tile.textUnderline);
+  if ($("p-sep-orient")) $("p-sep-orient").value = tile.orientation === "vertical" ? "vertical" : "horizontal";
+  if ($("p-sep-thickness")) $("p-sep-thickness").value = tile.thickness || 2;
+  if ($("p-sep-color") && tile.lineColor) $("p-sep-color").value = tile.lineColor;
   if (tile.kind === "scene") {
-    fillIconSelect($("p-scene-icon"), false);
-    if ($("p-scene-icon")) $("p-scene-icon").value = tile.icon || "home";
+    fillIconSelect($("p-scene-iconon"));
+    fillIconSelect($("p-scene-iconoff"));
+    if ($("p-scene-iconon")) $("p-scene-iconon").value = tile.iconOn || "lightOn";
+    if ($("p-scene-iconoff")) $("p-scene-iconoff").value = tile.iconOff || "lightOff";
+    if ($("p-scene-show-icon")) $("p-scene-show-icon").checked = tile.showIcon !== false;
+    $("p-scene-icon-toggle")?.classList.toggle("hidden", !($("p-scene-show-icon")?.checked));
+    if ($("p-scene-show-state-text")) $("p-scene-show-state-text").checked = tile.showStateText === true;
     if ($("p-scene-actionid")) $("p-scene-actionid").value = tile.actionId || "";
     if ($("p-scene-confirm")) $("p-scene-confirm").checked = Boolean(tile.confirm);
+    if ($("p-scene-text-size")) $("p-scene-text-size").value = tile.textSize || "normal";
+    if ($("p-scene-text-bold")) $("p-scene-text-bold").checked = Boolean(tile.textBold);
+    if ($("p-scene-text-italic")) $("p-scene-text-italic").checked = Boolean(tile.textItalic);
+    if ($("p-scene-text-underline")) $("p-scene-text-underline").checked = Boolean(tile.textUnderline);
     renderSceneSteps(tile);
+  }
+  const ownOnWrap = $("p-own-on-wrap");
+  if (ownOnWrap) {
+    const ownOnVisible = tile.kind === "scene" || (tile.kind === "value" && (tileInteractionMode(tile) === "switch" || tileInteractionMode(tile) === "combo"));
+    ownOnWrap.classList.toggle("hidden", !ownOnVisible);
   }
   if (tile.kind === "weather") {
     fillIconSelect($("p-weather-icon"), false);
@@ -2502,7 +2585,7 @@ function applyProperties() {
     }
     if ((mode === "switch" || mode === "combo" || mode === "blinds" || mode === "setpoint") && $("p-action").checked && variable && variable.action) {
       tile.actionId = tile.actionId || `a-${tile.tileId}`;
-      tile.actionKind = mode === "blinds" ? "position" : (DIM_CONTROLS.includes(mode) || mode === "setpoint" ? "dim" : $("p-actionkind").value);
+      tile.actionKind = mode === "blinds" ? "position" : (DIM_CONTROLS.includes(mode) || mode === "setpoint" ? "dim" : "switch");
       tile.confirm = $("p-confirm").checked;
     } else if (mode !== "battery") {
       delete tile.actionId;
@@ -2539,9 +2622,36 @@ function applyProperties() {
   }
   if (tile.kind === "label") {
     tile.labelStyle = $("p-label-style") ? $("p-label-style").value : "text";
+    const size = $("p-label-size") ? $("p-label-size").value : "auto";
+    if (size && size !== "auto") tile.textSize = size;
+    else delete tile.textSize;
+    if ($("p-label-bold")?.checked) tile.textBold = true;
+    else delete tile.textBold;
+    if ($("p-label-italic")?.checked) tile.textItalic = true;
+    else delete tile.textItalic;
+    if ($("p-label-underline")?.checked) tile.textUnderline = true;
+    else delete tile.textUnderline;
+  }
+  if (tile.kind === "separator") {
+    const vertical = $("p-sep-orient") && $("p-sep-orient").value === "vertical";
+    const wasVertical = tile.orientation === "vertical";
+    tile.orientation = vertical ? "vertical" : "horizontal";
+    const thickness = Math.max(1, Math.min(12, Number($("p-sep-thickness")?.value) || 2));
+    tile.thickness = thickness;
+    tile.lineColor = $("p-sep-color")?.value || "#5a7391";
+    if (vertical !== wasVertical && state.layout) {
+      if (vertical) {
+        tile.colSpan = 1;
+        tile.rowSpan = state.layout.rows;
+        if (tile.row + tile.rowSpan > state.layout.rows) tile.row = 0;
+      } else {
+        tile.rowSpan = 1;
+        tile.colSpan = state.layout.columns;
+        if (tile.col + tile.colSpan > state.layout.columns) tile.col = 0;
+      }
+    }
   }
   if (tile.kind === "scene") {
-    tile.icon = $("p-scene-icon") ? $("p-scene-icon").value || "home" : (tile.icon || "home");
     const actionIdRaw = ($("p-scene-actionid")?.value || "").trim();
     const steps = collectSceneSteps();
     tile.sceneSteps = steps;
@@ -2555,6 +2665,29 @@ function applyProperties() {
       delete tile.actionId;
       tile.confirm = false;
     }
+    if ($("p-scene-show-icon")?.checked) {
+      delete tile.showIcon;
+      tile.iconMode = "toggle";
+      tile.iconOn = $("p-scene-iconon")?.value || "lightOn";
+      tile.iconOff = $("p-scene-iconoff")?.value || "lightOff";
+      if (!tile.icon) tile.icon = tile.iconOn;
+    } else {
+      tile.showIcon = false;
+      delete tile.iconMode;
+      delete tile.iconOn;
+      delete tile.iconOff;
+    }
+    if ($("p-scene-show-state-text")?.checked) tile.showStateText = true;
+    else delete tile.showStateText;
+    const sceneTextSize = $("p-scene-text-size") ? $("p-scene-text-size").value : "normal";
+    if (sceneTextSize && sceneTextSize !== "normal") tile.textSize = sceneTextSize;
+    else delete tile.textSize;
+    if ($("p-scene-text-bold")?.checked) tile.textBold = true;
+    else delete tile.textBold;
+    if ($("p-scene-text-italic")?.checked) tile.textItalic = true;
+    else delete tile.textItalic;
+    if ($("p-scene-text-underline")?.checked) tile.textUnderline = true;
+    else delete tile.textUnderline;
   }
   if (tile.kind === "weather") {
     tile.icon = $("p-weather-icon") ? $("p-weather-icon").value || "sun" : "sun";
@@ -2628,7 +2761,7 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-title-align", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-scene-actionid", "p-scene-icon", "p-scene-confirm", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-title-align", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
@@ -2685,6 +2818,9 @@ if (displayProfileSelect) {
 }
 bindClick("p-delete", deleteSelected);
 bindClick("p-close", () => $("tile-dialog")?.close());
+$("tile-dialog")?.addEventListener("close", () => {
+  if (selectedTile()?.kind === "scene") applyProperties();
+});
 bindClick("p-scene-add", () => {
   const tile = selectedTile();
   if (!tile) return;
@@ -2897,6 +3033,34 @@ function variablePickLabel(variable) {
 function iconName(icon) {
   const found = ICONS.find((item) => item[0] === icon);
   return found ? found[1] : "";
+}
+
+function iconCode(icon, on) {
+  if (icon === "lightOn" || (icon === "light" && on)) return 0xF0335;
+  if (icon === "lightOff" || icon === "light") return 0xF0336;
+  const found = ICONS.find((item) => item[0] === icon);
+  return found && found[2] ? found[2] : 0;
+}
+
+function iconLit(icon, on) {
+  return icon === "lightOn" || (icon === "light" && !!on);
+}
+
+function iconVisual(icon, on, onColor) {
+  const code = iconCode(icon, on);
+  if (!code) return escapeHtml(iconName(icon));
+  const lit = iconLit(icon, on) && onColor && /^#[0-9a-fA-F]{6}$/.test(onColor);
+  const style = lit ? ` style="color:${onColor}"` : "";
+  return `<span class="mdi"${style}>&#x${code.toString(16)};</span>`;
+}
+
+function labelTextClass(tile) {
+  const size = tile.textSize || "auto";
+  const names = ["label-text", `size-${size}`];
+  if (tile.textBold) names.push("bold");
+  if (tile.textItalic) names.push("italic");
+  if (tile.textUnderline) names.push("underline");
+  return names.join(" ");
 }
 
 function pageTitleIn(id) {
@@ -3204,7 +3368,7 @@ async function store(publish) {
     state.catalog = await call("catalog");
     const saved = state.catalog.layouts.find((item) => (previousId ? item.id === previousId : item.name === previousName));
     state.dirty = false;
-    if (saved) selectLayout(saved);
+    if (saved) selectLayout(saved, true);
     else updateTitle();
     renderLayoutSelect();
     setStatus(publish ? "Ansicht veröffentlicht. Die Anzeigen übernehmen sie beim nächsten Abruf." : "Entwurf gespeichert.");
@@ -3607,12 +3771,12 @@ function applyLiveStateToProbeTile(element, tile, live) {
     }
     const iconBtn = element.querySelector("[data-icon-toggle]");
     if (iconBtn && tileInteractionMode(tile) === "switch" && tile.showIcon !== false) {
-      const iconId = effectiveIcon(tile, live.value, undefined);
-      iconBtn.textContent = iconName(iconId);
       let on = false;
       if (typeof live.value === "boolean") on = live.value;
       else if (typeof live.value === "number") on = live.value > (tile.valueMin ?? 0);
       else if (live.text && /^(1|true|ein|an|on)$/i.test(String(live.text).trim())) on = true;
+      const iconId = effectiveIcon(tile, live.value, undefined);
+      iconBtn.innerHTML = iconVisual(iconId, on, tile.onColor);
       iconBtn.setAttribute("aria-pressed", on ? "true" : "false");
       element.classList.toggle("on", on);
     }

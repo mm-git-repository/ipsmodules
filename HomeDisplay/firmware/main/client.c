@@ -1083,14 +1083,15 @@ static void client_task(void *argument)
             remember("rollback", rollback_reason);
             esp_ota_mark_app_invalid_rollback_and_reboot();
         }
-        int wait = homedisplay_ui_busy() ? state_interval : idle_interval;
+        int wait = homedisplay_ui_page_visible() ? state_interval : idle_interval;
         if (!online) wait = failures > 10 ? 30 : 5;
         if (wait < 2) wait = 2;
-        /* Kurz takten, damit ein Tipp nicht bis zum Ende des Intervalls liegen bleibt. */
+        /* Kurz takten, damit ein Tipp oder ein Seitenwechsel nicht bis zum Ende des Intervalls liegen bleibt. */
         for (int elapsed = 0; elapsed < wait * 1000; elapsed += 120) {
             esp_task_wdt_reset();
             homedisplay_serial_poll();
             if (send_queued_action()) break;
+            if (homedisplay_ui_take_refresh()) break;
             vTaskDelay(pdMS_TO_TICKS(120));
         }
     }

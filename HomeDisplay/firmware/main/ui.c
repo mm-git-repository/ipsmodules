@@ -1,4 +1,5 @@
 #include "homedisplay.h"
+#include "fonts.h"
 
 #include "cJSON.h"
 #include "esp_lcd_panel_ops.h"
@@ -21,6 +22,11 @@
 static const char *TAG_UI = "ui";
 
 #define TILE_MAX 48
+#define HEADER_H 68
+#define HEADER_LEFT 72
+#define HEADER_RIGHT 160
+#define TAB_H 56
+#define TAB_W 132
 
 /* true nur wenn show_page vom Client-Task kommt – dann LVGL-Lock zwischen Kacheln freigeben. */
 static bool show_page_may_yield;
@@ -54,6 +60,9 @@ typedef struct {
     lv_obj_t *camera_img;
     lv_obj_t *image_img;
     lv_obj_t *icon_label;
+    lv_obj_t *title_icon;
+    bool icon_large;
+    char icon_name[24];
     char icon_mode[12];
     char icon_on[24];
     char icon_off[24];
@@ -73,6 +82,12 @@ typedef struct {
     char text_size[8];
     char status_color[8];
     float threshold;
+    bool holding;
+    int held_value;
+    int64_t held_until;
+    bool text_bold;
+    bool text_italic;
+    bool text_underline;
 } tile_view_t;
 
 static void ui_wdt_kick(void)
@@ -100,11 +115,12 @@ static uint32_t kind_bg(const char *kind)
     return 0x1D3350;
 }
 
-static uint32_t accent_on(void) { return color_mono ? 0xFFFFFF : theme_accent; }
 static uint32_t tile_on_color(const tile_view_t *tile)
 {
     if (color_mono) return 0xFFFFFF;
-    return tile && tile->own_on ? tile->on_bg : accent_on();
+    if (!tile) return 0;
+    /* Ohne gesetzte "Farbe Ein" bleibt der Schalter unverändert, egal ob Ein oder Aus. */
+    return tile->own_on ? tile->on_bg : tile->base_bg;
 }
 static uint32_t accent_tab(void) { return color_mono ? 0xFFFFFF : theme_accent; }
 static uint32_t accent_tab_bg(void) { return color_mono ? 0x333333 : theme_button; }
@@ -208,6 +224,8 @@ static lv_obj_t *analog_clock;
 static lv_obj_t *analog_hour;
 static lv_obj_t *analog_min;
 static char last_state_json[8192];
+static volatile bool refresh_now;
+static volatile bool backlight_on = true;
 static int day_brightness = 70;
 static int night_brightness = 15;
 static int night_from = 22;
@@ -382,32 +400,124 @@ static void build_boot_layer(lv_obj_t *screen)
 }
 static homedisplay_action_fn action_callback;
 
-static const char *icon_symbol(const char *icon)
+typedef struct {
+    const char *id;
+    unsigned cp;
+} icon_cp_t;
+
+/* Pictogrammers Material Design Icons, Apache 2.0. Ausschnitt in fonts/mdi_28.c und mdi_48.c. */
+static const icon_cp_t ICON_CP[] = {
+    {"energy", 0xF140B}, {"temperature", 0xF050F}, {"shutter", 0xF111C}, {"pump", 0xF1402},
+    {"valve", 0xF1066}, {"alarm", 0xF078F}, {"home", 0xF02DC}, {"clock", 0xF0150}, {"info", 0xF02FD},
+    {"humidity", 0xF058E}, {"sun", 0xF0599}, {"moon", 0xF0594}, {"water", 0xF058C}, {"heat", 0xF0438},
+    {"cool", 0xF0717}, {"fan", 0xF0210}, {"door", 0xF081A}, {"lock", 0xF033E}, {"plug", 0xF06A5},
+    {"batteryIcon", 0xF0079}, {"wifi", 0xF05A9}, {"car", 0xF010B}, {"motion", 0xF0D91}, {"window", 0xF05AE},
+    {"garage", 0xF06D9}, {"smoke", 0xF0392}, {"thermostat", 0xF0393}, {"solar", 0xF0A72}, {"camera", 0xF07AE},
+    {"tv", 0xF0502}, {"speaker", 0xF04C3}, {"washing", 0xF072A}, {"bed", 0xF02E3}, {"bell", 0xF009A},
+    {"leaf", 0xF032A}, {"fire", 0xF0238},
+};
+
+static const char *pua(unsigned cp)
 {
-    if (!icon) return LV_SYMBOL_MINUS;
-    if (strcmp(icon, "energy") == 0) return LV_SYMBOL_CHARGE;
-    if (strcmp(icon, "temperature") == 0) return LV_SYMBOL_TINT;
-    if (strcmp(icon, "light") == 0) return LV_SYMBOL_EYE_OPEN;
-    if (strcmp(icon, "shutter") == 0) return LV_SYMBOL_UP;
-    if (strcmp(icon, "pump") == 0) return LV_SYMBOL_LOOP;
-    if (strcmp(icon, "valve") == 0) return LV_SYMBOL_MINUS;
-    if (strcmp(icon, "alarm") == 0) return LV_SYMBOL_WARNING;
-    if (strcmp(icon, "home") == 0) return LV_SYMBOL_HOME;
-    if (strcmp(icon, "clock") == 0) return LV_SYMBOL_BELL;
-    if (strcmp(icon, "info") == 0) return LV_SYMBOL_LIST;
-    if (strcmp(icon, "lightOn") == 0) return LV_SYMBOL_EYE_OPEN;
-    if (strcmp(icon, "lightOff") == 0) return LV_SYMBOL_EYE_CLOSE;
-    if (strcmp(icon, "humidity") == 0 || strcmp(icon, "water") == 0) return LV_SYMBOL_TINT;
-    if (strcmp(icon, "sun") == 0 || strcmp(icon, "heat") == 0 || strcmp(icon, "batteryIcon") == 0) return LV_SYMBOL_CHARGE;
-    if (strcmp(icon, "moon") == 0) return LV_SYMBOL_AUDIO;
-    if (strcmp(icon, "cool") == 0) return LV_SYMBOL_DOWN;
-    if (strcmp(icon, "fan") == 0) return LV_SYMBOL_REFRESH;
-    if (strcmp(icon, "door") == 0) return LV_SYMBOL_RIGHT;
-    if (strcmp(icon, "lock") == 0) return LV_SYMBOL_SETTINGS;
-    if (strcmp(icon, "plug") == 0) return LV_SYMBOL_POWER;
-    if (strcmp(icon, "wifi") == 0) return LV_SYMBOL_WIFI;
-    if (strcmp(icon, "car") == 0) return LV_SYMBOL_DRIVE;
-    return LV_SYMBOL_MINUS;
+    static char buf[5];
+    buf[0] = (char) (0xF0 | (cp >> 18));
+    buf[1] = (char) (0x80 | ((cp >> 12) & 0x3F));
+    buf[2] = (char) (0x80 | ((cp >> 6) & 0x3F));
+    buf[3] = (char) (0x80 | (cp & 0x3F));
+    buf[4] = '\0';
+    return buf;
+}
+
+static unsigned icon_code(const char *icon, bool on)
+{
+    if (icon && strcmp(icon, "light") == 0) return on ? 0xF0335 : 0xF0336;
+    if (icon && strcmp(icon, "lightOn") == 0) return 0xF0335;
+    if (icon && strcmp(icon, "lightOff") == 0) return 0xF0336;
+    if (icon) {
+        for (size_t i = 0; i < sizeof(ICON_CP) / sizeof(ICON_CP[0]); i++) {
+            if (strcmp(icon, ICON_CP[i].id) == 0) return ICON_CP[i].cp;
+        }
+    }
+    return 0xF02FD;
+}
+
+static bool icon_lit(const char *icon, bool on)
+{
+    if (!icon) return false;
+    if (strcmp(icon, "lightOn") == 0) return true;
+    if (strcmp(icon, "light") == 0) return on;
+    return false;
+}
+
+static uint32_t icon_ink(const tile_view_t *tile)
+{
+    if (tile && tile->own_text) return tile->text_color;
+    return 0xF4F7FB;
+}
+
+/* Ohne gesetzte "Farbe Ein" bleibt das Icon in der normalen Farbe, egal ob Ein oder Aus. */
+static void paint_icon_label(lv_obj_t *label, const char *icon, bool on, bool large, uint32_t ink, uint32_t lit_color, bool use_lit)
+{
+    if (!label) return;
+    lv_label_set_text(label, pua(icon_code(icon, on)));
+    lv_obj_set_style_text_font(label, large ? &mdi_48 : &mdi_28, 0);
+    uint32_t color = (use_lit && icon_lit(icon, on)) ? lit_color : ink;
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+}
+
+static void show_icon_label(lv_obj_t *label, const tile_view_t *tile, const char *icon, bool on, bool large)
+{
+    paint_icon_label(label, icon, on, large, icon_ink(tile), tile ? tile->on_bg : 0, tile && tile->own_on);
+}
+
+static void refresh_icons(tile_view_t *tile, bool on)
+{
+    if (!tile) return;
+    const char *shown = NULL;
+    if (strcmp(tile->icon_mode, "toggle") == 0) shown = on ? tile->icon_on : tile->icon_off;
+    else if (tile->icon_name[0]) shown = tile->icon_name;
+    if (tile->icon_label && shown) show_icon_label(tile->icon_label, tile, shown, on, tile->icon_large);
+    if (tile->title_icon && tile->icon_name[0] && strcmp(tile->icon_mode, "toggle") != 0) {
+        show_icon_label(tile->title_icon, tile, tile->icon_name, on, false);
+    }
+}
+
+static void hold_target(tile_view_t *tile, int value)
+{
+    if (!tile) return;
+    tile->holding = true;
+    tile->held_value = value;
+    tile->held_until = esp_timer_get_time() + 12000000LL;
+}
+
+static const lv_font_t *styled_font(const char *size, bool bold, bool italic)
+{
+    int px = 20;
+    if (size && strcmp(size, "normal") == 0) px = 28;
+    else if (size && strcmp(size, "large") == 0) px = 36;
+    else if (size && strcmp(size, "xlarge") == 0) px = 48;
+    if (bold && italic) {
+        if (px >= 48) return &montserrat_bolditalic_48;
+        if (px >= 36) return &montserrat_bolditalic_36;
+        if (px >= 28) return &montserrat_bolditalic_28;
+        return &montserrat_bolditalic_20;
+    }
+    if (bold) {
+        if (px >= 48) return &montserrat_bold_48;
+        if (px >= 36) return &montserrat_bold_36;
+        if (px >= 28) return &montserrat_bold_28;
+        return &montserrat_bold_20;
+    }
+    if (italic) {
+        if (px >= 48) return &montserrat_italic_48;
+        if (px >= 36) return &montserrat_italic_36;
+        if (px >= 28) return &montserrat_italic_28;
+        return &montserrat_italic_20;
+    }
+    if (px >= 48) return &lv_font_montserrat_48;
+    if (px >= 36) return &lv_font_montserrat_36;
+    if (px >= 28) return &lv_font_montserrat_28;
+    return &lv_font_montserrat_20;
 }
 
 static void note_touch(void)
@@ -448,9 +558,8 @@ static void tile_event(lv_event_t *event)
     }
     int next = tile->value > tile->value_min ? tile->value_min : (tile->value_max > tile->value_min ? tile->value_max : 1);
     tile->value = next;
-    if (tile->icon_label && tile->show_icon) {
-        lv_label_set_text(tile->icon_label, icon_symbol(next > tile->value_min ? tile->icon_on : tile->icon_off));
-    }
+    refresh_icons(tile, next > tile->value_min);
+    hold_target(tile, next);
     if (tile->card) {
         lv_obj_set_style_bg_color(tile->card, lv_color_hex(next > tile->value_min ? tile_on_color(tile) : tile->base_bg), 0);
     }
@@ -461,6 +570,7 @@ static void tile_event(lv_event_t *event)
 }
 
 static void show_page(int index);
+static void apply_state_body(cJSON *root);
 static void send_level(tile_view_t *tile, int value);
 static void close_dim_popup(void)
 {
@@ -529,7 +639,10 @@ static void dismiss_idle(lv_event_t *event)
 {
     (void) event;
     note_touch();
-    if (idle_active) set_idle_visible(false);
+    if (idle_active) {
+        set_idle_visible(false);
+        refresh_now = true;
+    }
 }
 
 static void update_analog_hands(int hour, int minute)
@@ -555,6 +668,7 @@ static void gesture_event(lv_event_t *event)
     (void) event;
     note_touch();
     if (locked || !layout_root) return;
+    if (dim_popup && !lv_obj_has_flag(dim_popup, LV_OBJ_FLAG_HIDDEN)) return;
     lv_dir_t direction = lv_indev_get_gesture_dir(lv_indev_get_act());
     int count = cJSON_GetArraySize(cJSON_GetObjectItem(layout_root, "pages"));
     if (count <= 1) return;
@@ -629,6 +743,8 @@ static void send_level(tile_view_t *tile, int value)
     }
     tile->value = value;
     if (value > tile->value_min) tile->level = value;
+    refresh_icons(tile, value > tile->value_min);
+    hold_target(tile, value);
     action_callback(tile->tile_id, tile->action_id, value);
 }
 
@@ -796,6 +912,7 @@ static void show_background(cJSON *page)
 static void show_page(int index)
 {
     /* Schlanker Aufbau + Icons/Farben wie Editor. Keine Slider/Bilder beim Paint. */
+    close_dim_popup();
     ui_wdt_kick();
     cJSON *pages = layout_root ? cJSON_GetObjectItem(layout_root, "pages") : NULL;
     int count = cJSON_GetArraySize(pages);
@@ -823,7 +940,7 @@ static void show_page(int index)
         lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
     }
     /* Feste Kopfzeile, Raster absolut darunter. Kein Flex: das hat die Reiter oben und unten verteilt. */
-    const int header_h = 52;
+    const int header_h = HEADER_H;
     const int grid_top = header_h;
     const int grid_h = HOMEDISPLAY_LCD_V_RES - grid_top;
     const int grid_w = HOMEDISPLAY_LCD_H_RES;
@@ -834,17 +951,16 @@ static void show_page(int index)
     if (show_tabs && count > 1) {
         lv_obj_set_layout(page_bar, 0);
         lv_obj_clear_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_pos(page_bar, 52, 6);
-        lv_obj_set_size(page_bar, HOMEDISPLAY_LCD_H_RES - 52 - 110, 40);
+        lv_obj_set_pos(page_bar, HEADER_LEFT, (HEADER_H - TAB_H) / 2);
+        lv_obj_set_size(page_bar, HOMEDISPLAY_LCD_H_RES - HEADER_LEFT - HEADER_RIGHT, TAB_H);
         int tab_x = 0;
-        const int tab_w = 132;
         for (int item = 0; item < count && item < 6; item++) {
-            if (tab_x + tab_w > HOMEDISPLAY_LCD_H_RES - 52 - 110) break;
+            if (tab_x + TAB_W > HOMEDISPLAY_LCD_H_RES - HEADER_LEFT - HEADER_RIGHT) break;
             cJSON *candidate = cJSON_GetArrayItem(pages, item);
             lv_obj_t *button = lv_btn_create(page_bar);
             lv_obj_set_pos(button, tab_x, 0);
-            lv_obj_set_size(button, tab_w - 6, 40);
-            lv_obj_set_style_max_height(button, 40, 0);
+            lv_obj_set_size(button, TAB_W - 6, TAB_H);
+            lv_obj_set_style_max_height(button, TAB_H, 0);
             lv_obj_set_style_pad_all(button, 0, 0);
             lv_obj_set_style_radius(button, 6, 0);
             style_flat(button);
@@ -855,11 +971,12 @@ static void show_page(int index)
             const char *title = cJSON_GetStringValue(cJSON_GetObjectItem(candidate, "title"));
             label_set_folded(caption, title ? title : "");
             lv_label_set_long_mode(caption, LV_LABEL_LONG_DOT);
-            lv_obj_set_width(caption, tab_w - 16);
-            lv_obj_set_style_text_font(caption, &lv_font_montserrat_20, 0);
+            lv_obj_set_width(caption, TAB_W - 16);
+            lv_obj_set_style_text_font(caption, &lv_font_montserrat_28, 0);
+            lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_center(caption);
             lv_obj_add_event_cb(button, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) item);
-            tab_x += tab_w;
+            tab_x += TAB_W;
         }
     } else {
         lv_obj_add_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
@@ -879,7 +996,40 @@ static void show_page(int index)
         if (tile_count >= 24) break;
         const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
         if (!kind) kind = "value";
-        if (strcmp(kind, "separator") == 0) continue;
+        if (strcmp(kind, "separator") == 0) {
+            int col = json_int(tile, "col", 0);
+            int row = json_int(tile, "row", 0);
+            int col_span = json_int(tile, "colSpan", 1);
+            int row_span = json_int(tile, "rowSpan", 1);
+            if (col_span < 1) col_span = 1;
+            if (row_span < 1) row_span = 1;
+            const char *orient = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "orientation"));
+            bool vertical = orient && strcmp(orient, "vertical") == 0;
+            int thickness = json_int(tile, "thickness", 2);
+            if (thickness < 1) thickness = 1;
+            if (thickness > 12) thickness = 12;
+            uint32_t line_color = parse_hex_color(cJSON_GetStringValue(cJSON_GetObjectItem(tile, "lineColor")), 0x5A7391);
+            lv_obj_t *card = lv_obj_create(grid);
+            lv_obj_set_pos(card, col * cell_w, row * cell_h);
+            lv_obj_set_size(card, cell_w * col_span, cell_h * row_span);
+            lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_radius(card, 0, 0);
+            style_flat(card);
+            lv_obj_clear_flag(card, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_t *line = lv_obj_create(card);
+            style_flat(line);
+            lv_obj_set_style_radius(line, 0, 0);
+            lv_obj_set_style_bg_color(line, lv_color_hex(line_color), 0);
+            lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
+            if (vertical) {
+                lv_obj_set_size(line, thickness, cell_h * row_span);
+            } else {
+                lv_obj_set_size(line, cell_w * col_span, thickness);
+            }
+            lv_obj_align(line, LV_ALIGN_CENTER, 0, 0);
+            continue;
+        }
         if (show_page_may_yield) {
             lvgl_port_unlock();
             ui_wdt_kick();
@@ -898,6 +1048,7 @@ static void show_page(int index)
         const char *icon = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "icon"));
         snprintf(view->tile_id, sizeof(view->tile_id), "%s", tile_id ? tile_id : "");
         snprintf(view->title, sizeof(view->title), "%s", title ? title : "");
+        if (icon && icon[0]) snprintf(view->icon_name, sizeof(view->icon_name), "%s", icon);
         view->confirm = cJSON_IsTrue(cJSON_GetObjectItem(tile, "confirm"));
         view->base_bg = kind_bg(kind);
         bool own_bg = false;
@@ -936,21 +1087,31 @@ static void show_page(int index)
         if (strcmp(kind, "nav") == 0) {
             const char *target = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "targetPage"));
             snprintf(view->target_page, sizeof(view->target_page), "%s", target ? target : "");
-            char caption[80];
-            if (!show_title) {
-                snprintf(caption, sizeof(caption), "%s", icon && icon[0] ? icon_symbol(icon) : LV_SYMBOL_RIGHT);
-            } else {
-                snprintf(caption, sizeof(caption), "%s %s",
-                         icon && icon[0] ? icon_symbol(icon) : LV_SYMBOL_RIGHT,
-                         view->title[0] ? view->title : "Weiter");
+            lv_obj_t *row = lv_obj_create(view->card);
+            lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            style_flat(row);
+            lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_all(row, 0, 0);
+            lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_column(row, 12, 0);
+            lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            if (icon && icon[0]) {
+                lv_obj_t *ic = lv_label_create(row);
+                paint_icon_label(ic, icon, false, false, 0xF4F7FB, 0, false);
+                lv_obj_clear_flag(ic, LV_OBJ_FLAG_CLICKABLE);
             }
-            lv_obj_t *name = lv_label_create(view->card);
-            lv_label_set_text(name, caption);
-            lv_obj_set_style_text_font(name, &lv_font_montserrat_28, 0);
+            if (show_title || !icon || !icon[0]) {
+                lv_obj_t *name = lv_label_create(row);
+                if (show_title) label_set_folded(name, view->title[0] ? view->title : "Weiter");
+                else lv_label_set_text(name, LV_SYMBOL_RIGHT);
+                lv_obj_set_style_text_font(name, &lv_font_montserrat_28, 0);
+                lv_obj_clear_flag(name, LV_OBJ_FLAG_CLICKABLE);
+            }
             lv_align_t nav_align = LV_ALIGN_CENTER;
             if (strcmp(title_align, "left") == 0) nav_align = LV_ALIGN_LEFT_MID;
             else if (strcmp(title_align, "right") == 0) nav_align = LV_ALIGN_RIGHT_MID;
-            lv_obj_align(name, nav_align, 0, 0);
+            lv_obj_align(row, nav_align, 0, 0);
             lv_obj_add_event_cb(view->card, nav_event, LV_EVENT_CLICKED, view);
             tile_count++;
             continue;
@@ -962,7 +1123,13 @@ static void show_page(int index)
             lv_label_set_text(label, text ? text : "");
             lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
             lv_obj_set_width(label, cell_w * col_span - 24);
-            lv_obj_set_style_text_font(label, &lv_font_montserrat_20, 0);
+            const char *label_size = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "textSize"));
+            bool label_bold = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textBold"));
+            bool label_italic = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textItalic"));
+            lv_obj_set_style_text_font(label, styled_font(label_size, label_bold, label_italic), 0);
+            if (cJSON_IsTrue(cJSON_GetObjectItem(tile, "textUnderline"))) {
+                lv_obj_set_style_text_decor(label, LV_TEXT_DECOR_UNDERLINE, 0);
+            }
             tile_count++;
             continue;
         }
@@ -1050,11 +1217,13 @@ static void show_page(int index)
             if (strcmp(title_align, "center") == 0) title_pos = LV_ALIGN_TOP_MID;
             else if (strcmp(title_align, "right") == 0) title_pos = LV_ALIGN_TOP_RIGHT;
             if (icon && icon[0] && !icon_toggle) {
+                lv_coord_t icon_x = strcmp(title_align, "right") == 0 ? -4 : (strcmp(title_align, "center") == 0 ? -28 : 0);
                 title_row_icon = lv_label_create(view->card);
-                lv_label_set_text(title_row_icon, icon_symbol(icon));
-                lv_obj_set_style_text_font(title_row_icon, &lv_font_montserrat_20, 0);
-                lv_obj_align(title_row_icon, title_pos, strcmp(title_align, "right") == 0 ? -4 : 0, 0);
-                title_x = strcmp(title_align, "left") == 0 ? 28 : 0;
+                view->title_icon = title_row_icon;
+                show_icon_label(title_row_icon, view, icon, false, false);
+                lv_obj_align(title_row_icon, title_pos, icon_x, 0);
+                lv_obj_clear_flag(title_row_icon, LV_OBJ_FLAG_CLICKABLE);
+                title_x = strcmp(title_align, "right") == 0 ? -40 : (strcmp(title_align, "center") == 0 ? 18 : 40);
             }
             lv_obj_t *name = lv_label_create(view->card);
             label_set_folded(name, view->title[0] ? view->title : "—");
@@ -1075,11 +1244,12 @@ static void show_page(int index)
 
         view->label = lv_label_create(view->card);
         lv_label_set_text(view->label, "—");
-        const lv_font_t *value_font = &lv_font_montserrat_28;
-        if (strcmp(view->text_size, "small") == 0) value_font = &lv_font_montserrat_20;
-        else if (strcmp(view->text_size, "large") == 0) value_font = &lv_font_montserrat_36;
-        else if (strcmp(view->text_size, "xlarge") == 0) value_font = &lv_font_montserrat_48;
-        lv_obj_set_style_text_font(view->label, value_font, 0);
+        bool value_bold = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textBold"));
+        bool value_italic = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textItalic"));
+        lv_obj_set_style_text_font(view->label, styled_font(view->text_size, value_bold, value_italic), 0);
+        if (cJSON_IsTrue(cJSON_GetObjectItem(tile, "textUnderline"))) {
+            lv_obj_set_style_text_decor(view->label, LV_TEXT_DECOR_UNDERLINE, 0);
+        }
         if (view->own_text) lv_obj_set_style_text_color(view->label, lv_color_hex(view->text_color), 0);
 
         if (view->has_action && dimmer) {
@@ -1114,10 +1284,13 @@ static void show_page(int index)
                 lv_obj_set_style_bg_color(view->card, lv_color_hex(view->base_bg), 0);
             }
             if (view->show_icon) {
+                lv_coord_t icon_y = view->show_state_text ? -6 : (show_title ? 16 : 4);
+                const char *shown = icon_toggle ? view->icon_off : (icon && icon[0] ? icon : "lightOff");
+                view->icon_large = true;
                 view->icon_label = lv_label_create(view->card);
-                lv_label_set_text(view->icon_label, icon_toggle ? icon_symbol(view->icon_off) : LV_SYMBOL_POWER);
-                lv_obj_set_style_text_font(view->icon_label, &lv_font_montserrat_48, 0);
-                lv_obj_align(view->icon_label, LV_ALIGN_CENTER, 0, view->show_state_text ? -6 : 4);
+                show_icon_label(view->icon_label, view, shown, false, true);
+                lv_obj_align(view->icon_label, LV_ALIGN_CENTER, 0, icon_y);
+                lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_CLICKABLE);
             }
             if (view->show_state_text) {
                 lv_label_set_text(view->label, "Aus");
@@ -1130,9 +1303,9 @@ static void show_page(int index)
             /* Reine Wertanzeige */
             if (icon && icon[0]) {
                 view->icon_label = lv_label_create(view->card);
-                lv_label_set_text(view->icon_label, icon_symbol(icon));
-                lv_obj_set_style_text_font(view->icon_label, &lv_font_montserrat_28, 0);
+                show_icon_label(view->icon_label, view, icon, false, false);
                 lv_obj_align(view->icon_label, LV_ALIGN_LEFT_MID, 0, 8);
+                lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_CLICKABLE);
             }
             lv_obj_align(view->label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
         }
@@ -1146,16 +1319,23 @@ static void show_page(int index)
     if (home_button) lv_obj_move_foreground(home_button);
     if (info_label) lv_obj_move_foreground(info_label);
     if (boot_layer) lv_obj_add_flag(boot_layer, LV_OBJ_FLAG_HIDDEN);
+    if (last_state_json[0]) {
+        cJSON *saved = cJSON_Parse(last_state_json);
+        if (saved) {
+            apply_state_body(saved);
+            cJSON_Delete(saved);
+        }
+    }
+    refresh_now = true;
     ESP_LOGI(TAG_UI, "Seite fertig (%d Kacheln)", tile_count);
 }
 
 static void apply_backlight(void)
 {
-    if (idle_mode == 2 && homedisplay_ui_busy() == false && esp_timer_get_time() - touched_at > idle_timeout_us) {
-        homedisplay_board_backlight(false);
-        return;
-    }
-    homedisplay_board_backlight(true);
+    bool on = !(idle_mode == 2 && homedisplay_ui_busy() == false && esp_timer_get_time() - touched_at > idle_timeout_us);
+    if (on && !backlight_on) refresh_now = true;
+    backlight_on = on;
+    homedisplay_board_backlight(on);
 }
 
 static void clock_tick(lv_timer_t *timer)
@@ -1220,6 +1400,7 @@ static void clock_tick(lv_timer_t *timer)
         if (analog) update_analog_hands(hour, minute);
     } else if (idle_active) {
         set_idle_visible(false);
+        refresh_now = true;
     } else if (idle_mode != 0) {
         lv_obj_add_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
     }
@@ -1260,11 +1441,11 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lvgl_port_init(&port_config);
     const lvgl_port_display_cfg_t display_config = {
         .panel_handle = panel,
-        .buffer_size = HOMEDISPLAY_LCD_H_RES * 20,
+        .buffer_size = HOMEDISPLAY_LCD_H_RES * 80,
         .double_buffer = false,
         .hres = HOMEDISPLAY_LCD_H_RES,
         .vres = HOMEDISPLAY_LCD_V_RES,
-        .flags = {.buff_dma = true, .buff_spiram = false},
+        .flags = {.buff_spiram = true},
     };
     const lvgl_port_display_rgb_cfg_t rgb_config = {};
     lv_disp_t *display = lvgl_port_add_disp_rgb(&display_config, &rgb_config);
@@ -1289,37 +1470,40 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_add_flag(status_label, LV_OBJ_FLAG_HIDDEN);
     info_label = lv_label_create(screen);
     lv_obj_set_style_text_color(info_label, lv_color_hex(0xF4F7FB), 0);
-    lv_obj_set_style_text_font(info_label, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(info_label, &lv_font_montserrat_36, 0);
     lv_label_set_text(info_label, "--:--");
-    lv_obj_align(info_label, LV_ALIGN_TOP_RIGHT, -12, 6);
+    lv_obj_align(info_label, LV_ALIGN_TOP_RIGHT, -12, (HEADER_H - 36) / 2);
     home_button = lv_btn_create(screen);
-    lv_obj_set_size(home_button, 40, 32);
-    lv_obj_set_pos(home_button, 8, 4);
+    lv_obj_set_size(home_button, TAB_H, TAB_H);
+    lv_obj_set_pos(home_button, 8, (HEADER_H - TAB_H) / 2);
     lv_obj_set_style_bg_color(home_button, lv_color_hex(0x2A4F7C), 0);
     lv_obj_set_style_radius(home_button, 6, 0);
     style_flat(home_button);
     lv_obj_t *home_symbol = lv_label_create(home_button);
-    lv_label_set_text(home_symbol, LV_SYMBOL_HOME);
+    paint_icon_label(home_symbol, "home", false, false, 0xF4F7FB, 0, false);
     lv_obj_center(home_symbol);
     lv_obj_add_event_cb(home_button, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) 0);
     page_bar = lv_obj_create(screen);
     lv_obj_set_layout(page_bar, 0);
-    lv_obj_set_size(page_bar, HOMEDISPLAY_LCD_H_RES - 52 - 110, 40);
-    lv_obj_set_pos(page_bar, 52, 6);
+    lv_obj_set_size(page_bar, HOMEDISPLAY_LCD_H_RES - HEADER_LEFT - HEADER_RIGHT, TAB_H);
+    lv_obj_set_pos(page_bar, HEADER_LEFT, (HEADER_H - TAB_H) / 2);
     lv_obj_set_style_pad_all(page_bar, 0, 0);
     lv_obj_set_style_bg_opa(page_bar, LV_OPA_TRANSP, 0);
     lv_obj_set_style_radius(page_bar, 0, 0);
     style_flat(page_bar);
     grid = lv_obj_create(screen);
-    lv_obj_set_pos(grid, 0, 48);
-    lv_obj_set_size(grid, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES - 48);
+    lv_obj_set_pos(grid, 0, HEADER_H);
+    lv_obj_set_size(grid, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES - HEADER_H);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_all(grid, 0, 0);
     lv_obj_set_style_radius(grid, 0, 0);
     style_flat(grid);
     clock_layer = lv_obj_create(screen);
+    lv_obj_set_pos(clock_layer, 0, 0);
     lv_obj_set_size(clock_layer, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES);
     lv_obj_set_style_bg_color(clock_layer, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(clock_layer, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(clock_layer, 0, 0);
     style_flat(clock_layer);
     clock_label = lv_label_create(clock_layer);
     lv_obj_set_style_text_font(clock_label, &lv_font_montserrat_48, 0);
@@ -1333,43 +1517,78 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_set_style_radius(analog_clock, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(analog_clock, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(analog_clock, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(analog_clock, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_border_width(analog_clock, 4, 0);
+    lv_obj_t *ring = lv_obj_create(analog_clock);
+    lv_obj_set_size(ring, 336, 336);
+    lv_obj_center(ring);
+    style_flat(ring);
+    lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(ring, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(ring, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_width(ring, 4, 0);
+    lv_obj_set_style_border_opa(ring, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
     for (int mark = 0; mark < 12; mark++) {
         double angle = (mark * 30 - 90) * 3.1415926535 / 180.0;
+        bool major = mark % 3 == 0;
+        int length = major ? 22 : 12;
+        int width = major ? 6 : 3;
         lv_obj_t *tick = lv_obj_create(analog_clock);
-        lv_obj_set_size(tick, mark % 3 == 0 ? 6 : 3, mark % 3 == 0 ? 22 : 12);
-        lv_obj_set_style_bg_color(tick, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_radius(tick, 2, 0);
+        lv_obj_set_size(tick, width, length);
         style_flat(tick);
+        lv_obj_set_style_radius(tick, 2, 0);
+        lv_obj_set_style_bg_color(tick, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_bg_opa(tick, LV_OPA_COVER, 0);
         lv_obj_clear_flag(tick, LV_OBJ_FLAG_CLICKABLE);
-        int length = mark % 3 == 0 ? 22 : 12;
-        lv_obj_set_style_transform_pivot_x(tick, (mark % 3 == 0 ? 6 : 3) / 2, 0);
+        lv_obj_set_style_transform_pivot_x(tick, width / 2, 0);
         lv_obj_set_style_transform_pivot_y(tick, length, 0);
         lv_obj_set_style_transform_angle(tick, mark * 300, 0);
         int radius = 168 - length;
         lv_obj_set_pos(tick,
-                       180 + (int) (cos(angle) * radius) - (mark % 3 == 0 ? 3 : 1),
+                       180 + (int) (cos(angle) * radius) - width / 2,
                        180 + (int) (sin(angle) * radius) - length);
+        char numeral[3];
+        snprintf(numeral, sizeof(numeral), "%d", mark == 0 ? 12 : mark);
+        lv_obj_t *digit = lv_label_create(analog_clock);
+        lv_label_set_text(digit, numeral);
+        lv_obj_set_style_text_font(digit, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(digit, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_opa(digit, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(digit, LV_OBJ_FLAG_CLICKABLE);
+        lv_point_t text_size;
+        lv_txt_get_size(&text_size, numeral, &lv_font_montserrat_28, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        int text_radius = 118;
+        lv_obj_set_pos(digit,
+                       180 + (int) (cos(angle) * text_radius) - text_size.x / 2,
+                       180 + (int) (sin(angle) * text_radius) - text_size.y / 2);
     }
     analog_hour = lv_obj_create(analog_clock);
     lv_obj_set_size(analog_hour, 10, 90);
     lv_obj_align(analog_hour, LV_ALIGN_CENTER, 0, -45);
-    lv_obj_set_style_bg_color(analog_hour, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_radius(analog_hour, 4, 0);
     style_flat(analog_hour);
+    lv_obj_set_style_radius(analog_hour, 4, 0);
+    lv_obj_set_style_bg_color(analog_hour, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(analog_hour, LV_OPA_COVER, 0);
     lv_obj_clear_flag(analog_hour, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_transform_pivot_x(analog_hour, 5, 0);
     lv_obj_set_style_transform_pivot_y(analog_hour, 90, 0);
     analog_min = lv_obj_create(analog_clock);
     lv_obj_set_size(analog_min, 6, 130);
     lv_obj_align(analog_min, LV_ALIGN_CENTER, 0, -65);
-    lv_obj_set_style_bg_color(analog_min, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_radius(analog_min, 3, 0);
     style_flat(analog_min);
+    lv_obj_set_style_radius(analog_min, 3, 0);
+    lv_obj_set_style_bg_color(analog_min, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(analog_min, LV_OPA_COVER, 0);
     lv_obj_clear_flag(analog_min, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_transform_pivot_x(analog_min, 3, 0);
     lv_obj_set_style_transform_pivot_y(analog_min, 130, 0);
+    lv_obj_t *hub = lv_obj_create(analog_clock);
+    lv_obj_set_size(hub, 16, 16);
+    lv_obj_align(hub, LV_ALIGN_CENTER, 0, 0);
+    style_flat(hub);
+    lv_obj_set_style_radius(hub, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(hub, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(hub, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(hub, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(analog_clock, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(clock_layer, dismiss_idle, LV_EVENT_PRESSED, NULL);
@@ -1380,7 +1599,7 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_set_style_bg_opa(dim_popup, LV_OPA_80, 0);
     style_flat(dim_popup);
     lv_obj_t *dim_card = lv_obj_create(dim_popup);
-    lv_obj_set_size(dim_card, 720, 200);
+    lv_obj_set_size(dim_card, 720, 300);
     lv_obj_center(dim_card);
     lv_obj_set_style_bg_color(dim_card, lv_color_hex(0x1A1A1A), 0);
     lv_obj_set_style_radius(dim_card, 12, 0);
@@ -1390,16 +1609,22 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_label_set_text(dim_title, "Dimmen");
     lv_obj_set_style_text_color(dim_title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(dim_title, &lv_font_montserrat_28, 0);
-    lv_obj_align(dim_title, LV_ALIGN_TOP_MID, 0, 16);
+    lv_obj_align(dim_title, LV_ALIGN_TOP_MID, 0, 24);
     dim_slider = lv_slider_create(dim_card);
-    lv_obj_set_width(dim_slider, 600);
-    lv_obj_align(dim_slider, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_set_size(dim_slider, 640, 28);
+    lv_obj_align(dim_slider, LV_ALIGN_TOP_MID, 0, 120);
+    lv_obj_set_style_radius(dim_slider, 14, LV_PART_MAIN);
+    lv_obj_set_style_radius(dim_slider, 14, LV_PART_INDICATOR);
+    lv_obj_set_style_pad_all(dim_slider, 14, LV_PART_KNOB);
+    lv_obj_set_style_radius(dim_slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
     lv_obj_add_event_cb(dim_slider, dim_slider_event, LV_EVENT_RELEASED, NULL);
+    lv_obj_set_ext_click_area(dim_slider, 24);
     lv_obj_t *dim_close = lv_btn_create(dim_card);
-    lv_obj_set_size(dim_close, 120, 40);
-    lv_obj_align(dim_close, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_set_size(dim_close, 180, 56);
+    lv_obj_align(dim_close, LV_ALIGN_BOTTOM_MID, 0, -28);
     lv_obj_t *dim_close_lbl = lv_label_create(dim_close);
     lv_label_set_text(dim_close_lbl, "OK");
+    lv_obj_set_style_text_font(dim_close_lbl, &lv_font_montserrat_28, 0);
     lv_obj_center(dim_close_lbl);
     lv_obj_add_event_cb(dim_close, dim_popup_close_event, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(dim_popup, LV_OBJ_FLAG_HIDDEN);
@@ -1551,7 +1776,10 @@ void homedisplay_ui_apply_config(const char *json)
     item = cJSON_GetObjectItem(root, "nightTo");
     if (item) night_to = item->valueint;
     cJSON_Delete(root);
-    if (day_brightness <= 0 && night_brightness <= 0) homedisplay_board_backlight(false);
+    if (day_brightness <= 0 && night_brightness <= 0) {
+        backlight_on = false;
+        homedisplay_board_backlight(false);
+    }
 }
 
 void homedisplay_ui_apply_state(const char *json)
@@ -1568,6 +1796,14 @@ void homedisplay_ui_apply_state(const char *json)
     cJSON *now = cJSON_GetObjectItem(root, "now");
     if (now) homedisplay_ui_set_time((int64_t) now->valuedouble);
     lvgl_port_lock(0);
+    apply_state_body(root);
+    lvgl_port_unlock();
+    cJSON_Delete(root);
+}
+
+static void apply_state_body(cJSON *root)
+{
+    if (!root || cJSON_IsTrue(cJSON_GetObjectItem(root, "unchanged"))) return;
     cJSON *tile = NULL;
     cJSON_ArrayForEach(tile, cJSON_GetObjectItem(root, "tiles")) {
         const char *tile_id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
@@ -1577,8 +1813,6 @@ void homedisplay_ui_apply_state(const char *json)
         if (!tile_id) continue;
         for (int index = 0; index < tile_count; index++) {
             if (strcmp(tiles[index].tile_id, tile_id) != 0) continue;
-            if (tiles[index].label) label_set_folded(tiles[index].label, text ? text : "-");
-            apply_status_color(&tiles[index], color);
             int number = tiles[index].value;
             bool has_number = false;
             if (cJSON_IsNumber(value)) {
@@ -1588,6 +1822,19 @@ void homedisplay_ui_apply_state(const char *json)
                 number = cJSON_IsTrue(value) ? 1 : 0;
                 has_number = true;
             }
+            if (tiles[index].holding) {
+                bool incoming_on = has_number && number > tiles[index].value_min;
+                bool held_on = tiles[index].held_value > tiles[index].value_min;
+                bool level = tiles[index].track || tiles[index].power;
+                bool matched = has_number && (level ? number == tiles[index].held_value : incoming_on == held_on);
+                if (esp_timer_get_time() > tiles[index].held_until || matched) {
+                    tiles[index].holding = false;
+                } else {
+                    continue;
+                }
+            }
+            if (tiles[index].label) label_set_folded(tiles[index].label, text ? text : "-");
+            apply_status_color(&tiles[index], color);
             if (!has_number) continue;
             tiles[index].applying = true;
             tiles[index].value = number;
@@ -1602,9 +1849,7 @@ void homedisplay_ui_apply_state(const char *json)
                     else lv_obj_clear_state(tiles[index].power, LV_STATE_CHECKED);
                 }
             }
-            if (tiles[index].icon_label && tiles[index].show_icon) {
-                lv_label_set_text(tiles[index].icon_label, icon_symbol(on ? tiles[index].icon_on : tiles[index].icon_off));
-            }
+            refresh_icons(&tiles[index], on);
             if (tiles[index].has_action && tiles[index].label && tiles[index].show_state_text) {
                 label_set_folded(tiles[index].label, on ? "Ein" : "Aus");
             }
@@ -1628,8 +1873,6 @@ void homedisplay_ui_apply_state(const char *json)
             tiles[index].applying = false;
         }
     }
-    lvgl_port_unlock();
-    cJSON_Delete(root);
 }
 
 void homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
@@ -1714,4 +1957,16 @@ void homedisplay_ui_lock(bool value)
 bool homedisplay_ui_busy(void)
 {
     return locked || esp_timer_get_time() - touched_at < 5000000;
+}
+
+bool homedisplay_ui_page_visible(void)
+{
+    return layout_root != NULL && !idle_active && backlight_on && !boot_screen_active;
+}
+
+bool homedisplay_ui_take_refresh(void)
+{
+    bool pending = refresh_now;
+    refresh_now = false;
+    return pending;
 }

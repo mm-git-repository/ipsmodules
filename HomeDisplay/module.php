@@ -975,23 +975,27 @@ class HomeDisplay extends IPSModuleStrict
     private function deviceState(array $device, int $since = -2): array
     {
         $layout = $this->activeLayout($device['id']);
-        $runtime = $this->runtime();
-        $seq = (int) ($runtime[(string) $device['id']]['seq'] ?? 0);
         if ($since === -2) {
             $since = isset($_GET['since']) ? (int) $_GET['since'] : -1;
         }
-        if ($since >= 0 && $since >= $seq) {
-            return [
-                'contract' => self::CONTRACT,
-                'seq' => $seq,
-                'now' => time(),
-                'unchanged' => true,
-                'tiles' => [],
-            ];
+
+        return $this->stateForLayout(is_array($layout) ? $layout : [], $device['id'], $since);
+    }
+
+    /**
+     * Prüfsumme des Kachelstands. Positive 31-Bit-Zahl, damit die Anzeige sie als seq vergleichen kann.
+     *
+     * @param list<array<string, mixed>> $tiles
+     */
+    private function tileStateSeq(array $tiles): int
+    {
+        $json = json_encode($tiles, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (!is_string($json)) {
+            return 1;
         }
-        $state = $this->stateForLayout(is_array($layout) ? $layout : [], $device['id'], $since);
-        $state['seq'] = $seq;
-        return $state;
+        $seq = (int) sprintf('%u', crc32($json)) & 0x7FFFFFFF;
+
+        return $seq > 0 ? $seq : 1;
     }
 
     /**
@@ -1001,16 +1005,6 @@ class HomeDisplay extends IPSModuleStrict
     private function stateForLayout(array $layout, int $instanceId, int $since): array
     {
         $runtime = $this->runtime();
-        $seq = (int) ($runtime[(string) $instanceId]['seq'] ?? 0);
-        if ($since >= 0 && $since >= $seq) {
-            return [
-                'contract' => self::CONTRACT,
-                'seq' => $seq,
-                'now' => time(),
-                'unchanged' => true,
-                'tiles' => [],
-            ];
-        }
         $pending = $runtime[(string) $instanceId]['pending'] ?? [];
         $pending = is_array($pending) ? $pending : [];
         $tiles = [];
@@ -1067,11 +1061,7 @@ class HomeDisplay extends IPSModuleStrict
                     continue;
                 }
                 if ($kind === 'scene') {
-                    $tiles[] = [
-                        'tileId' => $tileId,
-                        'quality' => trim((string) ($tile['actionId'] ?? '')) !== '' ? 'ok' : 'empty',
-                        'pending' => isset($pending[$tileId]),
-                    ];
+                    $tiles[] = $this->sceneStateTile($tile, $tileId, $pending);
                     continue;
                 }
                 if ($kind === 'weather') {
@@ -1124,6 +1114,17 @@ class HomeDisplay extends IPSModuleStrict
                 ];
             }
         }
+        $seq = $this->tileStateSeq($tiles);
+        if ($since >= 0 && $since === $seq) {
+            return [
+                'contract' => self::CONTRACT,
+                'seq' => $seq,
+                'now' => time(),
+                'unchanged' => true,
+                'tiles' => [],
+            ];
+        }
+
         return [
             'contract' => self::CONTRACT,
             'seq' => $seq,
@@ -1196,6 +1197,54 @@ class HomeDisplay extends IPSModuleStrict
         }
 
         return $payload;
+    }
+
+    /**
+     * Szene gilt als „Ein“, wenn alle Lampen der Szene aktuell den dort hinterlegten Zielwert haben.
+     *
+     * @param array<string, mixed> $tile
+     * @param array<string, mixed> $pending
+     * @return array<string, mixed>
+     */
+    private function sceneStateTile(array $tile, string $tileId, array $pending): array
+    {
+        $actionId = trim((string) ($tile['actionId'] ?? ''));
+        $steps = is_array($tile['sceneSteps'] ?? null) ? $tile['sceneSteps'] : [];
+        if ($steps === [] && (int) ($tile['variableId'] ?? 0) > 0) {
+            $steps = [['variableId' => (int) $tile['variableId'], 'value' => true]];
+        }
+        $active = $steps !== [];
+        foreach ($steps as $step) {
+            if (!is_array($step)) {
+                $active = false;
+                continue;
+            }
+            $variableId = (int) ($step['variableId'] ?? 0);
+            if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
+                $active = false;
+                continue;
+            }
+            $expected = $step['value'] ?? null;
+            $current = GetValue($variableId);
+            if (is_bool($expected) || is_bool($current)) {
+                if ((bool) $current !== (bool) $expected) {
+                    $active = false;
+                }
+            } elseif (is_numeric($expected)) {
+                if (abs((float) $current - (float) $expected) > 0.01) {
+                    $active = false;
+                }
+            } else {
+                $active = false;
+            }
+        }
+        return [
+            'tileId' => $tileId,
+            'value' => $active,
+            'text' => $active ? 'Ein' : 'Aus',
+            'quality' => $actionId !== '' ? 'ok' : 'empty',
+            'pending' => isset($pending[$tileId]),
+        ];
     }
 
     /** @param array<string, mixed> $tile @return array<string, mixed> */

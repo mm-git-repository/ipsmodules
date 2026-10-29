@@ -7,7 +7,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_touch.h"
 
-#define HOMEDISPLAY_FIRMWARE_VERSION "0.6.0"
+#define HOMEDISPLAY_FIRMWARE_VERSION "0.6.8"
 #define HOMEDISPLAY_LCD_H_RES 1024
 #define HOMEDISPLAY_LCD_V_RES 600
 
@@ -36,6 +36,8 @@ void homedisplay_ui_set_online(bool online, int rssi);
 void homedisplay_ui_lock(bool locked);
 void homedisplay_ui_test_pattern(bool on);
 bool homedisplay_ui_busy(void);
+bool homedisplay_ui_page_visible(void);
+bool homedisplay_ui_take_refresh(void);
 uint32_t homedisplay_ui_frames(void);
 
 /* Netzwerk */

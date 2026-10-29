@@ -11,6 +11,13 @@
   --text: #1c2430;
   --muted: #5c6873;
 }
+@font-face {
+  font-family: "Material Design Icons";
+  src: url("mdi.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
+}
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; overflow: hidden; }
 body {
@@ -160,7 +167,7 @@ label.small { font-size: 12px; color: var(--muted); }
 .tile.chart .oh-card { flex: 1; min-height: 0; }
 .tile.chart .oh-card-body { align-items: stretch; min-height: 3.2em; }
 .tile.display.oh-style { background: #1a2d45; padding: 8px 10px; }
-.oh-card { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; height: 100%; gap: calc(4px * var(--tile-scale, 1)); text-align: left; }
+.oh-card { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; height: 100%; gap: calc(10px * var(--tile-scale, 1)); text-align: left; }
 .oh-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5em; flex-shrink: 0; width: 100%; font-size: min(3.2cqmin, 1.05em); }
 .oh-card-label { font-weight: 600; opacity: 0.82; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .oh-card-state { font-size: min(4.8cqmin, 1.45em); font-weight: 700; line-height: 1.05; flex-shrink: 0; text-align: right; }
@@ -315,7 +322,6 @@ label.small { font-size: 12px; color: var(--muted); }
 #probe-grid .tile > button[type=button] { position: absolute; bottom: 4px; right: 4px; z-index: 4; font-size: 10px; padding: 2px 6px; opacity: 0.9; }
 .tile.nav { background: var(--theme-button); align-items: center; justify-content: center; text-align: center; }
 .tile.as-switch { background: var(--theme-button); }
-.tile.as-switch.on { background: var(--theme-accent); color: #102033; }
 .tile.as-switch .sw { box-shadow: inset 0 0 0 2px rgba(255,255,255,.45); }
 .tile.as-switch.on .sw.on { background: #102033; }
 .tile.has-own-bg { background: var(--tile-own-bg); }
@@ -328,8 +334,25 @@ label.small { font-size: 12px; color: var(--muted); }
 #var-picker::backdrop { background: rgba(16, 32, 51, .45); }
 #var-picker-list { width: 100%; margin-top: 8px; }
 .tile.label { background: transparent; border: 1px solid #35506f; }
-.tile.separator { background: transparent; justify-content: center; padding: 0 12px; }
-.tile.separator .line { height: 2px; background: #5a7391; width: 100%; }
+.tile.separator { background: transparent; border: 0; padding: 0; overflow: visible; border-radius: 0; }
+.tile.separator .line { position: absolute; background: var(--line-color, #5a7391); }
+.tile.separator.horizontal .line { left: -3px; right: -3px; top: 50%; height: var(--line-thickness, 2px); transform: translateY(-50%); }
+.tile.separator.vertical .line { top: -3px; bottom: -3px; left: 50%; width: var(--line-thickness, 2px); transform: translateX(-50%); }
+.mdi {
+  font-family: "Material Design Icons";
+  font-style: normal;
+  font-weight: normal;
+  font-size: 1em;
+  line-height: 1;
+}
+.icon-font, .icon-font option { font-family: "Material Design Icons", "Segoe UI", sans-serif; }
+.tile.label .label-text.size-small { font-size: 0.9em; }
+.tile.label .label-text.size-normal { font-size: 1.2em; }
+.tile.label .label-text.size-large { font-size: 1.7em; }
+.tile.label .label-text.size-xlarge { font-size: 2.2em; }
+.tile.label .label-text.bold { font-weight: 700; }
+.tile.label .label-text.italic { font-style: italic; }
+.tile.label .label-text.underline { text-decoration: underline; }
 .tile.system { background: #16293f; border: 1px dashed #5a7391; }
 .tile-scale .text,
 .tile.system .text { font-size: 0.95em; color: #9fb2c8; max-width: 100%; line-height: 1.2; }
