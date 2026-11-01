@@ -108,16 +108,39 @@ final class HomeDisplayChart
         $period = self::normalizePeriod($period);
         $end = time();
         if ($period === '1h') {
-            return self::downsample(self::loggedSeries($archive, $variableId, $end - 7200, $end - 3600), self::MAX_POINTS);
+            $start = $end - 7200;
+            $stop = $end - 3600;
+
+            return self::downsample(self::loggedSeries($archive, $variableId, $start, $stop, 500), self::MAX_POINTS);
         }
         if ($period === '6h') {
-            return self::downsample(self::aggregatedSeries($archive, $variableId, 0, $end - 12 * 3600, $end - 6 * 3600), self::MAX_POINTS);
+            $start = $end - 12 * 3600;
+            $stop = $end - 6 * 3600;
+            $values = self::aggregatedSeries($archive, $variableId, 0, $start, $stop);
+            if (count($values) < 2) {
+                $values = self::loggedSeries($archive, $variableId, $start, $stop, 500);
+            }
+
+            return self::downsample($values, self::MAX_POINTS);
         }
         if ($period === '24h') {
-            return self::downsample(self::aggregatedSeries($archive, $variableId, 0, $end - 2 * 86400, $end - 86400), self::MAX_POINTS);
+            $start = $end - 2 * 86400;
+            $stop = $end - 86400;
+            $values = self::aggregatedSeries($archive, $variableId, 0, $start, $stop);
+            if (count($values) < 2) {
+                $values = self::loggedSeries($archive, $variableId, $start, $stop, 1000);
+            }
+
+            return self::downsample($values, self::MAX_POINTS);
+        }
+        $start = $end - 14 * 86400;
+        $stop = $end - 7 * 86400;
+        $values = self::aggregatedSeries($archive, $variableId, 1, $start, $stop);
+        if (count($values) < 2) {
+            $values = self::loggedSeries($archive, $variableId, $start, $stop, 2000);
         }
 
-        return self::downsample(self::aggregatedSeries($archive, $variableId, 1, $end - 14 * 86400, $end - 7 * 86400), self::MAX_POINTS);
+        return self::downsample($values, self::MAX_POINTS);
     }
 
     public static function normalizePeriod(string $period): string
@@ -162,25 +185,38 @@ final class HomeDisplayChart
         $end = time();
         $period = self::normalizePeriod($period);
         if ($period === '1h') {
-            $values = self::loggedSeries($archive, $variableId, $end - 3600, $end);
+            $start = $end - 3600;
+            $values = self::loggedSeries($archive, $variableId, $start, $end, 500);
         } elseif ($period === '6h') {
-            $values = self::aggregatedSeries($archive, $variableId, 0, $end - 6 * 3600, $end);
+            $start = $end - 6 * 3600;
+            $values = self::aggregatedSeries($archive, $variableId, 0, $start, $end);
+            if (count($values) < 2) {
+                $values = self::loggedSeries($archive, $variableId, $start, $end, 500);
+            }
         } elseif ($period === '24h') {
-            $values = self::aggregatedSeries($archive, $variableId, 0, $end - 86400, $end);
+            $start = $end - 86400;
+            $values = self::aggregatedSeries($archive, $variableId, 0, $start, $end);
+            if (count($values) < 2) {
+                $values = self::loggedSeries($archive, $variableId, $start, $end, 1000);
+            }
         } else {
-            $values = self::aggregatedSeries($archive, $variableId, 1, $end - 7 * 86400, $end);
+            $start = $end - 7 * 86400;
+            $values = self::aggregatedSeries($archive, $variableId, 1, $start, $end);
+            if (count($values) < 2) {
+                $values = self::loggedSeries($archive, $variableId, $start, $end, 2000);
+            }
         }
 
         return self::downsample($values, self::MAX_POINTS);
     }
 
     /** @return list<float> */
-    private static function loggedSeries(int $archive, int $variableId, int $start, int $end): array
+    private static function loggedSeries(int $archive, int $variableId, int $start, int $end, int $limit = 500): array
     {
         if (!function_exists('AC_GetLoggedValues')) {
             return [];
         }
-        $raw = AC_GetLoggedValues($archive, $variableId, $start, $end, 500);
+        $raw = AC_GetLoggedValues($archive, $variableId, $start, $end, $limit);
         if (!is_array($raw)) {
             return [];
         }

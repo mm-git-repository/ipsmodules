@@ -1799,7 +1799,7 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     for (int mark = 0; mark < 12; mark++) {
         double angle = (mark * 30.0 - 90.0) * 3.1415926535 / 180.0;
         bool major = mark % 3 == 0;
-        int length = major ? 22 : 12;
+        int length = major ? 14 : 8;
         int outer = 164;
         clock_tip(&analog_tick_pts[mark][0], mark * 300, outer);
         clock_tip(&analog_tick_pts[mark][1], mark * 300, outer - length);
@@ -1816,7 +1816,7 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
         lv_txt_get_size(&text_size, numeral, &lv_font_montserrat_28, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
         double cosine = cos(angle);
         double sine = sin(angle);
-        int text_radius = 160 - (int) (fabs(cosine) * text_size.x / 2.0 + fabs(sine) * text_size.y / 2.0);
+        int text_radius = 136 - (int) (fabs(cosine) * text_size.x / 2.0 + fabs(sine) * text_size.y / 2.0);
         lv_obj_set_pos(digit,
                        180 + (int) (cosine * text_radius) - text_size.x / 2,
                        180 + (int) (sine * text_radius) - text_size.y / 2);
@@ -2193,6 +2193,13 @@ void homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
     if (!storage_image_ready_limit(file, 400 * 1024)) return;
     char path[96];
     snprintf(path, sizeof(path), "S:/%s", file);
+    lv_img_header_t header;
+    lv_res_t info_res = lv_img_decoder_get_info(path, &header);
+    if (info_res == LV_RES_OK) {
+        ESP_LOGI(TAG_UI, "Kamera-Bild %s dekodiert: %dx%d", file, header.w, header.h);
+    } else {
+        ESP_LOGW(TAG_UI, "Kamera-Bild %s: Decoder lehnt Datei ab (kein gueltiges JPEG/PNG fuer LVGL)", file);
+    }
     if (!ui_client_lock()) return;
     for (int index = 0; index < tile_count; index++) {
         if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].camera_img) {

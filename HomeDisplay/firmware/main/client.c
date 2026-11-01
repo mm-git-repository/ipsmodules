@@ -416,7 +416,11 @@ static esp_err_t download_to_file(const char *path, const char *target, int time
     esp_http_client_fetch_headers(client);
     int status = esp_http_client_get_status_code(client);
     if (status != 200) {
-        ESP_LOGW(TAG, "Download HTTP %d auf %s", status, path);
+        char body[200];
+        int body_len = esp_http_client_read(client, body, sizeof(body) - 1);
+        if (body_len < 0) body_len = 0;
+        body[body_len] = '\0';
+        ESP_LOGW(TAG, "Download HTTP %d auf %s: %s", status, path, body[0] ? body : "(keine Antwort)");
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return ESP_FAIL;
@@ -558,8 +562,9 @@ static void fetch_one_camera(const char *tile_id, const char *file)
     snprintf(status, sizeof(status), "Lade Kamera\n%s", tile_id);
     homedisplay_ui_status(status);
     ESP_LOGI(TAG, "Kamera laden %s", tile_id);
-    /* Kurzes Timeout: IPS/ONVIF darf den Start der Ansicht nicht blockieren. */
-    if (download_to_file(path, target, 8000, 900 * 1024) != ESP_OK) {
+    /* Läuft im Hintergrund-Task: großzügiges Timeout, da ONVIF-Snapshots mit
+       Retry im Modul mehrere Sekunden brauchen können, bevor sie fertig sind. */
+    if (download_to_file(path, target, 20000, 900 * 1024) != ESP_OK) {
         ESP_LOGW(TAG, "Kamera %s konnte nicht geladen werden", tile_id);
         return;
     }

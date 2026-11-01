@@ -493,7 +493,7 @@ final class HomeDisplayMedia
         return null;
     }
 
-    public static function mediaBytesWithRetry(int $mediaId, int $attempts = 24): ?string
+    public static function mediaBytesWithRetry(int $mediaId, int $attempts = 12): ?string
     {
         if ($mediaId <= 0) {
             return null;
@@ -601,17 +601,65 @@ final class HomeDisplayMedia
     {
         $binary = self::snapshotMediaBinary($tile, false);
         if ($binary !== null && $binary !== '' && self::looksLikeImageBytes($binary)) {
-            return $binary;
+            return self::normalizeCameraBinary($binary);
         }
-        for ($round = 0; $round < 3; $round++) {
+        for ($round = 0; $round < 2; $round++) {
             self::refreshCameraTile($tile);
             usleep(400000);
             $binary = self::snapshotMediaBinary($tile, true);
             if ($binary !== null && $binary !== '' && self::looksLikeImageBytes($binary)) {
-                return $binary;
+                return self::normalizeCameraBinary($binary);
             }
         }
         return null;
+    }
+
+    /**
+     * Viele ONVIF-/Kamera-Snapshots sind progressive JPEGs oder unüblich groß. Der
+     * JPEG-Decoder der Anzeige (TJpgDec via LVGL) kann nur Baseline-JPEG lesen und
+     * zeigt bei progressiven Dateien eine leere Kachel ohne Fehlermeldung. GD schreibt
+     * beim Kodieren immer Baseline-JPEG, daher normalisiert ein Re-Encode das Bild für
+     * die Anzeige, unabhängig davon, wie die Kamera es ursprünglich erzeugt hat.
+     */
+    public static function normalizeCameraBinary(string $binary): string
+    {
+        if ($binary === '' || !function_exists('imagecreatefromstring')) {
+            return $binary;
+        }
+        $source = @imagecreatefromstring($binary);
+        if ($source === false) {
+            return $binary;
+        }
+        $width = imagesx($source);
+        $height = imagesy($source);
+        if ($width <= 0 || $height <= 0) {
+            imagedestroy($source);
+            return $binary;
+        }
+        $maxWidth = 1024;
+        $maxHeight = 768;
+        $scale = min(1.0, $maxWidth / $width, $maxHeight / $height);
+        $targetWidth = max(1, (int) round($width * $scale));
+        $targetHeight = max(1, (int) round($height * $scale));
+        $target = $source;
+        $resized = false;
+        if ($scale < 1.0) {
+            $target = imagecreatetruecolor($targetWidth, $targetHeight);
+            imagecopyresampled($target, $source, 0, 0, 0, 0, $targetWidth, $targetHeight, $width, $height);
+            $resized = true;
+        }
+        imageinterlace($target, 0);
+        ob_start();
+        $ok = imagejpeg($target, null, 85);
+        $encoded = ob_get_clean();
+        if ($resized) {
+            imagedestroy($target);
+        }
+        imagedestroy($source);
+        if ($ok && is_string($encoded) && $encoded !== '') {
+            return $encoded;
+        }
+        return $binary;
     }
 
     /** @param array<string, mixed> $tile */
