@@ -30,7 +30,6 @@ static const char *TAG_UI = "ui";
 
 /* true nur wenn show_page vom Client-Task kommt – dann LVGL-Lock zwischen Kacheln freigeben. */
 static bool show_page_may_yield;
-static bool show_page_lock_lost;
 #define CHART_SLOT_MAX 8
 #define CHART_POINT_MAX 56
 #define UI_CLIENT_LOCK_MS 2000
@@ -102,6 +101,11 @@ typedef struct {
     bool text_bold;
     bool text_italic;
     bool text_underline;
+    bool value_row;
+    bool show_title_row;
+    char row_align[8];
+    char icon_place[8];
+    char title_icon_name[24];
 } tile_view_t;
 
 static void ui_wdt_kick(void)
@@ -494,9 +498,82 @@ static void refresh_icons(tile_view_t *tile, bool on)
     if (strcmp(tile->icon_mode, "toggle") == 0) shown = on ? tile->icon_on : tile->icon_off;
     else if (tile->icon_name[0]) shown = tile->icon_name;
     if (tile->icon_label && shown) show_icon_label(tile->icon_label, tile, shown, on, tile->icon_large);
-    if (tile->title_icon && tile->icon_name[0] && strcmp(tile->icon_mode, "toggle") != 0) {
-        show_icon_label(tile->title_icon, tile, tile->icon_name, on, false);
+    if (tile->title_icon && tile->title_icon_name[0] && strcmp(tile->icon_mode, "toggle") != 0) {
+        show_icon_label(tile->title_icon, tile, tile->title_icon_name, on, false);
     }
+}
+
+/* Icon und Wert in einer Zeile. Der Wert bleibt in der Kachel, das Icon nur wenn die Höhe reicht. */
+static void layout_value_row(tile_view_t *view)
+{
+    if (!view || !view->value_row || !view->label || !view->card) return;
+    lv_coord_t inner_w = lv_obj_get_content_width(view->card);
+    lv_coord_t inner_h = lv_obj_get_content_height(view->card);
+    if (inner_w < 24) inner_w = 24;
+    if (inner_h < 16) inner_h = 16;
+    lv_coord_t y0 = view->show_title_row ? 28 : 4;
+    lv_coord_t row_h = inner_h - y0;
+    if (row_h < 16) row_h = 16;
+
+    const lv_font_t *font = lv_obj_get_style_text_font(view->label, LV_PART_MAIN);
+    lv_coord_t text_h = font ? lv_font_get_line_height(font) : 28;
+    bool want_icon = view->icon_label && view->icon_name[0] && strcmp(view->icon_place, "none") != 0;
+    int icon_px = 0;
+    if (want_icon) {
+        if (row_h >= 48) {
+            icon_px = 48;
+            view->icon_large = true;
+        } else if (row_h >= 28) {
+            icon_px = 28;
+            view->icon_large = false;
+        } else {
+            want_icon = false;
+        }
+    }
+    if (view->icon_label) {
+        if (want_icon) {
+            lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+            show_icon_label(view->icon_label, view, view->icon_name, false, view->icon_large);
+        } else {
+            lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    lv_coord_t gap = want_icon ? 8 : 0;
+    lv_coord_t max_text = inner_w - (want_icon ? icon_px + gap : 0);
+    if (max_text < 16) max_text = 16;
+    const char *text = lv_label_get_text(view->label);
+    lv_point_t sz = { 0, 0 };
+    if (font && text) lv_txt_get_size(&sz, text, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_coord_t text_w = sz.x > 0 ? sz.x : 8;
+    if (text_w > max_text) text_w = max_text;
+
+    lv_coord_t pair_w = text_w + (want_icon ? icon_px + gap : 0);
+    if (pair_w > inner_w) pair_w = inner_w;
+    lv_coord_t pair_x = 0;
+    if (strcmp(view->row_align, "center") == 0) pair_x = (inner_w - pair_w) / 2;
+    else if (strcmp(view->row_align, "right") == 0) pair_x = inner_w - pair_w;
+    if (pair_x < 0) pair_x = 0;
+
+    bool after = want_icon && strcmp(view->icon_place, "after") == 0;
+    lv_coord_t text_x = pair_x;
+    lv_coord_t icon_x = pair_x;
+    if (want_icon && after) icon_x = pair_x + text_w + gap;
+    else if (want_icon) text_x = pair_x + icon_px + gap;
+
+    lv_coord_t block_h = text_h;
+    if (want_icon && icon_px > block_h) block_h = (lv_coord_t) icon_px;
+    if (block_h > row_h) block_h = row_h;
+    lv_coord_t row_top = y0 + (row_h - block_h) / 2;
+
+    lv_obj_set_width(view->label, text_w);
+    lv_label_set_long_mode(view->label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(view->label, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(view->label, LV_ALIGN_TOP_LEFT, text_x, row_top + (block_h - text_h) / 2);
+    if (want_icon && view->icon_label) {
+        lv_obj_align(view->icon_label, LV_ALIGN_TOP_LEFT, icon_x, row_top + (block_h - icon_px) / 2);
+    }
+    lv_obj_move_foreground(view->label);
 }
 
 static void hold_target(tile_view_t *tile, int value)
@@ -1163,10 +1240,11 @@ static void show_page(int index)
             ui_wdt_kick();
             vTaskDelay(pdMS_TO_TICKS(20));
             ui_wdt_kick();
-            if (!lvgl_port_lock(UI_CLIENT_LOCK_MS)) {
+            /* Die Sperre muss zurückkommen, bevor an weiteren LVGL-Objekten gebaut wird.
+             * Ungeschützt weiterzeichnen, während der Renderer gleichzeitig läuft, beschädigt
+             * den Objektbaum und lässt LVGL selbst hängen. Also warten, nicht aufgeben. */
+            while (!lvgl_port_lock(UI_CLIENT_LOCK_MS)) {
                 ui_wdt_kick();
-                show_page_lock_lost = true;
-                break;
             }
         } else {
             ui_wdt_kick();
@@ -1349,17 +1427,25 @@ static void show_page(int index)
         }
 
         /* Titelzeile: kleines Icon + Text */
+        cJSON *show_title_icon_item = cJSON_GetObjectItem(tile, "showTitleIcon");
+        bool show_title_icon = cJSON_IsBool(show_title_icon_item) ? cJSON_IsTrue(show_title_icon_item) : !plain_value;
+        const char *title_icon_field = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "titleIcon"));
+        const char *title_icon_src = NULL;
+        if (plain_value) title_icon_src = (title_icon_field && title_icon_field[0]) ? title_icon_field : NULL;
+        else if (title_icon_field && title_icon_field[0]) title_icon_src = title_icon_field;
+        else title_icon_src = icon;
         if (show_title) {
             lv_obj_t *title_row_icon = NULL;
             lv_align_t title_pos = LV_ALIGN_TOP_LEFT;
             lv_coord_t title_x = 0;
             if (strcmp(title_align, "center") == 0) title_pos = LV_ALIGN_TOP_MID;
             else if (strcmp(title_align, "right") == 0) title_pos = LV_ALIGN_TOP_RIGHT;
-            if (icon && icon[0] && !icon_toggle && !dimmer && !action_dim && !plain_value) {
+            if (show_title_icon && title_icon_src && title_icon_src[0] && !icon_toggle && !dimmer && !action_dim) {
                 lv_coord_t icon_x = strcmp(title_align, "right") == 0 ? -4 : (strcmp(title_align, "center") == 0 ? -28 : 0);
                 title_row_icon = lv_label_create(view->card);
                 view->title_icon = title_row_icon;
-                show_icon_label(title_row_icon, view, icon, false, false);
+                snprintf(view->title_icon_name, sizeof(view->title_icon_name), "%s", title_icon_src);
+                show_icon_label(title_row_icon, view, title_icon_src, false, false);
                 lv_obj_align(title_row_icon, title_pos, icon_x, 0);
                 lv_obj_clear_flag(title_row_icon, LV_OBJ_FLAG_CLICKABLE);
                 title_x = strcmp(title_align, "right") == 0 ? -40 : (strcmp(title_align, "center") == 0 ? 18 : 40);
@@ -1386,12 +1472,9 @@ static void show_page(int index)
                 lv_obj_set_style_line_color(view->chart_line, lv_color_hex(color_mono ? 0xFFFFFF : theme_accent), 0);
                 lv_obj_set_style_line_rounded(view->chart_line, true, 0);
                 lv_obj_clear_flag(view->chart_line, LV_OBJ_FLAG_CLICKABLE);
-                view->chart_points[0].x = 0;
-                view->chart_points[0].y = (lv_coord_t) (chart_h - 1);
-                view->chart_points[1].x = (lv_coord_t) (chart_w - 1);
-                view->chart_points[1].y = (lv_coord_t) (chart_h - 1);
-                lv_line_set_points(view->chart_line, view->chart_points, 2);
+                lv_obj_set_size(view->chart_line, chart_w, chart_h);
                 lv_obj_align(view->chart_line, LV_ALIGN_BOTTOM_MID, 0, 0);
+                lv_obj_add_flag(view->chart_line, LV_OBJ_FLAG_HIDDEN);
             }
             view->label = lv_label_create(view->card);
             lv_label_set_text(view->label, "—");
@@ -1469,36 +1552,21 @@ static void show_page(int index)
             }
             lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
         } else if (plain_value) {
-            lv_align_t col_align = LV_ALIGN_LEFT_MID;
-            lv_flex_align_t cross = LV_FLEX_ALIGN_START;
-            lv_text_align_t text_align = LV_TEXT_ALIGN_LEFT;
-            if (strcmp(title_align, "center") == 0) {
-                col_align = LV_ALIGN_CENTER;
-                cross = LV_FLEX_ALIGN_CENTER;
-                text_align = LV_TEXT_ALIGN_CENTER;
-            } else if (strcmp(title_align, "right") == 0) {
-                col_align = LV_ALIGN_RIGHT_MID;
-                cross = LV_FLEX_ALIGN_END;
-                text_align = LV_TEXT_ALIGN_RIGHT;
+            view->value_row = true;
+            view->show_title_row = show_title;
+            snprintf(view->row_align, sizeof(view->row_align), "%s", title_align);
+            const char *place = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "iconPlace"));
+            if (place && (strcmp(place, "before") == 0 || strcmp(place, "after") == 0 || strcmp(place, "none") == 0)) {
+                snprintf(view->icon_place, sizeof(view->icon_place), "%s", place);
+            } else {
+                snprintf(view->icon_place, sizeof(view->icon_place), "%s", (icon && icon[0]) ? "before" : "none");
             }
-            lv_obj_t *column = lv_obj_create(view->card);
-            lv_obj_set_size(column, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-            style_flat(column);
-            lv_obj_set_style_bg_opa(column, LV_OPA_TRANSP, 0);
-            lv_obj_set_style_pad_all(column, 0, 0);
-            lv_obj_set_style_pad_row(column, 8, 0);
-            lv_obj_set_flex_flow(column, LV_FLEX_FLOW_COLUMN);
-            lv_obj_set_flex_align(column, LV_FLEX_ALIGN_CENTER, cross, cross);
-            lv_obj_clear_flag(column, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_align(column, col_align, 0, show_title ? 12 : 0);
-            if (icon && icon[0]) {
-                view->icon_large = true;
-                view->icon_label = lv_label_create(column);
-                show_icon_label(view->icon_label, view, icon, false, true);
+            if (!view->own_text) lv_obj_set_style_text_color(view->label, lv_color_hex(0xF4F7FB), 0);
+            if (icon && icon[0] && strcmp(view->icon_place, "none") != 0) {
+                view->icon_label = lv_label_create(view->card);
                 lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_CLICKABLE);
             }
-            lv_obj_set_parent(view->label, column);
-            lv_obj_set_style_text_align(view->label, text_align, 0);
+            layout_value_row(view);
         } else {
             /* Reine Wertanzeige */
             if (icon && icon[0]) {
@@ -1714,6 +1782,7 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_set_size(analog_clock, 360, 360);
     lv_obj_center(analog_clock);
     style_flat(analog_clock);
+    lv_obj_set_style_pad_all(analog_clock, 0, 0);
     lv_obj_set_style_radius(analog_clock, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(analog_clock, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(analog_clock, LV_OPA_COVER, 0);
@@ -1919,14 +1988,11 @@ void homedisplay_ui_apply_layout(const char *json)
     last_setup_detail[0] = '\0';
     /* Boot-Screen erst nach dem Zeichnen ausblenden – sonst sieht man RGB-Müll (grün). */
     show_page_may_yield = true;
-    show_page_lock_lost = false;
     show_page(0);
-    if (!show_page_lock_lost) {
-        hide_boot_screen();
-        lvgl_port_unlock();
-    } else {
-        ui_wdt_kick();
-    }
+    /* show_page() hält beim Rückkehren immer die Sperre – die Yield-Stelle wartet darauf,
+     * statt sie ungeschützt aufzugeben. */
+    hide_boot_screen();
+    lvgl_port_unlock();
     show_page_may_yield = false;
     ESP_LOGI(TAG_UI, "Layout fertig (%d Kacheln)", tile_count);
 }
@@ -1998,29 +2064,52 @@ static void paint_chart(tile_view_t *view, cJSON *tile)
     cJSON *series = cJSON_GetObjectItem(tile, "series");
     if (!cJSON_IsArray(series)) return;
     int total = cJSON_GetArraySize(series);
-    if (total < 2) return;
+    if (total < 2) {
+        lv_obj_add_flag(view->chart_line, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
     int count = total > CHART_POINT_MAX ? CHART_POINT_MAX : total;
-    double y_min = 0;
-    double y_max = 1;
-    cJSON *min_item = cJSON_GetObjectItem(tile, "seriesMin");
-    cJSON *max_item = cJSON_GetObjectItem(tile, "seriesMax");
-    if (cJSON_IsNumber(min_item)) y_min = min_item->valuedouble;
-    if (cJSON_IsNumber(max_item)) y_max = max_item->valuedouble;
-    double range = y_max - y_min;
-    if (range <= 0.0) range = 1.0;
-    int plot_w = view->chart_w > 1 ? view->chart_w : 2;
-    int plot_h = view->chart_h > 1 ? view->chart_h : 2;
+    double values[CHART_POINT_MAX];
+    double data_min = 0.0;
+    double data_max = 0.0;
     for (int index = 0; index < count; index++) {
         int source = count == total ? index : (int) ((long) index * (total - 1) / (count - 1));
         cJSON *point = cJSON_GetArrayItem(series, source);
-        double value = cJSON_IsNumber(point) ? point->valuedouble : y_min;
-        double norm = (value - y_min) / range;
+        double value = cJSON_IsNumber(point) ? point->valuedouble : 0.0;
+        values[index] = value;
+        if (index == 0 || value < data_min) data_min = value;
+        if (index == 0 || value > data_max) data_max = value;
+    }
+    double y_min = data_min;
+    double y_max = data_max;
+    cJSON *min_item = cJSON_GetObjectItem(tile, "seriesMin");
+    cJSON *max_item = cJSON_GetObjectItem(tile, "seriesMax");
+    if (cJSON_IsNumber(min_item) && cJSON_IsNumber(max_item) && max_item->valuedouble > min_item->valuedouble) {
+        y_min = min_item->valuedouble;
+        y_max = max_item->valuedouble;
+    }
+    double span = y_max - y_min;
+    if (span < 0.000001) {
+        y_min -= 1.0;
+        y_max += 1.0;
+    } else if ((data_max - data_min) > 0.000001 && (data_max - data_min) < span * 0.2) {
+        y_min = data_min;
+        y_max = data_max;
+    }
+    span = y_max - y_min;
+    if (span < 0.000001) span = 1.0;
+    int plot_w = view->chart_w > 1 ? view->chart_w : 2;
+    int plot_h = view->chart_h > 1 ? view->chart_h : 2;
+    for (int index = 0; index < count; index++) {
+        double norm = (values[index] - y_min) / span;
         if (norm < 0.0) norm = 0.0;
         if (norm > 1.0) norm = 1.0;
         view->chart_points[index].x = (lv_coord_t) ((plot_w - 1) * index / (count - 1));
         view->chart_points[index].y = (lv_coord_t) (plot_h - 1 - (int) (norm * (plot_h - 1)));
     }
     lv_line_set_points(view->chart_line, view->chart_points, (uint16_t) count);
+    lv_obj_set_size(view->chart_line, plot_w, plot_h);
+    lv_obj_clear_flag(view->chart_line, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void apply_state_body(cJSON *root)
@@ -2061,6 +2150,7 @@ static void apply_state_body(cJSON *root)
                 }
             }
             if (tiles[index].label) label_set_folded(tiles[index].label, text ? text : "-");
+            if (tiles[index].value_row) layout_value_row(&tiles[index]);
             apply_status_color(&tiles[index], color);
             if (!has_number) continue;
             tiles[index].applying = true;

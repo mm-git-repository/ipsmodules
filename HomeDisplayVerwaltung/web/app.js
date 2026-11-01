@@ -257,10 +257,31 @@ function panelSwitchHtml(tile, title, on, iconId, showIcon) {
   return `<div class="panel-switch">${titleHtml}<div class="panel-icon">${iconHtml}</div>${stateHtml}</div>`;
 }
 
+function titleIconEnabled(tile) {
+  if (!tile) return false;
+  const plain = tile.kind === "value" && tileInteractionMode(tile) === "";
+  if (tile.showTitleIcon === true) return true;
+  if (tile.showTitleIcon === false) return false;
+  return !plain;
+}
+
+function titleIconShown(tile) {
+  return titleIconEnabled(tile) && tile.showTitle !== false;
+}
+
+function titleIconId(tile) {
+  if (!tile) return "";
+  const plain = tile.kind === "value" && tileInteractionMode(tile) === "";
+  if (plain) return tile.titleIcon || "";
+  return tile.titleIcon || tile.icon || "";
+}
+
 function ohCardMarkup(label, stateHtml, bodyHtml, footHtml, tile) {
   const foot = footHtml ? `<div class="oh-card-foot">${footHtml}</div>` : "";
   const align = tile && tile.titleAlign === "center" ? "align-center" : (tile && tile.titleAlign === "right" ? "align-right" : "");
   const title = tile && tile.showTitle === false ? "" : escapeHtml(label || "");
+  const headingId = titleIconShown(tile) ? titleIconId(tile) : "";
+  const headingIcon = headingId ? `<span class="oh-card-title-icon">${iconVisual(headingId)}</span>` : "";
   const sizes = { small: "0.85em", large: "1.35em", xlarge: "1.8em" };
   const bits = [];
   if (tile && tile.textColor) bits.push(`color:${tile.textColor}`);
@@ -270,7 +291,7 @@ function ohCardMarkup(label, stateHtml, bodyHtml, footHtml, tile) {
   if (tile && tile.textUnderline) bits.push(`text-decoration:underline`);
   const style = bits.length ? ` style="${bits.join(";")}"` : "";
   const state = stateHtml ? `<span class="oh-card-state"${style}>${stateHtml}</span>` : "";
-  return `<div class="oh-card"><div class="oh-card-head ${align}"><span class="oh-card-label">${title}</span>${state}</div><div class="oh-card-body">${bodyHtml || ""}</div>${foot}</div>`;
+  return `<div class="oh-card"><div class="oh-card-head ${align}"><span class="oh-card-label">${headingIcon}${title}</span>${state}</div><div class="oh-card-body">${bodyHtml || ""}</div>${foot}</div>`;
 }
 
 function normalizeTile(tile) {
@@ -595,10 +616,12 @@ function syncInteractionPropertyPanels() {
     hintEl.textContent = hint;
     hintEl.classList.toggle("hidden", !hint);
   }
-  const kindLabel = $("p-kind")?.closest("label");
-  if (kindLabel) kindLabel.classList.toggle("hidden", mode === "switch");
+  $("p-interaction")?.closest("label")?.classList.toggle("hidden", mode === "");
   const actionLabel = $("p-action")?.closest("label");
-  if (actionLabel) actionLabel.classList.toggle("hidden", mode === "battery");
+  if (actionLabel) actionLabel.classList.toggle("hidden", mode === "" || mode === "battery");
+  $("p-confirm")?.closest("label")?.classList.toggle("hidden", mode === "");
+  if ($("p-value-icon")) $("p-value-icon").disabled = ($("p-icon-place")?.value || "") === "none";
+  if ($("p-title-icon")) $("p-title-icon").disabled = !$("p-show-title-icon")?.checked;
   if (DIM_CONTROLS.includes(mode)) {
     const variable = variableById(tile.variableId);
     if (variable && variable.action && $("p-action")) $("p-action").checked = true;
@@ -1404,8 +1427,10 @@ function buildTileElement(tile, context) {
         if (tile.textUnderline) bits.push("text-decoration:underline");
         const readoutStyle = bits.length ? ` style="${bits.join(";")}"` : "";
         const iconStyle = tile.textColor ? ` style="color:${tile.textColor}"` : "";
-        const iconHtml = iconId ? `<div class="oh-card-icon"${iconStyle}>${iconVisual(iconId)}</div>` : "";
-        cardBody = `<div class="value-stack ${align}">${iconHtml}<div class="value-readout"${readoutStyle}>${escapeHtml(readout)}</div></div>`;
+        const place = tile.iconPlace === "after" || tile.iconPlace === "none" ? tile.iconPlace : (iconId ? "before" : "none");
+        const iconHtml = place !== "none" && iconId ? `<div class="oh-card-icon"${iconStyle}>${iconVisual(iconId)}</div>` : "";
+        const readoutHtml = `<div class="value-readout"${readoutStyle}>${escapeHtml(readout)}</div>`;
+        cardBody = `<div class="value-stack ${align}">${place === "after" ? readoutHtml + iconHtml : iconHtml + readoutHtml}</div>`;
       } else {
         cardBody = body || "";
       }
@@ -2332,11 +2357,16 @@ function renderProperties() {
     block.classList.toggle("hidden", !block.dataset.for.split(" ").includes(tile.kind));
   }
   $("p-kind").value = KIND_NAMES[tile.kind];
-  const kindLabel = $("p-kind")?.closest("label");
-  if (kindLabel) kindLabel.classList.toggle("hidden", tile.kind === "value" && tileInteractionMode(tile) === "switch");
   $("p-title").value = tile.title || "";
   if ($("p-show-title")) $("p-show-title").checked = tile.showTitle !== false;
   if ($("p-title-align")) $("p-title-align").value = tile.titleAlign || "left";
+  if ($("p-show-title-icon")) $("p-show-title-icon").checked = titleIconEnabled(tile);
+  if ($("p-title-icon")) {
+    fillIconSelect($("p-title-icon"), true);
+    const heading = titleIconId(tile);
+    $("p-title-icon").value = heading;
+    $("p-title-icon").disabled = !$("p-show-title-icon")?.checked;
+  }
   if ($("p-own-bg")) $("p-own-bg").checked = Boolean(tile.bgColor);
   if ($("p-bg-color") && tile.bgColor) $("p-bg-color").value = tile.bgColor;
   if ($("p-own-on")) $("p-own-on").checked = Boolean(tile.onColor);
@@ -2355,6 +2385,11 @@ function renderProperties() {
   if (tile.kind === "value") {
     fillIconSelect($("p-value-icon"), false);
     $("p-value-icon").value = tile.icon || "";
+    if ($("p-icon-place")) {
+      const place = tile.iconPlace === "after" || tile.iconPlace === "none" ? tile.iconPlace : "before";
+      $("p-icon-place").value = place;
+      if ($("p-value-icon")) $("p-value-icon").disabled = place === "none";
+    }
     fillIconSelect($("p-iconon"));
     fillIconSelect($("p-iconoff"));
     if ($("p-iconon")) $("p-iconon").value = tile.iconOn || "lightOn";
@@ -2550,6 +2585,17 @@ function applyProperties() {
   tile.title = $("p-title").value;
   if ($("p-show-title") && !$("p-show-title").checked) tile.showTitle = false;
   else delete tile.showTitle;
+  if ($("p-show-title-icon")) tile.showTitleIcon = $("p-show-title-icon").checked;
+  const headingIcon = $("p-title-icon") ? $("p-title-icon").value : "";
+  const plainValue = tile.kind === "value" && (($("p-interaction") && $("p-interaction").value) || "") === "";
+  if (plainValue) {
+    if (headingIcon) tile.titleIcon = headingIcon;
+    else delete tile.titleIcon;
+  } else if ($("p-title-icon")) {
+    if (headingIcon) tile.titleIcon = headingIcon;
+    else delete tile.titleIcon;
+    if (tile.kind !== "value") tile.icon = headingIcon;
+  }
   const titleAlign = $("p-title-align") ? $("p-title-align").value : "left";
   if (titleAlign === "center" || titleAlign === "right") tile.titleAlign = titleAlign;
   else delete tile.titleAlign;
@@ -2572,7 +2618,7 @@ function applyProperties() {
   } else {
     setStatus("Position oder Größe passt nicht ins Raster.");
   }
-  if (tile.kind === "nav") tile.icon = $("p-icon").value;
+  if (tile.kind === "nav") tile.icon = ($("p-title-icon") && $("p-title-icon").value) || ($("p-icon") ? $("p-icon").value : "");
   if (tile.kind === "value") {
     const prefix = $("p-prefix") ? $("p-prefix").value.trim() : "";
     if (prefix) tile.prefix = prefix;
@@ -2600,10 +2646,19 @@ function applyProperties() {
       }
       if ($("p-show-state-text")?.checked) tile.showStateText = true;
       delete tile.icon;
+      delete tile.iconPlace;
     } else if (mode !== "battery" && mode !== "combo") {
       const iconVal = $("p-value-icon") ? $("p-value-icon").value : "";
       if (iconVal) tile.icon = iconVal;
       else delete tile.icon;
+      if (mode === "") {
+        const place = $("p-icon-place") ? $("p-icon-place").value : "before";
+        tile.iconPlace = place === "after" || place === "none" ? place : "before";
+      } else {
+        delete tile.iconPlace;
+      }
+    } else {
+      delete tile.iconPlace;
     }
     if ($("p-own-text")?.checked && $("p-text-color") && mode === "") tile.textColor = $("p-text-color").value;
     else delete tile.textColor;
@@ -2797,7 +2852,7 @@ function applyProperties() {
     else delete tile.textUnderline;
   }
   if (tile.kind === "weather") {
-    tile.icon = $("p-weather-icon") ? $("p-weather-icon").value || "sun" : "sun";
+    tile.icon = ($("p-title-icon") && $("p-title-icon").value) || ($("p-weather-icon") ? $("p-weather-icon").value : "") || "sun";
     tile.unit = $("p-weather-unit") ? $("p-weather-unit").value : (tile.unit || "°C");
     tile.decimals = $("p-weather-decimals") ? Number($("p-weather-decimals").value) || 0 : (tile.decimals ?? 1);
   }
@@ -2868,7 +2923,7 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-title-align", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-show-title-icon", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {

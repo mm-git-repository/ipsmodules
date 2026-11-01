@@ -123,16 +123,20 @@
       <form id="prop-form">
         <h3 id="t-title">Kachel</h3>
         <div id="tile-body">
-        <label>Art <input id="p-kind" readonly></label>
-        <label>Titel <input id="p-title"></label>
-        <label><input id="p-show-title" type="checkbox" checked> Titel anzeigen</label>
-        <label>Titelposition
-          <select id="p-title-align">
-            <option value="left">Links</option>
-            <option value="center">Mitte</option>
-            <option value="right">Rechts</option>
-          </select>
-        </label>
+        <label class="hidden">Art <input id="p-kind" readonly></label>
+        <div class="title-line">
+          <label class="grow">Titel <input id="p-title"></label>
+          <label>Position
+            <select id="p-title-align">
+              <option value="left">Links</option>
+              <option value="center">Mitte</option>
+              <option value="right">Rechts</option>
+            </select>
+          </label>
+          <label class="switch" title="Titel anzeigen">Anzeigen <input id="p-show-title" type="checkbox" checked></label>
+          <label class="switch" title="Kleines Icon in der Überschrift">Icon <input id="p-show-title-icon" type="checkbox"></label>
+          <label class="title-symbol">Symbol <select id="p-title-icon"></select></label>
+        </div>
         <label>Gruppe (Frame)
           <input id="p-group" placeholder="z. B. Wohnzimmer" maxlength="40">
         </label>
@@ -317,9 +321,16 @@
             <label>Sollwert-Variable <span class="pick-row"><input id="p-setpoint-var" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="setpoint">Auswählen</button></span></label>
             <label>Schritt <input id="p-setpoint-step" type="number" step="0.1" value="0.5"></label>
           </div>
-          <div id="p-icon-static">
-            <label>Symbol (optional)
+          <div class="row" id="p-icon-static">
+            <label>Symbol
               <select id="p-value-icon"></select>
+            </label>
+            <label>Position
+              <select id="p-icon-place">
+                <option value="before">Vor dem Text</option>
+                <option value="after">Nach dem Text</option>
+                <option value="none">Kein Icon</option>
+              </select>
             </label>
           </div>
           <div data-for="value" id="p-battery-wrap" class="hidden">

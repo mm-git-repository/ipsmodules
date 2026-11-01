@@ -397,6 +397,18 @@ final class HomeDisplayPanelSchema
                     } elseif ($icon !== '' && in_array($icon, self::ICONS, true)) {
                         $public['icon'] = $icon;
                     }
+                    $plainValue = $actionId === '' && !$isDimmer && $control !== 'battery';
+                    if ($plainValue) {
+                        $place = (string) ($tile['iconPlace'] ?? '');
+                        if (!in_array($place, ['before', 'after', 'none'], true)) {
+                            $place = ($icon !== '' && in_array($icon, self::ICONS, true)) ? 'before' : 'none';
+                        }
+                        if ($place === 'none') {
+                            unset($public['icon']);
+                        } elseif ($icon !== '' && in_array($icon, self::ICONS, true)) {
+                            $public['iconPlace'] = $place;
+                        }
+                    }
                     if ($actionId !== '') {
                         $public['control'] = $control;
                         $public['actionId'] = $actionId;
@@ -528,6 +540,13 @@ final class HomeDisplayPanelSchema
     {
         if (array_key_exists('showTitle', $tile) && $tile['showTitle'] === false) {
             $public['showTitle'] = false;
+        }
+        if (array_key_exists('showTitleIcon', $tile)) {
+            $public['showTitleIcon'] = (bool) $tile['showTitleIcon'];
+        }
+        $titleIcon = (string) ($tile['titleIcon'] ?? '');
+        if ($titleIcon !== '' && in_array($titleIcon, self::ICONS, true)) {
+            $public['titleIcon'] = $titleIcon;
         }
         $align = (string) ($tile['titleAlign'] ?? '');
         if (in_array($align, ['center', 'right'], true)) {
