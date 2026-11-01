@@ -1802,13 +1802,40 @@ class HomeDisplay extends IPSModuleStrict
     }
 
     /** @param array<string, mixed> $tile @return array{binary?: string, error?: string, detail?: string} */
+    /** @param array<string, mixed> $tile @return array{0: int, 1: int} */
+    private function cameraBadgePixels(array $tile): array
+    {
+        $layout = $this->editorProbeLayout($this->InstanceID) ?? $this->activeLayout($this->InstanceID) ?? [];
+        $columns = (int) ($layout['columns'] ?? 3);
+        $rows = (int) ($layout['rows'] ?? 4);
+        $screenW = 1024;
+        $screenH = 600;
+        try {
+            $profileId = (string) IPS_GetProperty($this->InstanceID, 'DisplayProfile');
+            $profile = HomeDisplayPanelSchema::profile($profileId !== '' ? $profileId : HomeDisplayPanelSchema::defaultProfileId());
+            $screenW = (int) ($profile['width'] ?? $screenW);
+            $screenH = (int) ($profile['height'] ?? $screenH);
+        } catch (Throwable $e) {
+            unset($e);
+        }
+        return HomeDisplayMedia::cameraBadgePixels($tile, $columns, $rows, $screenW, $screenH);
+    }
+
+    /** @param array<string, mixed> $tile */
+    private function scaledCameraBinary(string $binary, array $tile): string
+    {
+        [$width, $height] = $this->cameraBadgePixels($tile);
+        return HomeDisplayMedia::normalizeCameraBinary($binary, $width, $height);
+    }
+
     private function cameraBinaryForTile(array $tile): array
     {
         $streamErr = HomeDisplayMedia::cameraStreamBindingError($tile);
         if ($streamErr !== null) {
             return ['error' => 'camera_fetch', 'detail' => $streamErr];
         }
-        $binary = HomeDisplayMedia::fetchCameraBinary($tile);
+        [$badgeW, $badgeH] = $this->cameraBadgePixels($tile);
+        $binary = HomeDisplayMedia::fetchCameraBinary($tile, $badgeW, $badgeH);
         if ($binary !== null && $binary !== '') {
             return ['binary' => $binary];
         }
@@ -1832,7 +1859,7 @@ class HomeDisplay extends IPSModuleStrict
         if (preg_match('#^https?://#i', $raw)) {
             $binary = $this->fetchRemoteBinary($raw);
             if ($binary !== null && $binary !== '' && HomeDisplayMedia::looksLikeImageBytes($binary)) {
-                return ['binary' => $binary];
+                return ['binary' => $this->scaledCameraBinary($binary, $tile)];
             }
             if ($binary !== null && $binary !== '') {
                 return [
@@ -1847,14 +1874,14 @@ class HomeDisplay extends IPSModuleStrict
         }
         $binary = HomeDisplayMedia::readBinaryFromPath($raw);
         if ($binary !== null && $binary !== '' && HomeDisplayMedia::looksLikeImageBytes($binary)) {
-            return ['binary' => $binary];
+            return ['binary' => $this->scaledCameraBinary($binary, $tile)];
         }
         $mediaId = HomeDisplayMedia::mediaIdFromFileRef($raw);
         if ($mediaId > 0) {
             HomeDisplayMedia::refreshCameraTile($tile);
             $binary = HomeDisplayMedia::mediaBytesWithRetry($mediaId);
             if ($binary !== null && $binary !== '' && HomeDisplayMedia::looksLikeImageBytes($binary)) {
-                return ['binary' => $binary];
+                return ['binary' => $this->scaledCameraBinary($binary, $tile)];
             }
             if (HomeDisplayMedia::isStreamMediaId($mediaId)) {
                 return [

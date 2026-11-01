@@ -442,7 +442,7 @@ label.small { font-size: 12px; color: var(--muted); }
 .tile-scale .text,
 .tile.system .text { font-size: 0.95em; color: #9fb2c8; max-width: 100%; line-height: 1.2; }
 .tile.image { background: #0b1626; padding: 0; align-items: center; justify-content: center; }
-.tile.image img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.tile.image img { max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; min-width: 0; min-height: 0; }
 .tile.image .missing { color: #5a7391; padding: 10px; }
 .tile-scale .battery,
 .tile.battery .battery { display: flex; align-items: center; justify-content: center; gap: min(2.5cqmin, 0.65em); width: 100%; max-width: 100%; flex: 1 1 auto; min-height: 0; height: 100%; margin: 0; }
@@ -474,10 +474,27 @@ label.small { font-size: 12px; color: var(--muted); }
 .tile.battery .battery-pct { font-size: min(15cqmin, 2.8em); font-weight: 600; flex: none; line-height: 1; }
 .tile.battery.oh-style .tile-scale { align-items: stretch; }
 .tile.camera { background: #0b1626; }
+.tile.camera img.live-preview {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  top: 8px;
+  width: calc(100% - 16px);
+  height: calc(100% - 16px);
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 16px);
+  margin: auto;
+  object-fit: contain;
+  pointer-events: none;
+  z-index: 0;
+}
+.tile.camera:has(.kicker) img.live-preview { top: 26px; height: calc(100% - 34px); max-height: calc(100% - 34px); }
+.tile.camera .kicker { position: relative; z-index: 1; }
 .tile-scale .camera-preview,
 .tile.camera .camera-preview { flex: 1; display: flex; align-items: center; justify-content: center; width: 100%; border: 1px dashed #5a7391; border-radius: 0.5em; color: #9fb2c8; font-size: 1em; text-align: center; padding: 0.6em; min-height: 0; overflow: hidden; }
 .tile .span-badge { position: absolute; top: 4px; right: 4px; font-size: 10px; padding: 2px 5px; border-radius: 4px; background: rgba(0,0,0,.35); color: #ffb547; pointer-events: none; z-index: 2; }
-.tile .resize-handle { position: absolute; background: #ffb547; opacity: .85; z-index: 3; }
+.tile .resize-handle { position: absolute; background: #ffb547; opacity: .85; z-index: 4; pointer-events: auto; touch-action: none; }
 .tile.selected .resize-se { width: 12px; height: 12px; right: 2px; bottom: 2px; cursor: nwse-resize; border-radius: 2px; }
 .tile.selected .resize-e { width: 6px; top: 20%; bottom: 20%; right: 0; cursor: ew-resize; }
 .tile.selected .resize-s { height: 6px; left: 20%; right: 20%; bottom: 0; cursor: ns-resize; }

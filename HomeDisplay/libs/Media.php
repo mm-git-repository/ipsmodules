@@ -596,32 +596,68 @@ final class HomeDisplayMedia
         return false;
     }
 
+    /**
+     * Pixel der Kamerafläche in der Kachel, passend zu ui.c:
+     * Raster unter der 68-px-Kopfzeile, Bild cell*span minus Innenabstand.
+     *
+     * @param array<string, mixed> $tile
+     * @return array{0: int, 1: int}
+     */
+    public static function cameraBadgePixels(array $tile, int $columns, int $rows, int $screenW = 1024, int $screenH = 600): array
+    {
+        if ($columns < 1) {
+            $columns = 1;
+        }
+        if ($columns > 4) {
+            $columns = 4;
+        }
+        if ($rows < 1) {
+            $rows = 1;
+        }
+        if ($rows > 6) {
+            $rows = 6;
+        }
+        if ($screenW < 64) {
+            $screenW = 1024;
+        }
+        if ($screenH < 64) {
+            $screenH = 600;
+        }
+        $headerH = $screenH >= 480 ? 68 : 0;
+        $cellW = intdiv($screenW, $columns);
+        $cellH = intdiv(max(1, $screenH - $headerH), $rows);
+        $colSpan = max(1, (int) ($tile['colSpan'] ?? 1));
+        $rowSpan = max(1, (int) ($tile['rowSpan'] ?? 1));
+        return [
+            max(16, $cellW * $colSpan - 16),
+            max(16, $cellH * $rowSpan - 36),
+        ];
+    }
+
     /** @param array<string, mixed> $tile */
-    public static function fetchCameraBinary(array $tile): ?string
+    public static function fetchCameraBinary(array $tile, int $maxWidth = 0, int $maxHeight = 0): ?string
     {
         $binary = self::snapshotMediaBinary($tile, false);
         if ($binary !== null && $binary !== '' && self::looksLikeImageBytes($binary)) {
-            return self::normalizeCameraBinary($binary);
+            return self::normalizeCameraBinary($binary, $maxWidth, $maxHeight);
         }
         for ($round = 0; $round < 2; $round++) {
             self::refreshCameraTile($tile);
             usleep(400000);
             $binary = self::snapshotMediaBinary($tile, true);
             if ($binary !== null && $binary !== '' && self::looksLikeImageBytes($binary)) {
-                return self::normalizeCameraBinary($binary);
+                return self::normalizeCameraBinary($binary, $maxWidth, $maxHeight);
             }
         }
         return null;
     }
 
     /**
-     * Viele ONVIF-/Kamera-Snapshots sind progressive JPEGs oder unüblich groß. Der
-     * JPEG-Decoder der Anzeige (TJpgDec via LVGL) kann nur Baseline-JPEG lesen und
-     * zeigt bei progressiven Dateien eine leere Kachel ohne Fehlermeldung. GD schreibt
-     * beim Kodieren immer Baseline-JPEG, daher normalisiert ein Re-Encode das Bild für
-     * die Anzeige, unabhängig davon, wie die Kamera es ursprünglich erzeugt hat.
+     * Viele ONVIF-/Kamera-Snapshots sind progressive JPEGs und größer als die Kachel.
+     * Der Decoder der Anzeige liest nur Baseline-JPEG und würde ein Vollbild unnötig
+     * in den Speicher legen. GD schreibt Baseline und verkleinert auf die Kachelfläche.
      */
-    public static function normalizeCameraBinary(string $binary): string
+    public static function normalizeCameraBinary(string $binary, int $maxWidth = 0, int $maxHeight = 0): string
     {
         if ($binary === '' || !function_exists('imagecreatefromstring')) {
             return $binary;
@@ -636,8 +672,12 @@ final class HomeDisplayMedia
             imagedestroy($source);
             return $binary;
         }
-        $maxWidth = 1024;
-        $maxHeight = 768;
+        if ($maxWidth < 16) {
+            $maxWidth = 1024;
+        }
+        if ($maxHeight < 16) {
+            $maxHeight = 768;
+        }
         $scale = min(1.0, $maxWidth / $width, $maxHeight / $height);
         $targetWidth = max(1, (int) round($width * $scale));
         $targetHeight = max(1, (int) round($height * $scale));
@@ -650,7 +690,7 @@ final class HomeDisplayMedia
         }
         imageinterlace($target, false);
         ob_start();
-        $ok = imagejpeg($target, null, 85);
+        $ok = imagejpeg($target, null, 80);
         $encoded = ob_get_clean();
         if ($resized) {
             imagedestroy($target);

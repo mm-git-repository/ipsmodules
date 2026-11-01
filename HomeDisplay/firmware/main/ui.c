@@ -2204,6 +2204,10 @@ void homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
     for (int index = 0; index < tile_count; index++) {
         if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].camera_img) {
             lv_img_set_src(tiles[index].camera_img, path);
+            if (info_res == LV_RES_OK && header.w > 0 && header.h > 0) {
+                lv_obj_set_size(tiles[index].camera_img, header.w, header.h);
+                lv_obj_align(tiles[index].camera_img, LV_ALIGN_BOTTOM_MID, 0, -4);
+            }
             break;
         }
     }

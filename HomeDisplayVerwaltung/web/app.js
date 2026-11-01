@@ -1535,7 +1535,7 @@ function buildTileElement(tile, context) {
     const fromMedia = (tile.cameraSource || "url") === "media" || Boolean(tile.mediaObjectId) || isMediaPick(variableById(tile.variableId));
     if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
       const src = context.probeImageUrls[tile.tileId].url || context.probeImageUrls[tile.tileId];
-      element.innerHTML = `${editorKicker(mode, "Kamera")}<img src="${src}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1" class="live-preview">`;
+      setTileMarkup(element, `${editorKicker(mode, "Kamera")}${cameraLiveImgHtml(src)}`);
       const img = element.querySelector("img.live-preview");
       if (img && mode === "probe") {
         img.addEventListener("error", () => {
@@ -3860,25 +3860,35 @@ function revokeProbeObjectUrls() {
   }
 }
 
+function setTileMarkup(element, html) {
+  const chrome = [...element.children].filter((node) => node.classList.contains("resize-handle") || node.classList.contains("span-badge"));
+  element.innerHTML = html;
+  for (const node of chrome) element.appendChild(node);
+}
+
+function cameraLiveImgHtml(src) {
+  return `<img src="${src}" alt="" draggable="false" class="live-preview">`;
+}
+
 function paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, title, showKicker) {
   const preview = probeImageErrorText(err || "unknown", detail);
   const kicker = showKicker ? editorKicker("edit", fromMedia ? "Kamera · Medien" : "Kamera · Livebild") : "";
-  element.innerHTML = `${kicker}<div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div>`;
+  setTileMarkup(element, `${kicker}<div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div>`);
   element.querySelector(".name").textContent = title || bound || "Kamera";
 }
 
 function paintEditorLiveTile(element, tile) {
-  if (!element) return;
+  if (!element || document.querySelector("#grid .grid-resize-preview")) return;
   const url = state.tilePreviewUrls[tile.tileId];
   const err = state.tilePreviewErrors[tile.tileId];
   const detail = state.tilePreviewErrorDetails[tile.tileId];
   if (tile.kind === "image" && (tile.imageSource || "catalog") === "media") {
     if (url) {
-      element.innerHTML = `<img src="${url}" alt="">`;
+      setTileMarkup(element, `<img src="${url}" alt="" draggable="false">`);
       return;
     }
     if (err) {
-      element.innerHTML = `<div class="media-placeholder">${escapeHtml(probeImageErrorText(err, detail))}</div>`;
+      setTileMarkup(element, `<div class="media-placeholder">${escapeHtml(probeImageErrorText(err, detail))}</div>`);
     }
     return;
   }
@@ -3886,7 +3896,10 @@ function paintEditorLiveTile(element, tile) {
   const bound = mediaBindingName(tile);
   const fromMedia = (tile.cameraSource || "url") === "media" || Boolean(tile.mediaObjectId) || isMediaPick(variableById(tile.variableId));
   if (url) {
-    element.innerHTML = `${editorKicker("edit", "Kamera")}<img src="${url}" alt="" style="max-width:100%;max-height:100%;object-fit:contain;flex:1" class="live-preview">`;
+    const current = element.querySelector("img.live-preview");
+    const handlesOk = state.selected !== tile.tileId || element.querySelector(".resize-handle");
+    if (current && current.getAttribute("src") === url && handlesOk) return;
+    setTileMarkup(element, `${editorKicker("edit", "Kamera")}${cameraLiveImgHtml(url)}`);
     const img = element.querySelector("img.live-preview");
     if (img) {
       img.addEventListener("error", () => {
