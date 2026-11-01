@@ -48,6 +48,7 @@ class HomeDisplay extends IPSModuleStrict
         $this->RegisterPropertyString('DeviceId', '');
         $this->RegisterPropertyString('FallbackTiles', '[]');
         $this->RegisterPropertyBoolean('EpdServerFrame', false);
+        $this->RegisterTimer('RefreshCameraCache', 0, 'IPS_RequestAction($_IPS[\'TARGET\'], \'RefreshCameraCache\', \'\');');
 
         $this->RegisterVariableString('PairingState', 'Kopplung', '', 1);
         $this->RegisterVariableString('AdapterUrl', 'Dienstadresse', '', 2);
@@ -1916,7 +1917,7 @@ class HomeDisplay extends IPSModuleStrict
         if ($this->ReadPropertyBoolean('Active')) {
             $ms = (int) max(200, (int) round(1000 / $this->cameraLiveFps()));
         }
-        $this->RegisterTimer('RefreshCameraCache', $ms, 'IPS_RequestAction($_IPS[\'TARGET\'], \'RefreshCameraCache\', \'\');');
+        $this->SetTimerInterval('RefreshCameraCache', $ms);
     }
 
     private function notePanelVisible(int $instanceId, bool $visible): void
