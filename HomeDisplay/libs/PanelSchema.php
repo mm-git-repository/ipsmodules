@@ -343,6 +343,14 @@ final class HomeDisplayPanelSchema
                 }
                 if ($kind === 'camera') {
                     $public['cameraFile'] = self::cameraFileName((string) $tile['tileId']);
+                    $pace = (string) ($tile['cameraPace'] ?? '');
+                    if ($pace === 'live' || $pace === 'interval') {
+                        $public['cameraPace'] = $pace;
+                    }
+                    $fit = (string) ($tile['cameraFit'] ?? '');
+                    if ($fit === 'cover' || $fit === 'contain') {
+                        $public['cameraFit'] = $fit;
+                    }
                 }
                 if ($kind === 'energyflow') {
                     $mode = (string) ($tile['flowMode'] ?? 'signed');

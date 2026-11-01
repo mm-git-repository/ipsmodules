@@ -1530,6 +1530,8 @@ function buildTileElement(tile, context) {
     }
   } else if (tile.kind === "camera") {
     element.classList.add("camera");
+    element.classList.add(tile.cameraFit === "contain" ? "fit-contain" : "fit-cover");
+    element.classList.add(tile.showTitle === false ? "no-title" : "has-title");
     normalizeMediaTileBindings(tile);
     const bound = mediaBindingName(tile);
     const fromMedia = (tile.cameraSource || "url") === "media" || Boolean(tile.mediaObjectId) || isMediaPick(variableById(tile.variableId));
@@ -2020,6 +2022,8 @@ function addTile(kind, col, row, variable, control) {
   } else if (kind === "camera") {
     tile.title = "Kamera";
     tile.cameraSource = "url";
+    tile.cameraFit = "cover";
+    tile.cameraPace = "live";
     tile.variableId = 0;
     tile.colSpan = Math.min(2, state.layout.columns);
     tile.rowSpan = Math.min(2, state.layout.rows);
@@ -2565,6 +2569,8 @@ function renderProperties() {
     $("p-camera-url").classList.toggle("hidden", camSource === "media");
     $("p-camera-media").classList.toggle("hidden", camSource !== "media");
   }
+  if ($("p-camera-fit")) $("p-camera-fit").value = tile.cameraFit === "contain" ? "contain" : "cover";
+  if ($("p-camera-pace")) $("p-camera-pace").value = tile.cameraPace === "interval" ? "interval" : "live";
   if (tile.kind === "camera" && $("p-variable")) {
     const camVar = variableById(tile.variableId);
     const hasMedia = Boolean(tile.mediaObjectId) || isMediaPick(camVar);
@@ -2904,6 +2910,8 @@ function applyProperties() {
       tile.variableId = isImageUrlRef(camVar) ? tile.variableId : 0;
       delete tile.mediaObjectId;
     }
+    tile.cameraFit = $("p-camera-fit") && $("p-camera-fit").value === "contain" ? "contain" : "cover";
+    tile.cameraPace = $("p-camera-pace") && $("p-camera-pace").value === "interval" ? "interval" : "live";
   }
   markDirty();
   renderGrid();
@@ -2923,7 +2931,7 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-show-title-icon", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-show-title-icon", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {

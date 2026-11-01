@@ -39,6 +39,10 @@ class HomeDisplay extends IPSModuleStrict
         $this->RegisterPropertyInteger('NightTo', 6);
         $this->RegisterPropertyInteger('StateIntervalSec', 3);
         $this->RegisterPropertyInteger('IdleStateIntervalSec', 15);
+        $this->RegisterPropertyInteger('CameraIntervalSec', 10);
+        $this->RegisterPropertyInteger('CameraJpegQuality', 80);
+        $this->RegisterPropertyInteger('CameraLiveFps', 3);
+        $this->RegisterPropertyString('CameraLiveUrl', 'https://display:Starten01!@172.18.1.120/ISAPI/Streaming/channels/102/picture');
         $this->RegisterPropertyInteger('MaintenanceFrom', 3);
         $this->RegisterPropertyInteger('MaintenanceTo', 5);
         $this->RegisterPropertyString('DeviceId', '');
@@ -71,6 +75,7 @@ class HomeDisplay extends IPSModuleStrict
             $this->SetStatus(104);
             $this->SetValue('AdapterUrl', '');
             $this->syncService();
+            $this->syncCameraTimer();
             return;
         }
         $url = $this->syncService();
@@ -78,6 +83,7 @@ class HomeDisplay extends IPSModuleStrict
         $this->refreshPairingLabel();
         $this->SetStatus($url === '' ? 203 : 102);
         $this->subscribeLayoutVariables();
+        $this->syncCameraTimer();
     }
 
     public function GetConfigurationForm(): string
@@ -460,6 +466,9 @@ class HomeDisplay extends IPSModuleStrict
                 return;
             case 'ShowTestPattern':
                 $this->ShowTestPattern((bool) $Value);
+                return;
+            case 'RefreshCameraCache':
+                $this->refreshCameraCache();
                 return;
             default:
                 $this->SendDebug('Editor', 'Unbekannte Aktion ' . $Ident, 0);
@@ -913,6 +922,10 @@ class HomeDisplay extends IPSModuleStrict
             'nightTo' => (int) IPS_GetProperty($instanceId, 'NightTo'),
             'stateIntervalSec' => max(2, (int) IPS_GetProperty($instanceId, 'StateIntervalSec')),
             'idleStateIntervalSec' => max(5, (int) IPS_GetProperty($instanceId, 'IdleStateIntervalSec')),
+            'cameraIntervalSec' => $this->cameraIntervalSec(),
+            'cameraJpegQuality' => $this->cameraJpegQuality(),
+            'cameraLiveFps' => $this->cameraLiveFps(),
+            'cameraLive' => $this->cameraLiveUrl() !== '',
             'maintenanceFrom' => (int) IPS_GetProperty($instanceId, 'MaintenanceFrom'),
             'maintenanceTo' => (int) IPS_GetProperty($instanceId, 'MaintenanceTo'),
             'displayProfile' => (string) IPS_GetProperty($instanceId, 'DisplayProfile'),
@@ -978,6 +991,9 @@ class HomeDisplay extends IPSModuleStrict
         if ($since === -2) {
             $since = isset($_GET['since']) ? (int) $_GET['since'] : -1;
         }
+        if (isset($_GET['visible'])) {
+            $this->notePanelVisible($device['id'], (int) $_GET['visible'] === 1);
+        }
 
         return $this->stateForLayout(is_array($layout) ? $layout : [], $device['id'], $since);
     }
@@ -1021,10 +1037,14 @@ class HomeDisplay extends IPSModuleStrict
                 if ($kind === 'camera') {
                     $camSeq = 0;
                     $quality = 'empty';
+                    $pace = $this->cameraPace($tile);
                     $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
                     $url = $mediaId > 0 ? '' : HomeDisplayMedia::cameraImageUrl($tile);
-                    if ($mediaId > 0 || $url !== '') {
-                        $interval = max(10, (int) IPS_GetProperty($instanceId, 'StateIntervalSec'));
+                    $live = $pace === 'live' && $this->cameraLiveUrl() !== '';
+                    if ($live) {
+                        $quality = 'ok';
+                    } elseif ($mediaId > 0 || $url !== '') {
+                        $interval = $this->cameraIntervalSec();
                         $stamp = $mediaId > 0 ? (string) $mediaId : $url;
                         $camSeq = (int) (time() / $interval) ^ (int) sprintf('%u', crc32($stamp));
                         $quality = 'ok';
@@ -1825,17 +1845,230 @@ class HomeDisplay extends IPSModuleStrict
     private function scaledCameraBinary(string $binary, array $tile): string
     {
         [$width, $height] = $this->cameraBadgePixels($tile);
-        return HomeDisplayMedia::normalizeCameraBinary($binary, $width, $height);
+        return HomeDisplayMedia::normalizeCameraBinary($binary, $width, $height, $this->cameraFit($tile), $this->cameraJpegQuality());
+    }
+
+    private function cameraIntervalSec(): int
+    {
+        $value = 10;
+        try {
+            $value = (int) IPS_GetProperty($this->InstanceID, 'CameraIntervalSec');
+        } catch (Throwable $e) {
+            unset($e);
+        }
+        return max(5, min(300, $value > 0 ? $value : 10));
+    }
+
+    private function cameraJpegQuality(): int
+    {
+        $value = 80;
+        try {
+            $value = (int) IPS_GetProperty($this->InstanceID, 'CameraJpegQuality');
+        } catch (Throwable $e) {
+            unset($e);
+        }
+        return max(40, min(95, $value > 0 ? $value : 80));
+    }
+
+    private function cameraLiveFps(): int
+    {
+        $value = 3;
+        try {
+            $value = (int) IPS_GetProperty($this->InstanceID, 'CameraLiveFps');
+        } catch (Throwable $e) {
+            unset($e);
+        }
+        return max(1, min(5, $value > 0 ? $value : 3));
+    }
+
+    private function cameraLiveUrl(): string
+    {
+        try {
+            return trim((string) IPS_GetProperty($this->InstanceID, 'CameraLiveUrl'));
+        } catch (Throwable $e) {
+            unset($e);
+            return '';
+        }
+    }
+
+    /** @param array<string, mixed> $tile */
+    private function cameraFit(array $tile): string
+    {
+        return (string) ($tile['cameraFit'] ?? 'cover') === 'contain' ? 'contain' : 'cover';
+    }
+
+    /** @param array<string, mixed> $tile */
+    private function cameraPace(array $tile): string
+    {
+        $pace = (string) ($tile['cameraPace'] ?? '');
+        if ($pace === 'interval') {
+            return 'interval';
+        }
+        if ($pace === 'live' || $this->cameraLiveUrl() !== '') {
+            return 'live';
+        }
+        return 'interval';
+    }
+
+    private function syncCameraTimer(): void
+    {
+        $ms = 0;
+        if ($this->ReadPropertyBoolean('Active')) {
+            $ms = (int) max(200, (int) round(1000 / $this->cameraLiveFps()));
+        }
+        $this->RegisterTimer('RefreshCameraCache', $ms, 'IPS_RequestAction($_IPS[\'TARGET\'], \'RefreshCameraCache\', \'\');');
+    }
+
+    private function notePanelVisible(int $instanceId, bool $visible): void
+    {
+        $runtime = $this->runtime();
+        $key = (string) $instanceId;
+        $slot = is_array($runtime[$key] ?? null) ? $runtime[$key] : [];
+        $slot['panelVisibleUntil'] = $visible ? time() + 20 : 0;
+        $runtime[$key] = $slot;
+        $this->saveRuntime($runtime);
+    }
+
+    private function panelVisible(): bool
+    {
+        $runtime = $this->runtime();
+        $slot = $runtime[(string) $this->InstanceID] ?? null;
+        return is_array($slot) && (int) ($slot['panelVisibleUntil'] ?? 0) >= time();
+    }
+
+    public function refreshCameraCache(): void
+    {
+        if (!$this->panelVisible()) {
+            return;
+        }
+        $layout = $this->activeLayout($this->InstanceID);
+        if (!is_array($layout)) {
+            return;
+        }
+        foreach ($layout['pages'] ?? [] as $page) {
+            if (!is_array($page)) {
+                continue;
+            }
+            foreach ($page['tiles'] ?? [] as $tile) {
+                if (!is_array($tile) || (string) ($tile['kind'] ?? '') !== 'camera') {
+                    continue;
+                }
+                $this->cameraJpegForTile($tile, true);
+            }
+        }
+    }
+
+    /** @param array<string, mixed> $tile */
+    private function cameraJpegForTile(array $tile, bool $allowBuild): ?string
+    {
+        $paths = HomeDisplayCatalogStore::cameraCachePaths($this->InstanceID, (string) ($tile['tileId'] ?? ''));
+        $meta = $this->cameraCacheMeta($tile);
+        $cached = $this->readFreshCameraCache($paths, $meta);
+        if ($cached !== null) {
+            return $cached;
+        }
+        if (!$allowBuild && is_file($paths['jpeg'])) {
+            $stale = file_get_contents($paths['jpeg']);
+            return is_string($stale) && $stale !== '' ? $stale : null;
+        }
+        $lock = fopen($paths['meta'] . '.lock', 'c');
+        if ($lock === false) {
+            return null;
+        }
+        if (!flock($lock, LOCK_EX | LOCK_NB)) {
+            flock($lock, LOCK_SH);
+            $cached = $this->readFreshCameraCache($paths, $meta);
+            if ($cached === null && is_file($paths['jpeg'])) {
+                $stale = file_get_contents($paths['jpeg']);
+                $cached = is_string($stale) && $stale !== '' ? $stale : null;
+            }
+            flock($lock, LOCK_UN);
+            fclose($lock);
+            return $cached;
+        }
+        $cached = $this->readFreshCameraCache($paths, $meta);
+        if ($cached !== null) {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+            return $cached;
+        }
+        $shot = $this->cameraBinaryForTile($tile);
+        $binary = isset($shot['binary']) && is_string($shot['binary']) ? $shot['binary'] : '';
+        if ($binary !== '' && HomeDisplayMedia::looksLikeImageBytes($binary)) {
+            file_put_contents($paths['jpeg'], $binary, LOCK_EX);
+            $meta['at'] = microtime(true);
+            file_put_contents($paths['meta'], (string) json_encode($meta), LOCK_EX);
+            flock($lock, LOCK_UN);
+            fclose($lock);
+            return $binary;
+        }
+        flock($lock, LOCK_UN);
+        fclose($lock);
+        if (is_file($paths['jpeg'])) {
+            $stale = file_get_contents($paths['jpeg']);
+            return is_string($stale) && $stale !== '' ? $stale : null;
+        }
+        return null;
+    }
+
+    /** @param array<string, mixed> $tile @return array<string, mixed> */
+    private function cameraCacheMeta(array $tile): array
+    {
+        [$width, $height] = $this->cameraBadgePixels($tile);
+        $pace = $this->cameraPace($tile);
+        $src = $pace === 'live' ? $this->cameraLiveUrl() : 'grabber';
+        return [
+            'w' => $width,
+            'h' => $height,
+            'fit' => $this->cameraFit($tile),
+            'quality' => $this->cameraJpegQuality(),
+            'pace' => $pace,
+            'src' => sprintf('%u', crc32($src)),
+        ];
+    }
+
+    /** @param array{jpeg: string, meta: string} $paths @param array<string, mixed> $meta */
+    private function readFreshCameraCache(array $paths, array $meta): ?string
+    {
+        if (!is_file($paths['jpeg']) || !is_file($paths['meta'])) {
+            return null;
+        }
+        $stored = json_decode((string) file_get_contents($paths['meta']), true);
+        if (!is_array($stored)) {
+            return null;
+        }
+        foreach (['w', 'h', 'fit', 'quality', 'pace', 'src'] as $key) {
+            if (($stored[$key] ?? null) != ($meta[$key] ?? null)) {
+                return null;
+            }
+        }
+        $age = microtime(true) - (float) ($stored['at'] ?? 0);
+        $limit = $meta['pace'] === 'live' ? (1 / $this->cameraLiveFps()) : $this->cameraIntervalSec();
+        if ($age > $limit) {
+            return null;
+        }
+        $binary = file_get_contents($paths['jpeg']);
+        return is_string($binary) && $binary !== '' ? $binary : null;
     }
 
     private function cameraBinaryForTile(array $tile): array
     {
+        if ($this->cameraPace($tile) === 'live') {
+            $live = $this->cameraLiveUrl();
+            if ($live !== '') {
+                $binary = $this->fetchRemoteBinary($live);
+                if ($binary !== null && $binary !== '' && HomeDisplayMedia::looksLikeImageBytes($binary)) {
+                    return ['binary' => $this->scaledCameraBinary($binary, $tile)];
+                }
+                return ['error' => 'camera_fetch', 'detail' => 'Livebild der Kamera nicht erreichbar'];
+            }
+        }
         $streamErr = HomeDisplayMedia::cameraStreamBindingError($tile);
         if ($streamErr !== null) {
             return ['error' => 'camera_fetch', 'detail' => $streamErr];
         }
         [$badgeW, $badgeH] = $this->cameraBadgePixels($tile);
-        $binary = HomeDisplayMedia::fetchCameraBinary($tile, $badgeW, $badgeH);
+        $binary = HomeDisplayMedia::fetchCameraBinary($tile, $badgeW, $badgeH, $this->cameraFit($tile), $this->cameraJpegQuality());
         if ($binary !== null && $binary !== '') {
             return ['binary' => $binary];
         }
@@ -1969,15 +2202,16 @@ class HomeDisplay extends IPSModuleStrict
     {
         $tile = $this->findLayoutTile($device['id'], $tileId);
         if ($tile !== null && (string) ($tile['kind'] ?? '') === 'camera') {
-            $shot = $this->cameraBinaryForTile($tile);
-            if (isset($shot['binary'])) {
-                header('Content-Type: ' . $this->guessImageMime($shot['binary']));
+            $binary = $this->cameraJpegForTile($tile, true);
+            if ($binary !== null && $binary !== '') {
+                header('Content-Type: image/jpeg');
                 header('Cache-Control: no-store');
-                echo $shot['binary'];
+                header('Content-Length: ' . strlen($binary));
+                echo $binary;
                 return;
             }
-            http_response_code($shot['error'] === 'camera' ? 404 : 502);
-            $this->json(['error' => $shot['error'] ?? 'camera_fetch']);
+            http_response_code(502);
+            $this->json(['error' => 'camera_fetch']);
             return;
         }
         $url = $this->cameraUrlForTile($device['id'], $tileId);

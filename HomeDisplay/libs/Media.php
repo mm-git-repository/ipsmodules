@@ -628,25 +628,32 @@ final class HomeDisplayMedia
         $cellH = intdiv(max(1, $screenH - $headerH), $rows);
         $colSpan = max(1, (int) ($tile['colSpan'] ?? 1));
         $rowSpan = max(1, (int) ($tile['rowSpan'] ?? 1));
+        $showTitle = ($tile['showTitle'] ?? true) !== false;
+        if (!$showTitle) {
+            return [
+                max(16, $cellW * $colSpan - 8),
+                max(16, $cellH * $rowSpan - 8),
+            ];
+        }
         return [
             max(16, $cellW * $colSpan - 16),
-            max(16, $cellH * $rowSpan - 36),
+            max(16, $cellH * $rowSpan - 44),
         ];
     }
 
     /** @param array<string, mixed> $tile */
-    public static function fetchCameraBinary(array $tile, int $maxWidth = 0, int $maxHeight = 0): ?string
+    public static function fetchCameraBinary(array $tile, int $maxWidth = 0, int $maxHeight = 0, string $fit = 'cover', int $quality = 80): ?string
     {
         $binary = self::snapshotMediaBinary($tile, false);
         if ($binary !== null && $binary !== '' && self::looksLikeImageBytes($binary)) {
-            return self::normalizeCameraBinary($binary, $maxWidth, $maxHeight);
+            return self::normalizeCameraBinary($binary, $maxWidth, $maxHeight, $fit, $quality);
         }
         for ($round = 0; $round < 2; $round++) {
             self::refreshCameraTile($tile);
             usleep(400000);
             $binary = self::snapshotMediaBinary($tile, true);
             if ($binary !== null && $binary !== '' && self::looksLikeImageBytes($binary)) {
-                return self::normalizeCameraBinary($binary, $maxWidth, $maxHeight);
+                return self::normalizeCameraBinary($binary, $maxWidth, $maxHeight, $fit, $quality);
             }
         }
         return null;
@@ -657,7 +664,7 @@ final class HomeDisplayMedia
      * Der Decoder der Anzeige liest nur Baseline-JPEG und würde ein Vollbild unnötig
      * in den Speicher legen. GD schreibt Baseline und verkleinert auf die Kachelfläche.
      */
-    public static function normalizeCameraBinary(string $binary, int $maxWidth = 0, int $maxHeight = 0): string
+    public static function normalizeCameraBinary(string $binary, int $maxWidth = 0, int $maxHeight = 0, string $fit = 'cover', int $quality = 80): string
     {
         if ($binary === '' || !function_exists('imagecreatefromstring')) {
             return $binary;
@@ -678,19 +685,48 @@ final class HomeDisplayMedia
         if ($maxHeight < 16) {
             $maxHeight = 768;
         }
-        $scale = min(1.0, $maxWidth / $width, $maxHeight / $height);
-        $targetWidth = max(1, (int) round($width * $scale));
-        $targetHeight = max(1, (int) round($height * $scale));
+        if ($quality < 40) {
+            $quality = 40;
+        }
+        if ($quality > 95) {
+            $quality = 95;
+        }
+        $fit = $fit === 'contain' ? 'contain' : 'cover';
         $target = $source;
         $resized = false;
-        if ($scale < 1.0) {
-            $target = imagecreatetruecolor($targetWidth, $targetHeight);
-            imagecopyresampled($target, $source, 0, 0, 0, 0, $targetWidth, $targetHeight, $width, $height);
+        if ($fit === 'cover') {
+            $scale = max($maxWidth / $width, $maxHeight / $height);
+            $srcW = max(1.0, $maxWidth / $scale);
+            $srcH = max(1.0, $maxHeight / $scale);
+            $srcX = max(0.0, ($width - $srcW) / 2);
+            $srcY = max(0.0, ($height - $srcH) / 2);
+            $target = imagecreatetruecolor($maxWidth, $maxHeight);
+            imagecopyresampled(
+                $target,
+                $source,
+                0,
+                0,
+                (int) round($srcX),
+                (int) round($srcY),
+                $maxWidth,
+                $maxHeight,
+                max(1, (int) round($srcW)),
+                max(1, (int) round($srcH))
+            );
             $resized = true;
+        } else {
+            $scale = min(1.0, $maxWidth / $width, $maxHeight / $height);
+            $targetWidth = max(1, (int) round($width * $scale));
+            $targetHeight = max(1, (int) round($height * $scale));
+            if ($scale < 1.0) {
+                $target = imagecreatetruecolor($targetWidth, $targetHeight);
+                imagecopyresampled($target, $source, 0, 0, 0, 0, $targetWidth, $targetHeight, $width, $height);
+                $resized = true;
+            }
         }
         imageinterlace($target, false);
         ob_start();
-        $ok = imagejpeg($target, null, 80);
+        $ok = imagejpeg($target, null, $quality);
         $encoded = ob_get_clean();
         if ($resized) {
             imagedestroy($target);

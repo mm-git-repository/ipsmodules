@@ -1085,6 +1085,44 @@ static void build_battery(tile_view_t *view, int pad)
     place_battery(view, view->value_max);
 }
 
+static bool jpeg_sof_size(const char *file, int *width, int *height)
+{
+    if (!file || !file[0] || !width || !height) return false;
+    char path[96];
+    snprintf(path, sizeof(path), "/storage/%s", file);
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return false;
+    unsigned char buf[8];
+    if (fread(buf, 1, 2, fp) != 2 || buf[0] != 0xFF || buf[1] != 0xD8) {
+        fclose(fp);
+        return false;
+    }
+    bool ok = false;
+    for (int guard = 0; guard < 64; guard++) {
+        int byte = fgetc(fp);
+        while (byte == 0xFF) byte = fgetc(fp);
+        if (byte == EOF) break;
+        int marker = byte;
+        if (marker == 0xD9 || marker == 0xDA) break;
+        if (fread(buf, 1, 2, fp) != 2) break;
+        int len = (buf[0] << 8) | buf[1];
+        if (len < 2) break;
+        bool sof = (marker >= 0xC0 && marker <= 0xC3) || (marker >= 0xC5 && marker <= 0xC7)
+            || (marker >= 0xC9 && marker <= 0xCB) || (marker >= 0xCD && marker <= 0xCF);
+        if (sof) {
+            if (len >= 7 && fread(buf, 1, 5, fp) == 5) {
+                *height = (buf[1] << 8) | buf[2];
+                *width = (buf[3] << 8) | buf[4];
+                ok = *width > 0 && *height > 0;
+            }
+            break;
+        }
+        if (fseek(fp, len - 2, SEEK_CUR) != 0) break;
+    }
+    fclose(fp);
+    return ok;
+}
+
 static bool storage_image_ready_limit(const char *file, size_t max_bytes)
 {
     if (!file || !file[0]) {
@@ -1362,15 +1400,29 @@ static void show_page(int index)
         }
         if (strcmp(kind, "camera") == 0) {
             const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile"));
-            lv_obj_set_style_pad_all(view->card, 4, 0);
-            lv_obj_t *name = lv_label_create(view->card);
-            label_set_folded(name, view->title[0] ? view->title : "Kamera");
-            lv_obj_set_style_text_font(name, &lv_font_montserrat_20, 0);
-            lv_obj_align(name, LV_ALIGN_TOP_LEFT, 4, 2);
+            int img_w;
+            int img_h;
+            lv_obj_t *name = NULL;
+            if (show_title) {
+                lv_obj_set_style_pad_all(view->card, 4, 0);
+                name = lv_label_create(view->card);
+                label_set_folded(name, view->title[0] ? view->title : "Kamera");
+                lv_obj_set_style_text_font(name, &lv_font_montserrat_20, 0);
+                lv_obj_align(name, LV_ALIGN_TOP_LEFT, 4, 2);
+                img_w = cell_w * col_span - 16;
+                img_h = cell_h * row_span - 44;
+            } else {
+                lv_obj_set_style_pad_all(view->card, 0, 0);
+                img_w = cell_w * col_span - 8;
+                img_h = cell_h * row_span - 8;
+            }
+            if (img_w < 16) img_w = 16;
+            if (img_h < 16) img_h = 16;
             view->camera_img = lv_img_create(view->card);
             (void) file;
-            lv_obj_set_size(view->camera_img, cell_w * col_span - 16, cell_h * row_span - 36);
-            lv_obj_align(view->camera_img, LV_ALIGN_BOTTOM_MID, 0, -4);
+            lv_obj_set_size(view->camera_img, img_w, img_h);
+            lv_obj_align(view->camera_img, LV_ALIGN_BOTTOM_MID, 0, show_title ? -4 : 0);
+            if (name) lv_obj_move_foreground(name);
             tile_count++;
             continue;
         }
@@ -2191,23 +2243,25 @@ void homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
 {
     if (!tile_id || !tile_id[0] || !file || !file[0]) return;
     if (!storage_image_ready_limit(file, 400 * 1024)) return;
+    int width = 0;
+    int height = 0;
+    jpeg_sof_size(file, &width, &height);
     char path[96];
     snprintf(path, sizeof(path), "S:/%s", file);
-    lv_img_header_t header;
-    lv_res_t info_res = lv_img_decoder_get_info(path, &header);
-    if (info_res == LV_RES_OK) {
-        ESP_LOGI(TAG_UI, "Kamera-Bild %s dekodiert: %dx%d", file, header.w, header.h);
-    } else {
-        ESP_LOGW(TAG_UI, "Kamera-Bild %s: Decoder lehnt Datei ab (kein gueltiges JPEG/PNG fuer LVGL)", file);
+    if (width > 0 && height > 0) {
+        ESP_LOGI(TAG_UI, "Kamera-Bild %s: %dx%d", file, width, height);
     }
     if (!ui_client_lock()) return;
     for (int index = 0; index < tile_count; index++) {
         if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].camera_img) {
-            lv_img_set_src(tiles[index].camera_img, path);
-            if (info_res == LV_RES_OK && header.w > 0 && header.h > 0) {
-                lv_obj_set_size(tiles[index].camera_img, header.w, header.h);
-                lv_obj_align(tiles[index].camera_img, LV_ALIGN_BOTTOM_MID, 0, -4);
+            if (width > 0 && height > 0) {
+                lv_obj_set_size(tiles[index].camera_img, width, height);
             }
+            lv_obj_t *card = lv_obj_get_parent(tiles[index].camera_img);
+            int y_ofs = (card && lv_obj_get_child_cnt(card) > 1) ? -4 : 0;
+            lv_obj_align(tiles[index].camera_img, LV_ALIGN_BOTTOM_MID, 0, y_ofs);
+            lv_img_set_src(tiles[index].camera_img, path);
+            lv_obj_move_background(tiles[index].camera_img);
             break;
         }
     }

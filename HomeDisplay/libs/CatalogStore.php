@@ -37,6 +37,22 @@ final class HomeDisplayCatalogStore
         return $dir . DIRECTORY_SEPARATOR . $instanceId . '-' . $safe . '.bin';
     }
 
+    /** @return array{jpeg: string, meta: string} */
+    public static function cameraCachePaths(int $instanceId, string $tileId): array
+    {
+        $dir = dirname(self::path()) . DIRECTORY_SEPARATOR . 'camera-cache';
+        if (!is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+        $safe = preg_replace('/[^A-Za-z0-9_-]/', '', $tileId) ?? '';
+        if ($safe === '') {
+            $safe = 'tile';
+        }
+        $base = $dir . DIRECTORY_SEPARATOR . $instanceId . '-' . $safe;
+
+        return ['jpeg' => $base . '.jpg', 'meta' => $base . '.json'];
+    }
+
     /** @return array<string, mixed> */
     public static function load(): array
     {

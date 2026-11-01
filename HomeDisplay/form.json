@@ -175,6 +175,32 @@
         },
         {
             "type": "NumberSpinner",
+            "name": "CameraIntervalSec",
+            "caption": "Kamerabild Standbild (Sekunden)",
+            "minimum": 5,
+            "maximum": 300
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "CameraJpegQuality",
+            "caption": "Kamera JPEG-Qualität",
+            "minimum": 40,
+            "maximum": 95
+        },
+        {
+            "type": "NumberSpinner",
+            "name": "CameraLiveFps",
+            "caption": "Livebild (Bilder pro Sekunde)",
+            "minimum": 1,
+            "maximum": 5
+        },
+        {
+            "type": "ValidationTextBox",
+            "name": "CameraLiveUrl",
+            "caption": "Livebild-Adresse"
+        },
+        {
+            "type": "NumberSpinner",
             "name": "MaintenanceFrom",
             "caption": "Programmaktualisierung ab Stunde",
             "minimum": 0,

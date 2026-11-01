@@ -50,6 +50,8 @@ static char last_command[24];
 static int progress;
 static int state_interval = 3;
 static int idle_interval = 15;
+static int camera_live_fps = 3;
+static bool camera_live = false;
 static int manifest_interval_sec = 60;
 static int maintenance_from = 3;
 static int maintenance_to = 5;
@@ -551,20 +553,41 @@ static const char *camera_file_for_tile(cJSON *layout_root, const char *tile_id)
     return NULL;
 }
 
-static void fetch_one_camera(const char *tile_id, const char *file)
+static bool layout_tile_is_live(cJSON *layout, const char *tile_id)
+{
+    if (!layout || !tile_id) return camera_live;
+    cJSON *page = NULL;
+    cJSON_ArrayForEach(page, cJSON_GetObjectItem(layout, "pages")) {
+        cJSON *tile = NULL;
+        cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
+            const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
+            if (!id || strcmp(id, tile_id) != 0) continue;
+            const char *pace = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraPace"));
+            if (pace && strcmp(pace, "interval") == 0) return false;
+            if (pace && strcmp(pace, "live") == 0) return camera_live;
+            return camera_live;
+        }
+    }
+    return false;
+}
+
+static void fetch_one_camera(const char *tile_id, const char *file, bool quiet)
 {
     if (!tile_id || !tile_id[0] || !file || !file[0]) return;
     char target[96];
     snprintf(target, sizeof(target), "/storage/%s", file);
     char path[80];
     snprintf(path, sizeof(path), "/v1/camera/%s", tile_id);
-    char status[96];
-    snprintf(status, sizeof(status), "Lade Kamera\n%s", tile_id);
-    homedisplay_ui_status(status);
+    if (!quiet) {
+        char status[96];
+        snprintf(status, sizeof(status), "Lade Kamera\n%s", tile_id);
+        homedisplay_ui_status(status);
+    }
     ESP_LOGI(TAG, "Kamera laden %s", tile_id);
     /* Läuft im Hintergrund-Task: großzügiges Timeout, da ONVIF-Snapshots mit
        Retry im Modul mehrere Sekunden brauchen können, bevor sie fertig sind. */
-    if (download_to_file(path, target, 20000, 900 * 1024) != ESP_OK) {
+    int timeout = quiet ? 4000 : 20000;
+    if (download_to_file(path, target, timeout, 900 * 1024) != ESP_OK) {
         ESP_LOGW(TAG, "Kamera %s konnte nicht geladen werden", tile_id);
         return;
     }
@@ -602,6 +625,7 @@ static cJSON *read_layout_cache(void)
 
 static void fetch_layout_cameras(const char *layout_json)
 {
+    if (!homedisplay_ui_page_visible()) return;
     cJSON *root = cJSON_Parse(layout_json);
     if (!root) return;
     cJSON *page = NULL;
@@ -612,7 +636,8 @@ static void fetch_layout_cameras(const char *layout_json)
             if (!kind || strcmp(kind, "camera") != 0) continue;
             fetch_one_camera(
                 cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId")),
-                cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile")));
+                cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile")),
+                false);
         }
     }
     cJSON_Delete(root);
@@ -620,6 +645,7 @@ static void fetch_layout_cameras(const char *layout_json)
 
 static void sync_cameras_from_state(const char *state_json)
 {
+    if (!homedisplay_ui_page_visible()) return;
     cJSON *state = cJSON_Parse(state_json);
     if (!state) return;
     if (cJSON_IsTrue(cJSON_GetObjectItem(state, "unchanged"))) {
@@ -634,12 +660,39 @@ static void sync_cameras_from_state(const char *state_json)
         const char *tile_id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
         int stamp = stamp_item->valueint;
         if (!tile_id || stamp <= 0) continue;
+        if (layout && layout_tile_is_live(layout, tile_id)) continue;
         if (cam_stamp_unchanged(tile_id, stamp)) continue;
         const char *file = layout ? camera_file_for_tile(layout, tile_id) : NULL;
-        if (file) fetch_one_camera(tile_id, file);
+        if (file) fetch_one_camera(tile_id, file, false);
     }
     if (layout) cJSON_Delete(layout);
     cJSON_Delete(state);
+}
+
+static int64_t next_live_us;
+
+static void fetch_live_cameras(void)
+{
+    if (!camera_live || !homedisplay_ui_page_visible()) return;
+    int fps = camera_live_fps;
+    if (fps < 1) fps = 1;
+    if (fps > 5) fps = 5;
+    if (esp_timer_get_time() < next_live_us) return;
+    cJSON *layout = read_layout_cache();
+    if (!layout) return;
+    cJSON *page = NULL;
+    cJSON_ArrayForEach(page, cJSON_GetObjectItem(layout, "pages")) {
+        cJSON *tile = NULL;
+        cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
+            const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
+            if (!kind || strcmp(kind, "camera") != 0) continue;
+            const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
+            if (!id || !layout_tile_is_live(layout, id)) continue;
+            fetch_one_camera(id, cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile")), true);
+        }
+    }
+    cJSON_Delete(layout);
+    next_live_us = esp_timer_get_time() + 1000000 / fps;
 }
 
 static cam_stamp_entry_t media_stamps[CAM_STAMP_MAX];
@@ -747,6 +800,10 @@ static void apply_config_document(const char *json)
     if (item) state_interval = item->valueint;
     item = cJSON_GetObjectItem(document, "idleStateIntervalSec");
     if (item) idle_interval = item->valueint;
+    item = cJSON_GetObjectItem(document, "cameraLiveFps");
+    if (item && item->valueint > 0) camera_live_fps = item->valueint;
+    item = cJSON_GetObjectItem(document, "cameraLive");
+    if (item) camera_live = cJSON_IsTrue(item);
     item = cJSON_GetObjectItem(document, "manifestIntervalSec");
     if (item && item->valueint >= 15) manifest_interval_sec = item->valueint;
     item = cJSON_GetObjectItem(document, "maintenanceFrom");
@@ -1055,8 +1112,8 @@ static void client_task(void *argument)
             maybe_update();
         }
         send_queued_action();
-        char path[40];
-        snprintf(path, sizeof(path), "/v1/state?since=%d", last_seq);
+        char path[64];
+        snprintf(path, sizeof(path), "/v1/state?since=%d&visible=%d", last_seq, homedisplay_ui_page_visible() ? 1 : 0);
         esp_err_t error = request(path, "GET", NULL, response, response_length);
         if (error == ESP_OK) {
             failures = 0;
@@ -1101,6 +1158,7 @@ static void client_task(void *argument)
             homedisplay_serial_poll();
             if (send_queued_action()) break;
             if (homedisplay_ui_take_refresh()) break;
+            if (online) fetch_live_cameras();
             vTaskDelay(pdMS_TO_TICKS(120));
         }
     }

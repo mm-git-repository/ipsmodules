@@ -485,11 +485,28 @@ label.small { font-size: 12px; color: var(--muted); }
   max-width: calc(100% - 16px);
   max-height: calc(100% - 16px);
   margin: auto;
-  object-fit: contain;
+  object-fit: cover;
   pointer-events: none;
   z-index: 0;
 }
+.tile.camera.fit-contain img.live-preview { object-fit: contain; }
+.tile.camera.has-title img.live-preview {
+  top: 36px;
+  height: calc(100% - 44px);
+  max-height: calc(100% - 44px);
+}
+.tile.camera.no-title img.live-preview {
+  top: 4px;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  width: calc(100% - 8px);
+  height: calc(100% - 8px);
+  max-width: calc(100% - 8px);
+  max-height: calc(100% - 8px);
+}
 .tile.camera:has(.kicker) img.live-preview { top: 26px; height: calc(100% - 34px); max-height: calc(100% - 34px); }
+.tile.camera.has-title:has(.kicker) img.live-preview { top: 52px; height: calc(100% - 60px); max-height: calc(100% - 60px); }
 .tile.camera .kicker { position: relative; z-index: 1; }
 .tile-scale .camera-preview,
 .tile.camera .camera-preview { flex: 1; display: flex; align-items: center; justify-content: center; width: 100%; border: 1px dashed #5a7391; border-radius: 0.5em; color: #9fb2c8; font-size: 1em; text-align: center; padding: 0.6em; min-height: 0; overflow: hidden; }
