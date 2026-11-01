@@ -2366,7 +2366,6 @@ function clampCamera(value, min, max, fallback) {
 function syncCameraPacePanels() {
   const live = ($("p-camera-pace")?.value || "live") !== "interval";
   $("p-camera-live-fields")?.classList.toggle("hidden", !live);
-  $("p-camera-interval-fields")?.classList.toggle("hidden", live);
 }
 
 function renderProperties() {
@@ -2934,7 +2933,7 @@ function applyProperties() {
     }
     tile.cameraFit = $("p-camera-fit") && $("p-camera-fit").value === "contain" ? "contain" : "cover";
     tile.cameraPace = $("p-camera-pace") && $("p-camera-pace").value === "interval" ? "interval" : "live";
-    tile.cameraLiveUrl = $("p-camera-live-url") ? $("p-camera-live-url").value.trim() : "";
+    tile.cameraLiveUrl = ($("p-camera-live-url") ? $("p-camera-live-url").value.trim() : "") || CAMERA_LIVE_URL_DEFAULT;
     tile.cameraJpegQuality = clampCamera($("p-camera-jpeg-quality") && $("p-camera-jpeg-quality").value, 40, 95, 80);
     tile.cameraLiveFps = clampCamera($("p-camera-live-fps") && $("p-camera-live-fps").value, 1, 5, 3);
     tile.cameraIntervalSec = clampCamera($("p-camera-interval") && $("p-camera-interval").value, 5, 300, 10);

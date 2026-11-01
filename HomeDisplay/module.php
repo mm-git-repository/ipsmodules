@@ -39,10 +39,6 @@ class HomeDisplay extends IPSModuleStrict
         $this->RegisterPropertyInteger('NightTo', 6);
         $this->RegisterPropertyInteger('StateIntervalSec', 3);
         $this->RegisterPropertyInteger('IdleStateIntervalSec', 15);
-        $this->RegisterPropertyInteger('CameraIntervalSec', 10);
-        $this->RegisterPropertyInteger('CameraJpegQuality', 80);
-        $this->RegisterPropertyInteger('CameraLiveFps', 3);
-        $this->RegisterPropertyString('CameraLiveUrl', 'https://display:Starten01!@172.18.1.120/ISAPI/Streaming/channels/102/picture');
         $this->RegisterPropertyInteger('MaintenanceFrom', 3);
         $this->RegisterPropertyInteger('MaintenanceTo', 5);
         $this->RegisterPropertyString('DeviceId', '');
@@ -1039,8 +1035,7 @@ class HomeDisplay extends IPSModuleStrict
                     $pace = $this->cameraPace($tile);
                     $mediaId = HomeDisplayMedia::resolveImageMediaId($tile);
                     $url = $mediaId > 0 ? '' : HomeDisplayMedia::cameraImageUrl($tile);
-                    $live = $pace === 'live' && $this->cameraLiveUrlFor($tile) !== '';
-                    if ($live) {
+                    if ($pace === 'live' && $this->cameraLiveUrlFor($tile) !== '') {
                         $quality = 'ok';
                     } elseif ($mediaId > 0 || $url !== '') {
                         $interval = $this->cameraIntervalSecFor($tile);
@@ -1847,49 +1842,6 @@ class HomeDisplay extends IPSModuleStrict
         return HomeDisplayMedia::normalizeCameraBinary($binary, $width, $height, $this->cameraFit($tile), $this->cameraJpegQualityFor($tile));
     }
 
-    private function cameraIntervalSec(): int
-    {
-        $value = 10;
-        try {
-            $value = (int) IPS_GetProperty($this->InstanceID, 'CameraIntervalSec');
-        } catch (Throwable $e) {
-            unset($e);
-        }
-        return max(5, min(300, $value > 0 ? $value : 10));
-    }
-
-    private function cameraJpegQuality(): int
-    {
-        $value = 80;
-        try {
-            $value = (int) IPS_GetProperty($this->InstanceID, 'CameraJpegQuality');
-        } catch (Throwable $e) {
-            unset($e);
-        }
-        return max(40, min(95, $value > 0 ? $value : 80));
-    }
-
-    private function cameraLiveFps(): int
-    {
-        $value = 3;
-        try {
-            $value = (int) IPS_GetProperty($this->InstanceID, 'CameraLiveFps');
-        } catch (Throwable $e) {
-            unset($e);
-        }
-        return max(1, min(5, $value > 0 ? $value : 3));
-    }
-
-    private function cameraLiveUrl(): string
-    {
-        try {
-            return trim((string) IPS_GetProperty($this->InstanceID, 'CameraLiveUrl'));
-        } catch (Throwable $e) {
-            unset($e);
-            return '';
-        }
-    }
-
     /** @param array<string, mixed> $tile */
     private function cameraFit(array $tile): string
     {
@@ -1912,37 +1864,32 @@ class HomeDisplay extends IPSModuleStrict
     /** @param array<string, mixed> $tile */
     private function cameraIntervalSecFor(array $tile): int
     {
-        if (isset($tile['cameraIntervalSec'])) {
-            return max(5, min(300, (int) $tile['cameraIntervalSec']));
-        }
-        return $this->cameraIntervalSec();
+        $value = (int) ($tile['cameraIntervalSec'] ?? 10);
+        return max(5, min(300, $value > 0 ? $value : 10));
     }
 
     /** @param array<string, mixed> $tile */
     private function cameraJpegQualityFor(array $tile): int
     {
-        if (isset($tile['cameraJpegQuality'])) {
-            return max(40, min(95, (int) $tile['cameraJpegQuality']));
-        }
-        return $this->cameraJpegQuality();
+        $value = (int) ($tile['cameraJpegQuality'] ?? 80);
+        return max(40, min(95, $value > 0 ? $value : 80));
     }
 
     /** @param array<string, mixed> $tile */
     private function cameraLiveFpsFor(array $tile): int
     {
-        if (isset($tile['cameraLiveFps'])) {
-            return max(1, min(5, (int) $tile['cameraLiveFps']));
-        }
-        return $this->cameraLiveFps();
+        $value = (int) ($tile['cameraLiveFps'] ?? 3);
+        return max(1, min(5, $value > 0 ? $value : 3));
     }
 
     /** @param array<string, mixed> $tile */
     private function cameraLiveUrlFor(array $tile): string
     {
-        if (array_key_exists('cameraLiveUrl', $tile)) {
-            return trim((string) $tile['cameraLiveUrl']);
+        $url = trim((string) ($tile['cameraLiveUrl'] ?? ''));
+        if ($url !== '') {
+            return $url;
         }
-        return $this->cameraLiveUrl();
+        return 'https://display:Starten01!@172.18.1.120/ISAPI/Streaming/channels/102/picture';
     }
 
     /** @return list<array<string, mixed>> */
@@ -1981,7 +1928,7 @@ class HomeDisplay extends IPSModuleStrict
                 $fps = max($fps, $this->cameraLiveFpsFor($tile));
             }
         }
-        return $fps > 0 ? $fps : $this->cameraLiveFps();
+        return $fps > 0 ? $fps : 3;
     }
 
     private function syncCameraTimer(): void

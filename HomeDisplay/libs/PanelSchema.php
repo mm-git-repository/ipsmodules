@@ -344,15 +344,16 @@ final class HomeDisplayPanelSchema
                 if ($kind === 'camera') {
                     $public['cameraFile'] = self::cameraFileName((string) $tile['tileId']);
                     $pace = (string) ($tile['cameraPace'] ?? '');
-                    if ($pace === 'live' || $pace === 'interval') {
-                        $public['cameraPace'] = $pace;
-                    }
+                    $public['cameraPace'] = $pace === 'interval' ? 'interval' : 'live';
                     $fit = (string) ($tile['cameraFit'] ?? '');
                     if ($fit === 'cover' || $fit === 'contain') {
                         $public['cameraFit'] = $fit;
                     }
-                    $fps = (int) ($tile['cameraLiveFps'] ?? 0);
-                    if ($fps >= 1 && $fps <= 5) {
+                    $fps = (int) ($tile['cameraLiveFps'] ?? 3);
+                    if ($fps < 1 || $fps > 5) {
+                        $fps = 3;
+                    }
+                    if ($public['cameraPace'] === 'live') {
                         $public['cameraLiveFps'] = $fps;
                     }
                 }
