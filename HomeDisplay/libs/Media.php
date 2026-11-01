@@ -648,7 +648,7 @@ final class HomeDisplayMedia
             imagecopyresampled($target, $source, 0, 0, 0, 0, $targetWidth, $targetHeight, $width, $height);
             $resized = true;
         }
-        imageinterlace($target, 0);
+        imageinterlace($target, false);
         ob_start();
         $ok = imagejpeg($target, null, 85);
         $encoded = ob_get_clean();
