@@ -351,6 +351,10 @@ final class HomeDisplayPanelSchema
                     if ($fit === 'cover' || $fit === 'contain') {
                         $public['cameraFit'] = $fit;
                     }
+                    $fps = (int) ($tile['cameraLiveFps'] ?? 0);
+                    if ($fps >= 1 && $fps <= 5) {
+                        $public['cameraLiveFps'] = $fps;
+                    }
                 }
                 if ($kind === 'energyflow') {
                     $mode = (string) ($tile['flowMode'] ?? 'signed');

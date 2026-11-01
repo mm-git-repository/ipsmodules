@@ -564,7 +564,7 @@ static bool layout_tile_is_live(cJSON *layout, const char *tile_id)
             if (!id || strcmp(id, tile_id) != 0) continue;
             const char *pace = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraPace"));
             if (pace && strcmp(pace, "interval") == 0) return false;
-            if (pace && strcmp(pace, "live") == 0) return camera_live;
+            if (pace && strcmp(pace, "live") == 0) return true;
             return camera_live;
         }
     }
@@ -669,17 +669,54 @@ static void sync_cameras_from_state(const char *state_json)
     cJSON_Delete(state);
 }
 
-static int64_t next_live_us;
+static int64_t next_live_scan_us;
+
+static int tile_live_fps(cJSON *tile)
+{
+    cJSON *item = cJSON_GetObjectItem(tile, "cameraLiveFps");
+    int fps = (item && cJSON_IsNumber(item)) ? item->valueint : camera_live_fps;
+    if (fps < 1) fps = camera_live_fps > 0 ? camera_live_fps : 3;
+    if (fps > 5) fps = 5;
+    return fps;
+}
+
+static bool live_tile_due(const char *tile_id, int fps)
+{
+    static struct {
+        char id[40];
+        int64_t next_us;
+    } slots[CAM_STAMP_MAX];
+    int64_t now = esp_timer_get_time();
+    int64_t period = 1000000 / (fps > 0 ? fps : 1);
+    for (int index = 0; index < CAM_STAMP_MAX; index++) {
+        if (slots[index].id[0] && strcmp(slots[index].id, tile_id) == 0) {
+            if (now < slots[index].next_us) return false;
+            slots[index].next_us = now + period;
+            return true;
+        }
+    }
+    for (int index = 0; index < CAM_STAMP_MAX; index++) {
+        if (!slots[index].id[0]) {
+            snprintf(slots[index].id, sizeof(slots[index].id), "%s", tile_id);
+            slots[index].next_us = now + period;
+            return true;
+        }
+    }
+    return true;
+}
 
 static void fetch_live_cameras(void)
 {
-    if (!camera_live || !homedisplay_ui_page_visible()) return;
-    int fps = camera_live_fps;
-    if (fps < 1) fps = 1;
-    if (fps > 5) fps = 5;
-    if (esp_timer_get_time() < next_live_us) return;
+    if (!homedisplay_ui_page_visible()) return;
+    int64_t now = esp_timer_get_time();
+    if (now < next_live_scan_us) return;
     cJSON *layout = read_layout_cache();
-    if (!layout) return;
+    if (!layout) {
+        next_live_scan_us = now + 1000000;
+        return;
+    }
+    int soonest_ms = 1000;
+    bool any = false;
     cJSON *page = NULL;
     cJSON_ArrayForEach(page, cJSON_GetObjectItem(layout, "pages")) {
         cJSON *tile = NULL;
@@ -688,11 +725,18 @@ static void fetch_live_cameras(void)
             if (!kind || strcmp(kind, "camera") != 0) continue;
             const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
             if (!id || !layout_tile_is_live(layout, id)) continue;
+            int fps = tile_live_fps(tile);
+            any = true;
+            int period_ms = 1000 / fps;
+            if (period_ms < soonest_ms) soonest_ms = period_ms;
+            if (!live_tile_due(id, fps)) continue;
             fetch_one_camera(id, cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile")), true);
         }
     }
     cJSON_Delete(layout);
-    next_live_us = esp_timer_get_time() + 1000000 / fps;
+    if (!any) soonest_ms = 1000;
+    if (soonest_ms < 200) soonest_ms = 200;
+    next_live_scan_us = esp_timer_get_time() + (int64_t) soonest_ms * 1000;
 }
 
 static cam_stamp_entry_t media_stamps[CAM_STAMP_MAX];

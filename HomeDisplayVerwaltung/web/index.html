@@ -461,9 +461,25 @@
               <option value="interval">Standbild</option>
             </select>
           </label>
-          <p class="hint">Livebild-Adresse, Bildrate, JPEG-Qualität und Standbild-Intervall stehen auf der Hausanzeige-Instanz und lassen sich dort ändern. Ist der Titel ausgeblendet, füllt das Bild die ganze Kachel.</p>
+          <div id="p-camera-live-fields">
+            <label>Livebild-Adresse
+              <input id="p-camera-live-url" type="text" autocomplete="off" spellcheck="false">
+            </label>
+            <label>Bilder pro Sekunde
+              <input id="p-camera-live-fps" type="number" min="1" max="5" step="1" value="3">
+            </label>
+          </div>
+          <label>JPEG-Qualität
+            <input id="p-camera-jpeg-quality" type="number" min="40" max="95" step="1" value="80">
+          </label>
+          <div id="p-camera-interval-fields">
+            <label>Standbild (Sekunden)
+              <input id="p-camera-interval" type="number" min="5" max="300" step="1" value="10">
+            </label>
+          </div>
+          <p class="hint">Jede Kamera-Kachel hat ihre eigene Adresse, Bildrate und Qualität. Ist der Titel ausgeblendet, füllt das Bild die ganze Kachel.</p>
           <div id="p-camera-url">
-            <p class="hint">Textvariable mit http- oder https-Adresse (JPEG/PNG). Gilt für Standbild. Das Livebild nutzt die Adresse auf der Hausanzeige.</p>
+            <p class="hint">Textvariable mit http- oder https-Adresse (JPEG/PNG). Gilt für Standbild.</p>
           </div>
           <div id="p-camera-media" class="hidden">
             <p class="hint">Medien aus dem Baum (Badge „Medien“ oder „Medienobjekt“): Integer-Variable mit Bild-Media-ID oder direktes Medienobjekt unter der Kamera-Instanz. Für statische Bilder: <strong>Bild</strong>-Kachel, Quelle Medien.</p>
