@@ -43,7 +43,38 @@ function migrateLayoutKinds(layout) {
   }
 }
 
-const KIND_NAMES = { value: "Wert", display: "Wert", chart: "Diagramm", energyflow: "Energiefluss", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", scene: "Szene", weather: "Wetter", presence: "Anwesenheit" };
+const KIND_NAMES = { value: "Wert", display: "Wert", chart: "Diagramm", energyflow: "Energiefluss", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", scene: "Szene", weather: "Wetter", presence: "Anwesenheit", multi: "Mehrwert", contacts: "Kontakte", gauge: "Bogen", countdown: "Countdown", appointment: "Termin" };
+const FONT_PX = [16, 20, 24, 28, 32, 36, 40, 48];
+const NAMED_PX = { small: 20, normal: 28, large: 36, xlarge: 48 };
+const TITLE_FONT_KINDS = ["value", "display", "chart", "scene", "weather", "presence", "camera", "nav", "multi", "contacts", "gauge", "countdown", "appointment"];
+const BODY_FONT_KINDS = ["value", "display", "chart", "scene", "weather", "presence", "label", "multi", "contacts", "gauge", "countdown", "appointment"];
+const AGE_KINDS = ["value", "display", "weather", "gauge"];
+
+function titlePxOf(tile) {
+  const px = Number(tile && tile.titlePx);
+  if (FONT_PX.includes(px)) return px;
+  if (tile && tile.kind === "value" && tileInteractionMode(tile) === "") return 28;
+  if (tile && tile.kind === "nav") return 28;
+  return 20;
+}
+
+function textPxOf(tile) {
+  const px = Number(tile && tile.textPx);
+  if (FONT_PX.includes(px)) return px;
+  if (tile && tile.textSize && NAMED_PX[tile.textSize]) return NAMED_PX[tile.textSize];
+  if (tile && tile.kind === "label" && (!tile.textSize || tile.textSize === "auto")) return 0;
+  if (tile && tile.kind === "chart") return 20;
+  return 28;
+}
+
+function cssFont(px, bold, italic, underline) {
+  const bits = [];
+  if (px) bits.push(`font-size:${px}px`);
+  if (bold) bits.push("font-weight:700");
+  if (italic) bits.push("font-style:italic");
+  if (underline) bits.push("text-decoration:underline");
+  return bits.length ? ` style="${bits.join(";")}"` : "";
+}
 const CHART_PERIOD_LABELS = { "1h": "1 Stunde", "6h": "6 Stunden", "24h": "24 Stunden", "7d": "7 Tage" };
 const FLOW_SLOT_LABELS = {
   signed: {
@@ -250,11 +281,11 @@ function displayMainText(tile, live) {
 
 function panelSwitchHtml(tile, title, on, iconId, showIcon) {
   const align = tile && tile.titleAlign === "center" ? "align-center" : (tile && tile.titleAlign === "right" ? "align-right" : "");
-  const titleHtml = tile && tile.showTitle === false ? "" : `<div class="panel-title ${align}">${escapeHtml(title || "")}</div>`;
+  const titleHtml = tile && tile.showTitle === false ? "" : `<div class="panel-title ${align}"${cssFont(titlePxOf(tile), tile && tile.titleBold, tile && tile.titleItalic)}>${escapeHtml(title || "")}</div>`;
   const iconHtml = showIcon
     ? `<button type="button" class="panel-icon-btn" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile && tile.onColor)}</button>`
     : "";
-  const stateHtml = tile && tile.showStateText ? `<div class="panel-state">${on ? "Ein" : "Aus"}</div>` : "";
+  const stateHtml = tile && tile.showStateText ? `<div class="panel-state"${cssFont(textPxOf(tile), tile.textBold, tile.textItalic, tile.textUnderline)}>${on ? "Ein" : "Aus"}</div>` : "";
   return `<div class="panel-switch">${titleHtml}<div class="panel-icon">${iconHtml}</div>${stateHtml}</div>`;
 }
 
@@ -283,16 +314,18 @@ function ohCardMarkup(label, stateHtml, bodyHtml, footHtml, tile) {
   const title = tile && tile.showTitle === false ? "" : escapeHtml(label || "");
   const headingId = titleIconShown(tile) ? titleIconId(tile) : "";
   const headingIcon = headingId ? `<span class="oh-card-title-icon">${iconVisual(headingId)}</span>` : "";
-  const sizes = { small: "0.85em", large: "1.35em", xlarge: "1.8em" };
   const bits = [];
   if (tile && tile.textColor) bits.push(`color:${tile.textColor}`);
-  if (tile && sizes[tile.textSize]) bits.push(`font-size:${sizes[tile.textSize]}`);
-  if (tile && tile.textBold) bits.push(`font-weight:700`);
-  if (tile && tile.textItalic) bits.push(`font-style:italic`);
-  if (tile && tile.textUnderline) bits.push(`text-decoration:underline`);
+  const bodyPx = tile ? textPxOf(tile) : 28;
+  if (bodyPx) bits.push(`font-size:${bodyPx}px`);
+  if (tile && tile.textBold) bits.push("font-weight:700");
+  if (tile && tile.textItalic) bits.push("font-style:italic");
+  if (tile && tile.textUnderline) bits.push("text-decoration:underline");
   const style = bits.length ? ` style="${bits.join(";")}"` : "";
+  const titleStyle = tile ? cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic) : "";
   const state = stateHtml ? `<span class="oh-card-state"${style}>${stateHtml}</span>` : "";
-  return `<div class="oh-card"><div class="oh-card-head ${align}"><span class="oh-card-label">${headingIcon}${title}</span>${state}</div><div class="oh-card-body">${bodyHtml || ""}</div>${foot}</div>`;
+  const age = tile && tile.showAge ? `<div class="age-line">vor 4 min</div>` : "";
+  return `<div class="oh-card"><div class="oh-card-head ${align}"${titleStyle}><span class="oh-card-label">${headingIcon}${title}</span>${state}</div><div class="oh-card-body">${bodyHtml || ""}</div>${age}${foot}</div>`;
 }
 
 function normalizeTile(tile) {
@@ -518,31 +551,41 @@ function chartSeriesUsable(series) {
   return normalizeChartSeries(series).length >= 2;
 }
 
-function chartSeriesFromTile(tile, live) {
+function chartSeriesFromTile(tile, live, allowDemo = true) {
   if (live && Array.isArray(live.seriesAll)) {
     const usable = live.seriesAll.map(normalizeChartSeries).filter((s) => s.length >= 2);
     if (usable.length) return usable;
   }
   if (live && chartSeriesUsable(live.series)) return [normalizeChartSeries(live.series)];
+  if (!allowDemo) return [];
   return [demoChartSeries(tile)];
 }
 
-function chartBoundsForTile(tile, live, seriesList) {
+function chartBoundsForTile(tile, live, seriesList, likeDisplay = false) {
   const flat = seriesList.flat();
+  let bounds;
   if ((tile.chartYMode || "auto") === "fixed" && tile.chartYMin != null && tile.chartYMax != null) {
-    return { min: tile.chartYMin, max: tile.chartYMax };
+    bounds = { min: Number(tile.chartYMin), max: Number(tile.chartYMax) };
+  } else if (live && live.seriesMin != null && live.seriesMax != null && flat.length >= 2) {
+    bounds = { min: Number(live.seriesMin), max: Number(live.seriesMax) };
+  } else {
+    bounds = chartSeriesMinMax(flat);
   }
-  if (live && live.seriesMin != null && live.seriesMax != null && flat.length >= 2) {
-    return { min: live.seriesMin, max: live.seriesMax };
+  if (likeDisplay && flat.length >= 2) {
+    const samples = chartSeriesMinMax(flat);
+    const span = bounds.max - bounds.min;
+    const sampleSpan = samples.max - samples.min;
+    if (sampleSpan > 0.000001 && span > 0 && sampleSpan < span * 0.2) return samples;
   }
-  return chartSeriesMinMax(flat);
+  return bounds;
 }
 
-function chartHtmlForTile(tile, live) {
-  const seriesList = chartSeriesFromTile(tile, live);
-  const bounds = chartBoundsForTile(tile, live, seriesList);
-  const style = tile.chartStyle || "area";
-  const yesterday = live && Array.isArray(live.seriesYesterday) && chartSeriesUsable(live.seriesYesterday)
+function chartHtmlForTile(tile, live, options = {}) {
+  const likeDisplay = Boolean(options.likeDisplay);
+  const seriesList = chartSeriesFromTile(tile, live, !likeDisplay);
+  const bounds = chartBoundsForTile(tile, live, seriesList, likeDisplay);
+  const style = likeDisplay ? "line" : (tile.chartStyle || "area");
+  const yesterday = !likeDisplay && live && Array.isArray(live.seriesYesterday) && chartSeriesUsable(live.seriesYesterday)
     ? normalizeChartSeries(live.seriesYesterday)
     : [];
   return chartSvgMulti(seriesList, style, bounds.min, bounds.max, yesterday);
@@ -581,12 +624,18 @@ function chartSvgMulti(seriesList, style, min, max, yesterday) {
   return `<svg class="oh-chart-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${area}${yesterdayLine}${primaryLine}${extras}</svg>`;
 }
 
-function paintChartTileContent(element, tile, live) {
+function paintChartTileContent(element, tile, live, mode) {
   if (!element || !tile || tile.kind !== "chart") return;
   const variable = variableById(tile.variableId);
   const label = tile.title || (variable ? variable.name : "Diagramm");
-  const stateText = live && live.text ? escapeHtml(live.text) : escapeHtml(tile.unit ? `12,3 ${tile.unit}` : "—");
-  const chartHtml = chartHtmlForTile(tile, live);
+  const stateText = live && live.text ? escapeHtml(live.text) : (mode === "probe" ? "—" : escapeHtml(tile.unit ? `12,3 ${tile.unit}` : "—"));
+  const likeDisplay = mode === "probe";
+  const chartHtml = chartHtmlForTile(tile, live, { likeDisplay });
+  if (likeDisplay) {
+    const title = tile.showTitle === false ? "" : escapeHtml(label);
+    element.innerHTML = `<div class="probe-chart"><div class="probe-chart-head"><span class="probe-chart-title">${title}</span><span class="probe-chart-value">${stateText}</span></div><div class="probe-chart-plot">${chartHtml}</div></div>`;
+    return;
+  }
   const periodKey = tile.chartPeriod || "24h";
   const periodLabel = CHART_PERIOD_LABELS[periodKey] || periodKey;
   const kicker = element.querySelector(".kicker");
@@ -736,6 +785,7 @@ const state = {
   layout: null,
   page: "start",
   selected: null,
+  styleSource: null,
   dirty: false,
   pickedVariable: null,
   variableTreeOpen: {},
@@ -1419,23 +1469,26 @@ function buildTileElement(tile, context) {
         const align = tile.titleAlign === "center" ? "align-center" : (tile.titleAlign === "right" ? "align-right" : "align-left");
         const core = live && live.text ? live.text : (!variable ? "—" : ((variable.type === 1 || variable.type === 2) ? "12,3" : "Ein"));
         const readout = live && live.text ? core : `${tile.prefix ? tile.prefix + " " : ""}${core}${tile.unit ? " " + tile.unit : ""}`;
-        const sizes = { small: "0.85em", large: "1.35em", xlarge: "1.8em" };
         const bits = [];
         if (tile.textColor) bits.push(`color:${tile.textColor}`);
-        if (sizes[tile.textSize]) bits.push(`font-size:${sizes[tile.textSize]}`);
-        if (tile.textBold) bits.push("font-weight:700");
         if (tile.textItalic) bits.push("font-style:italic");
         if (tile.textUnderline) bits.push("text-decoration:underline");
+        if (textPxOf(tile)) bits.push(`font-size:${textPxOf(tile)}px`);
+        if (tile.textBold) bits.push("font-weight:700");
         const readoutStyle = bits.length ? ` style="${bits.join(";")}"` : "";
         const iconStyle = tile.textColor ? ` style="color:${tile.textColor}"` : "";
-        const place = tile.iconPlace === "after" || tile.iconPlace === "none" ? tile.iconPlace : (iconId ? "before" : "none");
-        const iconHtml = place !== "none" && iconId ? `<div class="oh-card-icon"${iconStyle}>${iconVisual(iconId)}</div>` : "";
-        const readoutHtml = `<div class="value-readout"${readoutStyle}>${escapeHtml(readout)}</div>`;
-        cardBody = `<div class="value-stack ${align}">${place === "after" ? readoutHtml + iconHtml : iconHtml + readoutHtml}</div>`;
+        const place = tile.iconPlace === "none" ? "none" : (iconId ? "before" : "none");
+        const titleHtml = tile.showTitle === false ? "" : `<div class="value-badge-title ${align}"${cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic)}>${escapeHtml(label)}</div>`;
+        const iconHtml = place !== "none" ? `<div class="value-badge-icon"${iconStyle}>${iconVisual(iconId)}</div>` : `<div class="value-badge-icon"></div>`;
+        const ageHtml = tile.showAge ? `<div class="age-line">${escapeHtml((live && live.age) || "vor 4 min")}</div>` : "";
+        element.innerHTML = `${editorKicker(mode, kicker)}<div class="value-badge">${titleHtml}${iconHtml}<div class="value-readout"${readoutStyle}>${escapeHtml(readout)}</div>${ageHtml}</div>`;
+        cardBody = null;
       } else {
         cardBody = body || "";
       }
-      element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, stateLine, cardBody, "", tile)}</div>`;
+      if (cardBody !== null) {
+        element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, stateLine, cardBody, "", tile)}</div>`;
+      }
     }
     if (DIM_CONTROLS.includes(control) || control === "blinds" || control === "setpoint" || (control === "switch" && tile.actionId) || (interaction === "switch" && tile.showIcon !== false && tile.actionId)) {
       bindTileControls(element, tile, mode, live);
@@ -1444,15 +1497,19 @@ function buildTileElement(tile, context) {
     const navIcon = tile.showTitle === false ? "" : (tile.icon ? `<div class="tile-fit-icon">${iconVisual(tile.icon)}</div>` : "");
     const align = tile.titleAlign === "center" ? "center" : (tile.titleAlign === "right" ? "right" : "left");
     element.innerHTML = `${editorKicker(mode, `${tile.icon ? iconName(tile.icon) + " · " : ""}Seite`)}<div class="tile-scale" style="text-align:${align}">${navIcon}<div class="name"></div></div>`;
-    element.querySelector(".name").textContent = tile.showTitle === false ? "" : (tile.title || pageTitleIn(tile.targetPage));
+    const navName = element.querySelector(".name");
+    navName.textContent = tile.showTitle === false ? "" : (tile.title || pageTitleIn(tile.targetPage));
+    navName.style.fontSize = `${titlePxOf(tile)}px`;
+    if (tile.titleBold) navName.style.fontWeight = "700";
+    if (tile.titleItalic) navName.style.fontStyle = "italic";
   } else if (tile.kind === "label") {
     const textClass = labelTextClass(tile);
     const text = escapeHtml(tile.text || "Text");
     if ((tile.labelStyle || "text") === "section") {
       element.classList.add("label-section");
       element.innerHTML = `<div class="section-head ${textClass}">${text}</div>`;
-    } else if (tile.textSize && tile.textSize !== "auto") {
-      element.innerHTML = `<div class="tile-scale"><div class="${textClass}">${text}</div></div>`;
+    } else if (textPxOf(tile)) {
+      element.innerHTML = `<div class="label-fixed"${cssFont(textPxOf(tile), tile.textBold, tile.textItalic, tile.textUnderline)}>${text}</div>`;
     } else {
       element.innerHTML = scaledTileHtml(tile.text || "Text", "", "");
       const fit = element.querySelector(".tile-fit-text");
@@ -1470,7 +1527,7 @@ function buildTileElement(tile, context) {
     const periodKey = tile.chartPeriod || "24h";
     const periodLabel = CHART_PERIOD_LABELS[periodKey] || periodKey;
     element.innerHTML = `${editorKicker(mode, `Diagramm · ${periodLabel}`)}<div class="tile-scale"></div>`;
-    paintChartTileContent(element, tile, live);
+    paintChartTileContent(element, tile, live, mode);
   } else if (tile.kind === "energyflow") {
     element.classList.add("energyflow");
     element.innerHTML = buildEnergyFlowHtml(tile, live, mode);
@@ -1563,11 +1620,50 @@ function buildTileElement(tile, context) {
       }
       element.innerHTML = `${editorKicker(mode, fromMedia ? "Kamera · Medien" : "Kamera · Livebild")}<div class="tile-scale"><div class="name"></div><div class="camera-preview">${escapeHtml(preview)}</div></div>`;
       element.querySelector(".name").textContent = tile.title || bound || "Kamera";
+      const camTitle = element.querySelector(".name");
+      if (camTitle) {
+        camTitle.style.fontSize = `${titlePxOf(tile)}px`;
+        if (tile.titleBold) camTitle.style.fontWeight = "700";
+        if (tile.titleItalic) camTitle.style.fontStyle = "italic";
+      }
     }
+  } else if (tile.kind === "multi" || tile.kind === "contacts") {
+    const rows = Array.isArray(tile.rows) ? tile.rows : [];
+    const lines = (live && live.lines) || [];
+    const body = rows.map((row, index) => {
+      const line = lines[index] || {};
+      if (tile.kind === "contacts") {
+        return `<div class="contact-row"><span class="contact-dot${line.on ? " on" : ""}"></span><span>${escapeHtml(row.title || "Kontakt")}</span></div>`;
+      }
+      return `<div class="multi-row"><span>${escapeHtml(row.title || "Wert")}</span><strong${cssFont(textPxOf(tile), tile.textBold, tile.textItalic)}>${escapeHtml(line.text || "—")}</strong></div>`;
+    }).join("") || `<div class="hint">Zeilen wählen</div>`;
+    const head = tile.showTitle === false ? "" : `<div class="value-badge-title"${cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic)}>${escapeHtml(tile.title || KIND_NAMES[tile.kind])}</div>`;
+    element.innerHTML = `${editorKicker(mode, KIND_NAMES[tile.kind])}<div class="value-badge">${head}<div class="row-list">${body}</div></div>`;
+  } else if (tile.kind === "gauge") {
+    const min = Number(tile.valueMin ?? 0);
+    const max = Number(tile.valueMax ?? 100);
+    const raw = live && live.value != null ? Number(live.value) : (min + max) / 2;
+    const span = max === min ? 1 : max - min;
+    const pct = Math.max(0, Math.min(100, ((raw - min) / span) * 100));
+    const text = live && live.text ? live.text : "—";
+    const head = tile.showTitle === false ? "" : `<div class="value-badge-title"${cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic)}>${escapeHtml(tile.title || "Bogen")}</div>`;
+    element.innerHTML = `${editorKicker(mode, "Bogen")}<div class="gauge-tile">${head}<div class="gauge-arc" style="--gauge:${pct.toFixed(1)}"></div><div class="gauge-readout"${cssFont(textPxOf(tile), tile.textBold, tile.textItalic)}>${escapeHtml(text)}</div>${tile.showAge ? `<div class="age-line">${escapeHtml((live && live.age) || "vor 4 min")}</div>` : ""}</div>`;
+  } else if (tile.kind === "countdown" || tile.kind === "appointment") {
+    const text = live && live.text ? live.text : (tile.kind === "countdown" ? "0 min" : "Termin");
+    const sub = live && live.sub ? live.sub : "";
+    const head = tile.showTitle === false ? "" : `<div class="value-badge-title"${cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic)}>${escapeHtml(tile.title || KIND_NAMES[tile.kind])}</div>`;
+    element.innerHTML = `${editorKicker(mode, KIND_NAMES[tile.kind])}<div class="value-badge">${head}<div class="value-readout"${cssFont(textPxOf(tile), tile.textBold, tile.textItalic)}>${escapeHtml(text)}</div>${sub ? `<div class="age-line">${escapeHtml(sub)}</div>` : ""}</div>`;
   }
   if (mode === "edit") {
     element.addEventListener("click", (event) => {
       event.stopPropagation();
+      if (state.styleSource && state.styleSource !== tile.tileId) {
+        const source = tileById(state.styleSource);
+        if (source) applyTileStyle(source, tile);
+        state.styleSource = null;
+        setStatus("Stil übertragen.");
+        markDirty();
+      }
       state.selected = tile.tileId;
       renderGrid();
       renderProperties();
@@ -2005,6 +2101,24 @@ function addTile(kind, col, row, variable, control) {
     tile.batterySocVariableId = 0;
     tile.title = tile.title || "Energiefluss";
     if (variable) assignFlowVariable(tile, "pv", variable, true);
+  } else if (kind === "multi" || kind === "contacts") {
+    tile.rows = [{ variableId: variable ? variable.id : 0, title: variable ? variable.name : "Zeile", unit: "", decimals: 0 }];
+    tile.title = tile.title || (kind === "multi" ? "Mehrwert" : "Kontakte");
+    tile.colSpan = Math.min(2, state.layout.columns);
+  } else if (kind === "gauge") {
+    tile.variableId = variable ? variable.id : 0;
+    tile.valueMin = 0;
+    tile.valueMax = 100;
+    tile.unit = "";
+    tile.decimals = 0;
+    tile.title = tile.title || "Bogen";
+  } else if (kind === "countdown") {
+    tile.variableId = variable ? variable.id : 0;
+    tile.countdownMode = "until";
+    tile.title = tile.title || "Countdown";
+  } else if (kind === "appointment") {
+    tile.variableId = variable ? variable.id : 0;
+    tile.title = tile.title || "Termin";
   } else if (kind === "separator") {
     tile.orientation = "horizontal";
     tile.thickness = 2;
@@ -2231,6 +2345,169 @@ function selectedTile() {
   return page ? page.tiles.find((tile) => tile.tileId === state.selected) || null : null;
 }
 
+function tileById(id) {
+  if (!state.layout) return null;
+  for (const page of state.layout.pages) {
+    const found = page.tiles.find((tile) => tile.tileId === id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function applyTileStyle(source, target) {
+  const keys = ["bgColor", "onColor", "textColor", "titlePx", "titleBold", "titleItalic", "textPx", "textBold", "textItalic", "textUnderline", "icon", "iconPlace", "titleAlign", "titleIcon", "showTitleIcon"];
+  for (const key of keys) {
+    if (source[key] == null || source[key] === "") delete target[key];
+    else target[key] = source[key];
+  }
+}
+
+function fillFontSelect(select, includeAuto) {
+  if (!select) return;
+  const mode = includeAuto ? "auto" : "px";
+  if (select.dataset.ready === mode) return;
+  select.innerHTML = "";
+  if (includeAuto) {
+    const auto = document.createElement("option");
+    auto.value = "auto";
+    auto.textContent = "Automatisch";
+    select.appendChild(auto);
+  }
+  for (const px of FONT_PX) {
+    const option = document.createElement("option");
+    option.value = String(px);
+    option.textContent = `${px} px`;
+    select.appendChild(option);
+  }
+  select.dataset.ready = includeAuto ? "auto" : "px";
+}
+
+function syncFontPreview(select, preview) {
+  if (!select || !preview) return;
+  const px = select.value === "auto" ? 20 : Number(select.value) || 20;
+  preview.style.fontSize = `${px}px`;
+  if ($("p-title-bold")?.checked && preview.id === "p-title-preview") preview.style.fontWeight = "700";
+  else if (preview.id === "p-title-preview") preview.style.fontWeight = "600";
+  preview.style.fontStyle = (($("p-title-italic")?.checked && preview.id === "p-title-preview") || ($("p-text-italic")?.checked && preview.id === "p-text-preview")) ? "italic" : "normal";
+}
+
+function syncFontProperties(tile) {
+  const wrap = $("p-font-wrap");
+  if (!wrap) return;
+  const showTitle = TITLE_FONT_KINDS.includes(tile.kind);
+  const showBody = BODY_FONT_KINDS.includes(tile.kind);
+  wrap.classList.toggle("hidden", !showTitle && !showBody);
+  $("p-title-font")?.classList.toggle("hidden", !showTitle);
+  $("p-body-font")?.classList.toggle("hidden", !showBody);
+  const valueMode = tile.kind === "value" ? tileInteractionMode(tile) : "";
+  const ageOk = tile.kind !== "value" || valueMode === "" || valueMode === "battery";
+  $("p-show-age-wrap")?.classList.toggle("hidden", !AGE_KINDS.includes(tile.kind) || !ageOk);
+  $("p-text-underline-wrap")?.classList.toggle("hidden", !["value", "label", "scene", "display"].includes(tile.kind));
+  fillFontSelect($("p-title-px"), false);
+  fillFontSelect($("p-text-px"), tile.kind === "label");
+  if ($("p-title-px")) $("p-title-px").value = String(titlePxOf(tile));
+  if ($("p-text-px")) {
+    const px = textPxOf(tile);
+    $("p-text-px").value = tile.kind === "label" && !px ? "auto" : String(px || 28);
+  }
+  if ($("p-title-bold")) $("p-title-bold").checked = Boolean(tile.titleBold);
+  if ($("p-title-italic")) $("p-title-italic").checked = Boolean(tile.titleItalic);
+  if ($("p-text-bold")) $("p-text-bold").checked = Boolean(tile.textBold);
+  if ($("p-text-italic")) $("p-text-italic").checked = Boolean(tile.textItalic);
+  if ($("p-text-underline")) $("p-text-underline").checked = Boolean(tile.textUnderline);
+  if ($("p-show-age")) $("p-show-age").checked = Boolean(tile.showAge);
+  syncFontPreview($("p-title-px"), $("p-title-preview"));
+  syncFontPreview($("p-text-px"), $("p-text-preview"));
+  if (tile.kind === "multi" || tile.kind === "contacts") renderRowEditor(tile);
+  if ($("p-gauge-min")) $("p-gauge-min").value = tile.valueMin ?? 0;
+  if ($("p-gauge-max")) $("p-gauge-max").value = tile.valueMax ?? 100;
+  if ($("p-gauge-unit")) $("p-gauge-unit").value = tile.unit || "";
+  if ($("p-gauge-decimals")) $("p-gauge-decimals").value = tile.decimals ?? 0;
+  if ($("p-countdown-mode")) $("p-countdown-mode").value = tile.countdownMode === "seconds" ? "seconds" : "until";
+}
+
+function applyFontFields(tile) {
+  if (!$("p-font-wrap") || $("p-font-wrap").classList.contains("hidden")) return;
+  if ($("p-title-px") && !$("p-title-font")?.classList.contains("hidden")) {
+    const px = Number($("p-title-px").value);
+    if (FONT_PX.includes(px)) tile.titlePx = px;
+  }
+  if ($("p-text-px") && !$("p-body-font")?.classList.contains("hidden")) {
+    if ($("p-text-px").value === "auto") {
+      delete tile.textPx;
+      delete tile.textSize;
+    } else {
+      const px = Number($("p-text-px").value);
+      if (FONT_PX.includes(px)) {
+        tile.textPx = px;
+        delete tile.textSize;
+      }
+    }
+  }
+  if ($("p-title-bold")?.checked) tile.titleBold = true;
+  else delete tile.titleBold;
+  if ($("p-title-italic")?.checked) tile.titleItalic = true;
+  else delete tile.titleItalic;
+  if ($("p-text-bold")?.checked) tile.textBold = true;
+  else delete tile.textBold;
+  if ($("p-text-italic")?.checked) tile.textItalic = true;
+  else delete tile.textItalic;
+  if ($("p-text-underline")?.checked && !$("p-text-underline-wrap")?.classList.contains("hidden")) tile.textUnderline = true;
+  else delete tile.textUnderline;
+  if ($("p-show-age")?.checked && !$("p-show-age-wrap")?.classList.contains("hidden")) tile.showAge = true;
+  else delete tile.showAge;
+}
+
+function applyExtraTileFields(tile) {
+  if (tile.kind === "gauge") {
+    tile.valueMin = Number($("p-gauge-min")?.value);
+    tile.valueMax = Number($("p-gauge-max")?.value);
+    if (!Number.isFinite(tile.valueMin)) tile.valueMin = 0;
+    if (!Number.isFinite(tile.valueMax)) tile.valueMax = 100;
+    tile.unit = $("p-gauge-unit") ? $("p-gauge-unit").value : "";
+    tile.decimals = Number($("p-gauge-decimals")?.value) || 0;
+  }
+  if (tile.kind === "countdown") {
+    tile.countdownMode = $("p-countdown-mode")?.value === "seconds" ? "seconds" : "until";
+  }
+}
+
+function renderRowEditor(tile) {
+  const host = $("p-rows");
+  if (!host) return;
+  if (!Array.isArray(tile.rows)) tile.rows = [];
+  host.innerHTML = "";
+  tile.rows.forEach((row, index) => {
+    const box = document.createElement("div");
+    box.className = "scene-step";
+    const variable = variableById(row.variableId);
+    const extra = tile.kind === "multi"
+      ? `<div class="row"><label>Einheit <input data-row-unit value="${escapeHtml(row.unit || "")}"></label><label>Nachkomma <input data-row-decimals type="number" min="0" max="3" value="${Number(row.decimals) || 0}"></label></div>`
+      : "";
+    box.innerHTML = `<label>Beschriftung <input data-row-title value="${escapeHtml(row.title || "")}"></label>
+      <label>Variable <span class="pick-row"><input readonly value="${escapeHtml(variable ? variable.name + " (" + variable.id + ")" : "")}" placeholder="Auswählen"><button type="button" class="pick-var" data-pick="row" data-slot="${index}">Auswählen</button></span></label>
+      ${extra}
+      <button type="button" data-row-remove>Entfernen</button>`;
+    box.querySelector("[data-row-title]").addEventListener("change", (event) => {
+      row.title = event.target.value;
+      markDirty();
+      renderGrid();
+    });
+    const unit = box.querySelector("[data-row-unit]");
+    if (unit) unit.addEventListener("change", (event) => { row.unit = event.target.value; markDirty(); renderGrid(); });
+    const decimals = box.querySelector("[data-row-decimals]");
+    if (decimals) decimals.addEventListener("change", (event) => { row.decimals = Number(event.target.value) || 0; markDirty(); renderGrid(); });
+    box.querySelector("[data-row-remove]").addEventListener("click", () => {
+      tile.rows.splice(index, 1);
+      markDirty();
+      renderRowEditor(tile);
+      renderGrid();
+    });
+    box.querySelector(".pick-var").addEventListener("click", () => openVariablePicker("row", String(index)));
+    host.appendChild(box);
+  });
+}
+
 /* ---------- Eigenschaften ---------- */
 
 function fillIconSelect(select, allowEmpty) {
@@ -2425,7 +2702,6 @@ function renderProperties() {
     if ($("p-dim-layout")) $("p-dim-layout").value = tile.dimLayout || "horizontal";
     if ($("p-own-text")) $("p-own-text").checked = Boolean(tile.textColor);
     if ($("p-text-color") && tile.textColor) $("p-text-color").value = tile.textColor;
-    if ($("p-text-size")) $("p-text-size").value = tile.textSize || "normal";
     if ($("p-threshold")) $("p-threshold").value = tile.threshold != null ? String(tile.threshold) : "";
     if ($("p-status-color")) $("p-status-color").value = tile.color || "neutral";
     if ($("p-dim-tap")) {
@@ -2500,10 +2776,7 @@ function renderProperties() {
     }
   }
   if (tile.kind === "label" && $("p-label-style")) $("p-label-style").value = tile.labelStyle || "text";
-  if ($("p-label-size")) $("p-label-size").value = tile.textSize || "auto";
-  if ($("p-label-bold")) $("p-label-bold").checked = Boolean(tile.textBold);
-  if ($("p-label-italic")) $("p-label-italic").checked = Boolean(tile.textItalic);
-  if ($("p-label-underline")) $("p-label-underline").checked = Boolean(tile.textUnderline);
+  syncFontProperties(tile);
   if ($("p-sep-orient")) $("p-sep-orient").value = tile.orientation === "vertical" ? "vertical" : "horizontal";
   if ($("p-sep-thickness")) $("p-sep-thickness").value = tile.thickness || 2;
   if ($("p-sep-color") && tile.lineColor) $("p-sep-color").value = tile.lineColor;
@@ -2517,10 +2790,6 @@ function renderProperties() {
     if ($("p-scene-show-state-text")) $("p-scene-show-state-text").checked = tile.showStateText === true;
     if ($("p-scene-actionid")) $("p-scene-actionid").value = tile.actionId || "";
     if ($("p-scene-confirm")) $("p-scene-confirm").checked = Boolean(tile.confirm);
-    if ($("p-scene-text-size")) $("p-scene-text-size").value = tile.textSize || "normal";
-    if ($("p-scene-text-bold")) $("p-scene-text-bold").checked = Boolean(tile.textBold);
-    if ($("p-scene-text-italic")) $("p-scene-text-italic").checked = Boolean(tile.textItalic);
-    if ($("p-scene-text-underline")) $("p-scene-text-underline").checked = Boolean(tile.textUnderline);
     renderSceneSteps(tile);
   }
   const ownOnWrap = $("p-own-on-wrap");
@@ -2689,9 +2958,6 @@ function applyProperties() {
     }
     if ($("p-own-text")?.checked && $("p-text-color") && mode === "") tile.textColor = $("p-text-color").value;
     else delete tile.textColor;
-    const textSize = $("p-text-size") ? $("p-text-size").value : "normal";
-    if (mode === "" && textSize && textSize !== "normal") tile.textSize = textSize;
-    else delete tile.textSize;
     const thresholdRaw = ($("p-threshold")?.value || "").trim();
     if (mode === "" && thresholdRaw !== "" && !Number.isNaN(Number(thresholdRaw))) {
       tile.threshold = Number(thresholdRaw);
@@ -2811,15 +3077,6 @@ function applyProperties() {
   }
   if (tile.kind === "label") {
     tile.labelStyle = $("p-label-style") ? $("p-label-style").value : "text";
-    const size = $("p-label-size") ? $("p-label-size").value : "auto";
-    if (size && size !== "auto") tile.textSize = size;
-    else delete tile.textSize;
-    if ($("p-label-bold")?.checked) tile.textBold = true;
-    else delete tile.textBold;
-    if ($("p-label-italic")?.checked) tile.textItalic = true;
-    else delete tile.textItalic;
-    if ($("p-label-underline")?.checked) tile.textUnderline = true;
-    else delete tile.textUnderline;
   }
   if (tile.kind === "separator") {
     const vertical = $("p-sep-orient") && $("p-sep-orient").value === "vertical";
@@ -2868,15 +3125,6 @@ function applyProperties() {
     }
     if ($("p-scene-show-state-text")?.checked) tile.showStateText = true;
     else delete tile.showStateText;
-    const sceneTextSize = $("p-scene-text-size") ? $("p-scene-text-size").value : "normal";
-    if (sceneTextSize && sceneTextSize !== "normal") tile.textSize = sceneTextSize;
-    else delete tile.textSize;
-    if ($("p-scene-text-bold")?.checked) tile.textBold = true;
-    else delete tile.textBold;
-    if ($("p-scene-text-italic")?.checked) tile.textItalic = true;
-    else delete tile.textItalic;
-    if ($("p-scene-text-underline")?.checked) tile.textUnderline = true;
-    else delete tile.textUnderline;
   }
   if (tile.kind === "weather") {
     tile.icon = ($("p-title-icon") && $("p-title-icon").value) || ($("p-weather-icon") ? $("p-weather-icon").value : "") || "sun";
@@ -2938,6 +3186,8 @@ function applyProperties() {
     tile.cameraLiveFps = clampCamera($("p-camera-live-fps") && $("p-camera-live-fps").value, 1, 5, 3);
     tile.cameraIntervalSec = clampCamera($("p-camera-interval") && $("p-camera-interval").value, 5, 300, 10);
   }
+  applyFontFields(tile);
+  applyExtraTileFields(tile);
   markDirty();
   renderGrid();
   renderProperties();
@@ -2961,6 +3211,13 @@ for (const id of ["p-title", "p-show-title", "p-show-title-icon", "p-title-icon"
 }
 if ($("p-flow-home-override")) {
   $("p-flow-home-override").addEventListener("change", applyProperties);
+}
+for (const id of ["p-title-px", "p-text-px", "p-title-bold", "p-title-italic", "p-text-bold", "p-text-italic", "p-text-underline", "p-show-age", "p-gauge-min", "p-gauge-max", "p-gauge-unit", "p-gauge-decimals", "p-countdown-mode"]) {
+  if ($(id)) $(id).addEventListener("change", () => {
+    syncFontPreview($("p-title-px"), $("p-title-preview"));
+    syncFontPreview($("p-text-px"), $("p-text-preview"));
+    applyProperties();
+  });
 }
 for (const id of ["p-display-textarea"]) {
   if ($(id)) $(id).addEventListener("input", applyProperties);
@@ -3403,6 +3660,16 @@ function acceptVariablePicker() {
     tile.setpointVariableId = variable.id;
     markDirty();
     renderProperties();
+  } else if (kind === "row") {
+    const index = Number(pickerState.slot);
+    if (!Array.isArray(tile.rows)) tile.rows = [];
+    if (tile.rows[index]) {
+      tile.rows[index].variableId = variable.id;
+      if (!tile.rows[index].title) tile.rows[index].title = variable.name;
+      markDirty();
+      renderRowEditor(tile);
+      renderGrid();
+    }
   } else if (kind === "sceneStep" || kind === "sceneStepColor") {
     const tile = selectedTile();
     const index = Number(pickerState.slot);
@@ -3413,7 +3680,7 @@ function acceptVariablePicker() {
       renderSceneSteps(tile);
       renderGrid();
     }
-  } else if (kind === "scene" || kind === "weather" || kind === "presence" || kind === "variable") {
+  } else if (kind === "scene" || kind === "weather" || kind === "presence" || kind === "variable" || kind === "gauge" || kind === "countdown" || kind === "appointment") {
     if (tile.kind === "camera" && isMediaPick(variable)) assignCameraMedia(tile, variable);
     else assignVariable(tile, variable);
   }
@@ -3624,6 +3891,46 @@ $("edit-details").addEventListener("click", () => {
   if (tile) openTileDialog(tile);
 });
 $("edit-delete").addEventListener("click", deleteSelected);
+$("edit-duplicate")?.addEventListener("click", () => {
+  const tile = selectedTile();
+  const page = currentPage();
+  if (!tile || !page) return;
+  const copy = JSON.parse(JSON.stringify(tile));
+  const stamp = Date.now().toString(36);
+  copy.tileId = `t${stamp}`;
+  if (copy.actionId) copy.actionId = `a-${copy.tileId}`;
+  const cell = freeCell(copy.colSpan || 1, copy.rowSpan || 1);
+  if (!cell) {
+    setStatus("Auf dieser Seite ist keine Zelle frei.");
+    return;
+  }
+  copy.col = cell.col;
+  copy.row = cell.row;
+  page.tiles.push(copy);
+  state.selected = copy.tileId;
+  markDirty();
+  renderGrid();
+  renderProperties();
+});
+$("edit-style")?.addEventListener("click", () => {
+  const tile = selectedTile();
+  if (!tile) return;
+  state.styleSource = tile.tileId;
+  setStatus("Stil gemerkt. Zielkachel anklicken.");
+});
+$("p-row-add")?.addEventListener("click", () => {
+  const tile = selectedTile();
+  if (!tile) return;
+  if (!Array.isArray(tile.rows)) tile.rows = [];
+  if (tile.rows.length >= 6) {
+    setStatus("Höchstens sechs Zeilen.");
+    return;
+  }
+  tile.rows.push({ variableId: 0, title: "Zeile", unit: "", decimals: 0 });
+  markDirty();
+  renderRowEditor(tile);
+  renderGrid();
+});
 $("edit-layout").addEventListener("click", openLayoutDialog);
 $("color-mono")?.addEventListener("change", () => {
   if (!state.layout) return;
@@ -3835,6 +4142,33 @@ function renderSettings(settings) {
   if (!(settings.panels || []).length) {
     body.innerHTML = '<tr><td colspan="4" class="hint">Noch keine Anzeige-Instanz angelegt.</td></tr>';
   }
+  const pick = $("s-bright-panel");
+  if (pick) {
+    pick.innerHTML = "";
+    for (const panel of settings.panels || []) {
+      const option = document.createElement("option");
+      option.value = String(panel.id);
+      option.textContent = panel.name;
+      pick.appendChild(option);
+    }
+    const current = (settings.panels || []).find((panel) => panel.serves) || (settings.panels || [])[0];
+    if (current) {
+      pick.value = String(current.id);
+      applyBrightnessForm(current);
+    }
+    pick.onchange = () => {
+      const chosen = (settings.panels || []).find((panel) => String(panel.id) === pick.value);
+      if (chosen) applyBrightnessForm(chosen);
+    };
+  }
+}
+
+function applyBrightnessForm(panel) {
+  if ($("s-night-dim")) $("s-night-dim").checked = panel.nightDim !== false;
+  if ($("s-day-brightness")) $("s-day-brightness").value = panel.dayBrightness ?? 70;
+  if ($("s-night-brightness")) $("s-night-brightness").value = panel.nightBrightness ?? 15;
+  if ($("s-night-from")) $("s-night-from").value = panel.nightFrom ?? 22;
+  if ($("s-night-to")) $("s-night-to").value = panel.nightTo ?? 6;
 }
 
 async function openSettings() {
@@ -3851,6 +4185,16 @@ async function openSettings() {
     if (dialog.returnValue !== "ok") return;
     try {
       const result = await call("saveSettings", { serviceHost: $("s-host").value.trim() });
+      if ($("s-bright-panel") && $("s-bright-panel").value) {
+        await call("saveBrightness", {
+          panel: Number($("s-bright-panel").value),
+          nightDim: Boolean($("s-night-dim")?.checked),
+          dayBrightness: Number($("s-day-brightness")?.value),
+          nightBrightness: Number($("s-night-brightness")?.value),
+          nightFrom: Number($("s-night-from")?.value),
+          nightTo: Number($("s-night-to")?.value)
+        });
+      }
       setStatus(result.serviceUrl ? `Einstellungen gespeichert. Dienst: ${result.serviceUrl}` : "Einstellungen gespeichert.");
     } catch (error) {
       setStatus(error.message);
@@ -3948,8 +4292,28 @@ function paintEditorLiveTile(element, tile) {
 
 let probe = { page: "", snapshot: null, panels: [], probeImageUrls: {}, probeImageErrors: {}, probeImageErrorDetails: {}, timer: null, lastLive: "" };
 
+function probeHardwareProfile() {
+  const panelId = Number($("probe-panel") && $("probe-panel").value);
+  const panel = (probe.panels || []).find((item) => Number(item.id) === panelId);
+  if (panel && DISPLAY_PROFILES[panel.displayProfile]) return DISPLAY_PROFILES[panel.displayProfile];
+  const layout = probe.snapshot && probe.snapshot.layout;
+  return layout ? layoutProfile(layout) : DISPLAY_PROFILES[defaultProfileId()];
+}
+
+function applyProbeChrome(profile) {
+  const screen = $("probe-screen");
+  if (!screen || !profile) return;
+  const header = profile.height >= 480 ? 68 : 0;
+  screen.style.setProperty("--lcd-w", String(profile.width));
+  screen.style.setProperty("--lcd-h", String(profile.height));
+  screen.style.setProperty("--header-h", String(header));
+  const layout = probe.snapshot && probe.snapshot.layout;
+  screen.classList.toggle("mono", Boolean(layout && layout.colorMode === "mono"));
+}
+
 function scaleProbeViewport() {
-  const profile = probe.snapshot && probe.snapshot.layout ? layoutProfile(probe.snapshot.layout) : DISPLAY_PROFILES[defaultProfileId()];
+  const profile = probeHardwareProfile();
+  applyProbeChrome(profile);
   scaleDisplayScreen($("probe-viewport"), $("probe-stage"), $("probe-screen"), profile);
 }
 
@@ -3984,6 +4348,8 @@ function applyLiveStateToProbeTile(element, tile, live) {
       iconBtn.setAttribute("aria-pressed", on ? "true" : "false");
     }
   } else if (tile.kind === "value") {
+    const readout = element.querySelector(".value-readout");
+    if (readout && live.text != null && live.text !== "") readout.textContent = live.text;
     if (ohState && live.text != null && live.text !== "") {
       ohState.innerHTML = escapeHtml(live.text);
     }
@@ -4026,7 +4392,7 @@ function applyLiveStateToProbeTile(element, tile, live) {
     element.innerHTML = kickerHtml + buildEnergyFlowHtml(tile, live, "probe");
     element.dataset.tileId = tile.tileId;
   }
-  if (tile.kind === "chart") paintChartTileContent(element, tile, live);
+  if (tile.kind === "chart") paintChartTileContent(element, tile, live, "probe");
 }
 
 function updateProbeValuesOnly() {
@@ -4113,7 +4479,7 @@ function renderProbe() {
   if (!probe.page || !(layout.pages || []).some((page) => page.id === probe.page)) probe.page = layout.pages[0].id;
   const values = {};
   for (const tile of (probe.snapshot.state && probe.snapshot.state.tiles) || []) values[tile.tileId] = tile;
-  const profile = layoutProfile({ displayProfile: layout.displayProfile });
+  const profile = probeHardwareProfile();
   const probeInfo = probe.snapshot && probe.snapshot.probe;
   let metaText;
   if (probeInfo && probeInfo.draft) {
@@ -4131,9 +4497,9 @@ function renderProbe() {
     }
   }
   const panelId = Number($("probe-panel").value);
-  const panel = (probe.panels || []).find((item) => item.id === panelId);
+  const panel = (probe.panels || []).find((item) => Number(item.id) === panelId);
   if (panel && panel.displayProfile && layout.displayProfile && panel.displayProfile !== layout.displayProfile) {
-    metaText += ` · Anzeige-Hardware: ${profileLabel(panel.displayProfile)}`;
+    metaText += ` · Ansichtsprofil ${profileLabel(layout.displayProfile)}`;
   }
   $("probe-meta").textContent = metaText;
   const showTabs = layout.showTabs !== false && (layout.pages || []).length > 1;

@@ -106,6 +106,18 @@ typedef struct {
     char row_align[8];
     char icon_place[8];
     char title_icon_name[24];
+    lv_obj_t *title_label;
+    lv_obj_t *age_label;
+    lv_obj_t *arc;
+    lv_obj_t *rows[6];
+    lv_obj_t *dots[6];
+    int title_px;
+    int text_px;
+    bool title_bold;
+    bool title_italic;
+    bool show_age;
+    int gauge_min;
+    int gauge_max;
 } tile_view_t;
 
 static void ui_wdt_kick(void)
@@ -261,6 +273,7 @@ static int day_brightness = 70;
 static int night_brightness = 15;
 static int night_from = 22;
 static int night_to = 6;
+static bool night_dim = true;
 static bool locked;
 static bool online = true;
 static int wifi_rssi;
@@ -400,14 +413,14 @@ static void build_boot_layer(lv_obj_t *screen)
     lv_label_set_long_mode(boot_title, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(boot_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(boot_title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(boot_title, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_font(boot_title, &montserrat_bold_48, 0);
     lv_label_set_text(boot_title, "Hausanzeige startet");
 
     boot_code = lv_label_create(card);
     lv_obj_set_width(boot_code, 840);
     lv_obj_set_style_text_align(boot_code, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(boot_code, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(boot_code, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_font(boot_code, &montserrat_bold_48, 0);
     lv_label_set_text(boot_code, "");
     lv_obj_add_flag(boot_code, LV_OBJ_FLAG_HIDDEN);
 
@@ -416,13 +429,13 @@ static void build_boot_layer(lv_obj_t *screen)
     lv_label_set_long_mode(boot_detail, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(boot_detail, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(boot_detail, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(boot_detail, &lv_font_montserrat_36, 0);
+    lv_obj_set_style_text_font(boot_detail, &montserrat_bold_36, 0);
     lv_obj_set_style_text_line_space(boot_detail, 10, 0);
     lv_label_set_text(boot_detail, "");
 
     boot_footer = lv_label_create(boot_layer);
     lv_obj_set_style_text_color(boot_footer, lv_color_hex(0xAAAAAA), 0);
-    lv_obj_set_style_text_font(boot_footer, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(boot_footer, &montserrat_bold_28, 0);
     char footer[64];
     snprintf(footer, sizeof(footer), "Firmware %s", HOMEDISPLAY_FIRMWARE_VERSION);
     lv_label_set_text(boot_footer, footer);
@@ -503,77 +516,71 @@ static void refresh_icons(tile_view_t *tile, bool on)
     }
 }
 
-/* Icon und Wert in einer Zeile. Der Wert bleibt in der Kachel, das Icon nur wenn die Höhe reicht. */
+static const lv_font_t *font_for(int px, bool bold, bool italic);
+
+/* Überschrift oben, Icon füllt die Restfläche, Wert unten. */
 static void layout_value_row(tile_view_t *view)
 {
     if (!view || !view->value_row || !view->label || !view->card) return;
+    lv_obj_update_layout(view->card);
     lv_coord_t inner_w = lv_obj_get_content_width(view->card);
     lv_coord_t inner_h = lv_obj_get_content_height(view->card);
     if (inner_w < 24) inner_w = 24;
     if (inner_h < 16) inner_h = 16;
-    lv_coord_t y0 = view->show_title_row ? 28 : 4;
-    lv_coord_t row_h = inner_h - y0;
-    if (row_h < 16) row_h = 16;
 
-    const lv_font_t *font = lv_obj_get_style_text_font(view->label, LV_PART_MAIN);
-    lv_coord_t text_h = font ? lv_font_get_line_height(font) : 28;
+    const lv_font_t *font = font_for(view->text_px ? view->text_px : 28, view->text_bold, view->text_italic);
+    lv_obj_set_style_text_font(view->label, font, 0);
+    lv_coord_t text_h = lv_font_get_line_height(font);
+    lv_coord_t age_h = (view->show_age && view->age_label) ? lv_font_get_line_height(&lv_font_montserrat_16) + 2 : 0;
+    const lv_font_t *title_font = font_for(view->title_px ? view->title_px : 28, view->title_bold, view->title_italic);
+    lv_coord_t title_h = view->show_title_row ? lv_font_get_line_height(title_font) + 4 : 0;
+    lv_coord_t free_top = title_h;
+    lv_coord_t free_h = inner_h - title_h - text_h - age_h - 2;
+    if (free_h < 8) free_h = 8;
+
     bool want_icon = view->icon_label && view->icon_name[0] && strcmp(view->icon_place, "none") != 0;
     int icon_px = 0;
     if (want_icon) {
-        if (row_h >= 48) {
-            icon_px = 48;
-            view->icon_large = true;
-        } else if (row_h >= 28) {
-            icon_px = 28;
-            view->icon_large = false;
-        } else {
+        icon_px = inner_w < free_h ? (int) inner_w : (int) free_h;
+        if (icon_px < 28) {
             want_icon = false;
+            icon_px = 0;
         }
     }
     if (view->icon_label) {
         if (want_icon) {
             lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
-            show_icon_label(view->icon_label, view, view->icon_name, false, view->icon_large);
+            view->icon_large = true;
+            show_icon_label(view->icon_label, view, view->icon_name, false, true);
+            int zoom = (icon_px * 256) / 48;
+            if (zoom < 128) zoom = 128;
+            if (zoom > 3072) zoom = 3072;
+            lv_obj_set_style_transform_zoom(view->icon_label, zoom, 0);
+            lv_obj_set_style_transform_pivot_x(view->icon_label, 24, 0);
+            lv_obj_set_style_transform_pivot_y(view->icon_label, 24, 0);
+            lv_coord_t icon_x = (inner_w - 48) / 2;
+            lv_coord_t icon_y = free_top + (free_h - 48) / 2;
+            if (icon_x < 0) icon_x = 0;
+            if (icon_y < free_top) icon_y = free_top;
+            lv_obj_align(view->icon_label, LV_ALIGN_TOP_LEFT, icon_x, icon_y);
         } else {
             lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_transform_zoom(view->icon_label, 256, 0);
         }
     }
 
-    lv_coord_t gap = want_icon ? 8 : 0;
-    lv_coord_t max_text = inner_w - (want_icon ? icon_px + gap : 0);
-    if (max_text < 16) max_text = 16;
-    const char *text = lv_label_get_text(view->label);
-    lv_point_t sz = { 0, 0 };
-    if (font && text) lv_txt_get_size(&sz, text, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-    lv_coord_t text_w = sz.x > 0 ? sz.x : 8;
-    if (text_w > max_text) text_w = max_text;
-
-    lv_coord_t pair_w = text_w + (want_icon ? icon_px + gap : 0);
-    if (pair_w > inner_w) pair_w = inner_w;
-    lv_coord_t pair_x = 0;
-    if (strcmp(view->row_align, "center") == 0) pair_x = (inner_w - pair_w) / 2;
-    else if (strcmp(view->row_align, "right") == 0) pair_x = inner_w - pair_w;
-    if (pair_x < 0) pair_x = 0;
-
-    bool after = want_icon && strcmp(view->icon_place, "after") == 0;
-    lv_coord_t text_x = pair_x;
-    lv_coord_t icon_x = pair_x;
-    if (want_icon && after) icon_x = pair_x + text_w + gap;
-    else if (want_icon) text_x = pair_x + icon_px + gap;
-
-    lv_coord_t block_h = text_h;
-    if (want_icon && icon_px > block_h) block_h = (lv_coord_t) icon_px;
-    if (block_h > row_h) block_h = row_h;
-    lv_coord_t row_top = y0 + (row_h - block_h) / 2;
-
-    lv_obj_set_width(view->label, text_w);
+    lv_obj_set_width(view->label, inner_w);
     lv_label_set_long_mode(view->label, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(view->label, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(view->label, LV_ALIGN_TOP_LEFT, text_x, row_top + (block_h - text_h) / 2);
-    if (want_icon && view->icon_label) {
-        lv_obj_align(view->icon_label, LV_ALIGN_TOP_LEFT, icon_x, row_top + (block_h - icon_px) / 2);
+    lv_obj_set_style_text_align(view->label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(view->label, LV_ALIGN_BOTTOM_MID, 0, -age_h);
+    if (view->age_label) {
+        lv_obj_set_width(view->age_label, inner_w);
+        lv_obj_set_style_text_font(view->age_label, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_align(view->age_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(view->age_label, LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_move_foreground(view->age_label);
     }
-    lv_obj_move_foreground(view->label);
+    if (view->title_label) lv_obj_move_foreground(view->title_label);
 }
 
 static void hold_target(tile_view_t *tile, int value)
@@ -584,30 +591,59 @@ static void hold_target(tile_view_t *tile, int value)
     tile->held_until = esp_timer_get_time() + 5000000LL;
 }
 
-static const lv_font_t *styled_font(const char *size, bool bold, bool italic)
+static int snap_font_px(int px)
 {
-    int px = 20;
-    if (size && strcmp(size, "normal") == 0) px = 28;
-    else if (size && strcmp(size, "large") == 0) px = 36;
-    else if (size && strcmp(size, "xlarge") == 0) px = 48;
+    static const int steps[] = {16, 20, 24, 28, 32, 36, 40, 48};
+    int best = 16;
+    int dist = 1000;
+    for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
+        int delta = px - steps[i];
+        if (delta < 0) delta = -delta;
+        if (delta < dist) {
+            dist = delta;
+            best = steps[i];
+        }
+    }
+    return best;
+}
+
+static const lv_font_t *font_for(int px, bool bold, bool italic)
+{
+    px = snap_font_px(px);
     if (bold && italic) {
+        if (px == 16) return &montserrat_bolditalic_16;
+        if (px == 24) return &montserrat_bolditalic_24;
+        if (px == 32) return &montserrat_bolditalic_32;
+        if (px == 40) return &montserrat_bolditalic_40;
         if (px >= 48) return &montserrat_bolditalic_48;
         if (px >= 36) return &montserrat_bolditalic_36;
         if (px >= 28) return &montserrat_bolditalic_28;
         return &montserrat_bolditalic_20;
     }
     if (bold) {
+        if (px == 16) return &montserrat_bold_16;
+        if (px == 24) return &montserrat_bold_24;
+        if (px == 32) return &montserrat_bold_32;
+        if (px == 40) return &montserrat_bold_40;
         if (px >= 48) return &montserrat_bold_48;
         if (px >= 36) return &montserrat_bold_36;
         if (px >= 28) return &montserrat_bold_28;
         return &montserrat_bold_20;
     }
     if (italic) {
+        if (px == 16) return &montserrat_italic_16;
+        if (px == 24) return &montserrat_italic_24;
+        if (px == 32) return &montserrat_italic_32;
+        if (px == 40) return &montserrat_italic_40;
         if (px >= 48) return &montserrat_italic_48;
         if (px >= 36) return &montserrat_italic_36;
         if (px >= 28) return &montserrat_italic_28;
         return &montserrat_italic_20;
     }
+    if (px == 16) return &lv_font_montserrat_16;
+    if (px == 24) return &lv_font_montserrat_24;
+    if (px == 32) return &lv_font_montserrat_32;
+    if (px == 40) return &lv_font_montserrat_40;
     if (px >= 48) return &lv_font_montserrat_48;
     if (px >= 36) return &lv_font_montserrat_36;
     if (px >= 28) return &lv_font_montserrat_28;
@@ -921,6 +957,32 @@ static uint32_t parse_hex_color(const char *text, uint32_t fallback)
     }
     if (text[7] != '\0') return fallback;
     return value;
+}
+
+static int read_px(cJSON *tile, const char *key, const char *legacy, int fallback)
+{
+    cJSON *item = cJSON_GetObjectItem(tile, key);
+    if (cJSON_IsNumber(item) && item->valueint > 0) return snap_font_px(item->valueint);
+    const char *name = legacy ? cJSON_GetStringValue(cJSON_GetObjectItem(tile, legacy)) : NULL;
+    if (name && strcmp(name, "small") == 0) return 20;
+    if (name && strcmp(name, "normal") == 0) return 28;
+    if (name && strcmp(name, "large") == 0) return 36;
+    if (name && strcmp(name, "xlarge") == 0) return 48;
+    return snap_font_px(fallback);
+}
+
+static void load_type(tile_view_t *view, cJSON *tile, const char *kind)
+{
+    int title_fallback = (kind && strcmp(kind, "nav") == 0) ? 28 : 20;
+    int text_fallback = (kind && (strcmp(kind, "chart") == 0 || strcmp(kind, "label") == 0)) ? 20 : 28;
+    view->title_px = read_px(tile, "titlePx", NULL, title_fallback);
+    view->text_px = read_px(tile, "textPx", "textSize", text_fallback);
+    view->title_bold = cJSON_IsTrue(cJSON_GetObjectItem(tile, "titleBold"));
+    view->title_italic = cJSON_IsTrue(cJSON_GetObjectItem(tile, "titleItalic"));
+    view->text_bold = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textBold"));
+    view->text_italic = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textItalic"));
+    view->text_underline = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textUnderline"));
+    view->show_age = cJSON_IsTrue(cJSON_GetObjectItem(tile, "showAge"));
 }
 
 static void place_level(tile_view_t *tile, int value)
@@ -1297,6 +1359,7 @@ static void show_page(int index)
         snprintf(view->tile_id, sizeof(view->tile_id), "%s", tile_id ? tile_id : "");
         snprintf(view->title, sizeof(view->title), "%s", title ? title : "");
         if (icon && icon[0]) snprintf(view->icon_name, sizeof(view->icon_name), "%s", icon);
+        load_type(view, tile, kind);
         view->confirm = cJSON_IsTrue(cJSON_GetObjectItem(tile, "confirm"));
         view->base_bg = kind_bg(kind);
         bool own_bg = false;
@@ -1353,7 +1416,7 @@ static void show_page(int index)
                 lv_obj_t *name = lv_label_create(row);
                 if (show_title) label_set_folded(name, view->title[0] ? view->title : "Weiter");
                 else lv_label_set_text(name, LV_SYMBOL_RIGHT);
-                lv_obj_set_style_text_font(name, &lv_font_montserrat_28, 0);
+                lv_obj_set_style_text_font(name, font_for(view->title_px, view->title_bold, view->title_italic), 0);
                 lv_obj_clear_flag(name, LV_OBJ_FLAG_CLICKABLE);
             }
             lv_align_t nav_align = LV_ALIGN_CENTER;
@@ -1371,10 +1434,9 @@ static void show_page(int index)
             lv_label_set_text(label, text ? text : "");
             lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
             lv_obj_set_width(label, cell_w * col_span - 24);
-            const char *label_size = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "textSize"));
             bool label_bold = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textBold"));
             bool label_italic = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textItalic"));
-            lv_obj_set_style_text_font(label, styled_font(label_size, label_bold, label_italic), 0);
+            lv_obj_set_style_text_font(label, font_for(view->text_px, label_bold, label_italic), 0);
             if (cJSON_IsTrue(cJSON_GetObjectItem(tile, "textUnderline"))) {
                 lv_obj_set_style_text_decor(label, LV_TEXT_DECOR_UNDERLINE, 0);
             }
@@ -1407,7 +1469,7 @@ static void show_page(int index)
                 lv_obj_set_style_pad_all(view->card, 4, 0);
                 name = lv_label_create(view->card);
                 label_set_folded(name, view->title[0] ? view->title : "Kamera");
-                lv_obj_set_style_text_font(name, &lv_font_montserrat_20, 0);
+                lv_obj_set_style_text_font(name, font_for(view->title_px, view->title_bold, view->title_italic), 0);
                 lv_obj_align(name, LV_ALIGN_TOP_LEFT, 4, 2);
                 img_w = cell_w * col_span - 16;
                 img_h = cell_h * row_span - 44;
@@ -1503,9 +1565,21 @@ static void show_page(int index)
                 title_x = strcmp(title_align, "right") == 0 ? -40 : (strcmp(title_align, "center") == 0 ? 18 : 40);
             }
             lv_obj_t *name = lv_label_create(view->card);
-            label_set_folded(name, view->title[0] ? view->title : "—");
-            lv_obj_set_style_text_font(name, &lv_font_montserrat_20, 0);
-            lv_obj_align(name, title_pos, title_x, 2);
+            label_set_folded(name, view->title[0] ? view->title : "-");
+            if (plain_value && !cJSON_IsNumber(cJSON_GetObjectItem(tile, "titlePx"))) view->title_px = 28;
+            if (plain_value) {
+                view->title_label = name;
+                lv_obj_set_style_text_font(name, font_for(view->title_px, view->title_bold, view->title_italic), 0);
+                lv_obj_set_width(name, cell_w * col_span - 28);
+                lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+                if (strcmp(title_align, "center") == 0) lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
+                else if (strcmp(title_align, "right") == 0) lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_RIGHT, 0);
+                else lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_LEFT, 0);
+                lv_obj_align(name, LV_ALIGN_TOP_LEFT, 0, 0);
+            } else {
+                lv_obj_set_style_text_font(name, font_for(view->title_px, view->title_bold, view->title_italic), 0);
+                lv_obj_align(name, title_pos, title_x, 2);
+            }
         }
 
         if (strcmp(kind, "chart") == 0) {
@@ -1529,8 +1603,8 @@ static void show_page(int index)
                 lv_obj_add_flag(view->chart_line, LV_OBJ_FLAG_HIDDEN);
             }
             view->label = lv_label_create(view->card);
-            lv_label_set_text(view->label, "—");
-            lv_obj_set_style_text_font(view->label, &lv_font_montserrat_20, 0);
+            lv_label_set_text(view->label, "-");
+            lv_obj_set_style_text_font(view->label, font_for(view->text_px, view->text_bold, view->text_italic), 0);
             lv_obj_align(view->label, LV_ALIGN_TOP_RIGHT, -4, 2);
             tile_count++;
             continue;
@@ -1540,18 +1614,106 @@ static void show_page(int index)
             view->battery_pad = json_int(tile, "batteryPad", 8);
             build_battery(view, view->battery_pad);
             view->label = lv_label_create(view->card);
-            lv_label_set_text(view->label, "—");
-            lv_obj_set_style_text_font(view->label, &lv_font_montserrat_28, 0);
+            lv_label_set_text(view->label, "-");
+            lv_obj_set_style_text_font(view->label, font_for(view->text_px, view->text_bold, view->text_italic), 0);
             lv_obj_align(view->label, LV_ALIGN_TOP_RIGHT, 0, 2);
+            if (view->show_age) {
+                view->age_label = lv_label_create(view->card);
+                lv_label_set_text(view->age_label, "");
+                lv_obj_set_style_text_font(view->age_label, &lv_font_montserrat_16, 0);
+                lv_obj_align(view->age_label, LV_ALIGN_BOTTOM_MID, 0, -2);
+            }
+            tile_count++;
+            continue;
+        }
+
+        if (strcmp(kind, "multi") == 0 || strcmp(kind, "contacts") == 0) {
+            bool contacts = strcmp(kind, "contacts") == 0;
+            cJSON *rows = cJSON_GetObjectItem(tile, "rows");
+            int count = cJSON_GetArraySize(rows);
+            if (count > 6) count = 6;
+            int y = show_title ? 28 : 8;
+            for (int row_index = 0; row_index < count; row_index++) {
+                cJSON *row = cJSON_GetArrayItem(rows, row_index);
+                const char *caption = cJSON_GetStringValue(cJSON_GetObjectItem(row, "title"));
+                if (contacts) {
+                    view->dots[row_index] = lv_obj_create(view->card);
+                    lv_obj_set_size(view->dots[row_index], 14, 14);
+                    lv_obj_set_pos(view->dots[row_index], 8, y + 4);
+                    style_flat(view->dots[row_index]);
+                    lv_obj_set_style_radius(view->dots[row_index], LV_RADIUS_CIRCLE, 0);
+                    lv_obj_set_style_bg_opa(view->dots[row_index], LV_OPA_TRANSP, 0);
+                    lv_obj_set_style_border_width(view->dots[row_index], 2, 0);
+                    lv_obj_set_style_border_color(view->dots[row_index], lv_color_hex(0xF4F7FB), 0);
+                    lv_obj_clear_flag(view->dots[row_index], LV_OBJ_FLAG_CLICKABLE);
+                }
+                view->rows[row_index] = lv_label_create(view->card);
+                lv_label_set_text(view->rows[row_index], caption && caption[0] ? caption : "-");
+                lv_obj_set_style_text_font(view->rows[row_index], font_for(view->text_px, view->text_bold, view->text_italic), 0);
+                lv_obj_set_pos(view->rows[row_index], contacts ? 30 : 8, y);
+                lv_obj_set_width(view->rows[row_index], cell_w * col_span - (contacts ? 40 : 16));
+                lv_label_set_long_mode(view->rows[row_index], LV_LABEL_LONG_DOT);
+                y += 28;
+            }
+            tile_count++;
+            continue;
+        }
+
+        if (strcmp(kind, "gauge") == 0) {
+            view->gauge_min = json_int(tile, "valueMin", 0);
+            view->gauge_max = json_int(tile, "valueMax", 100);
+            int side = cell_w * col_span;
+            int avail_h = cell_h * row_span - (show_title ? 36 : 12);
+            if (avail_h < side) side = avail_h;
+            if (side < 48) side = 48;
+            view->arc = lv_arc_create(view->card);
+            lv_obj_set_size(view->arc, side - 8, side - 8);
+            lv_arc_set_rotation(view->arc, 135);
+            lv_arc_set_bg_angles(view->arc, 0, 270);
+            lv_arc_set_range(view->arc, 0, 100);
+            lv_arc_set_value(view->arc, 0);
+            lv_obj_clear_flag(view->arc, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_bg_opa(view->arc, LV_OPA_TRANSP, LV_PART_KNOB);
+            lv_obj_set_style_pad_all(view->arc, 0, LV_PART_KNOB);
+            lv_obj_align(view->arc, LV_ALIGN_CENTER, 0, show_title ? 12 : 0);
+            lv_obj_set_style_arc_width(view->arc, 10, LV_PART_MAIN);
+            lv_obj_set_style_arc_width(view->arc, 10, LV_PART_INDICATOR);
+            lv_obj_set_style_arc_color(view->arc, lv_color_hex(0x243044), LV_PART_MAIN);
+            lv_obj_set_style_arc_color(view->arc, lv_color_hex(color_mono ? 0xFFFFFF : theme_accent), LV_PART_INDICATOR);
+            view->label = lv_label_create(view->card);
+            lv_label_set_text(view->label, "-");
+            lv_obj_set_style_text_font(view->label, font_for(view->text_px, view->text_bold, view->text_italic), 0);
+            lv_obj_align(view->label, LV_ALIGN_CENTER, 0, show_title ? 12 : 0);
+            if (view->show_age) {
+                view->age_label = lv_label_create(view->card);
+                lv_label_set_text(view->age_label, "");
+                lv_obj_set_style_text_font(view->age_label, &lv_font_montserrat_16, 0);
+                lv_obj_align(view->age_label, LV_ALIGN_BOTTOM_MID, 0, -2);
+            }
+            tile_count++;
+            continue;
+        }
+
+        if (strcmp(kind, "countdown") == 0 || strcmp(kind, "appointment") == 0) {
+            view->label = lv_label_create(view->card);
+            lv_label_set_text(view->label, "-");
+            lv_obj_set_style_text_font(view->label, font_for(view->text_px, view->text_bold, view->text_italic), 0);
+            lv_obj_align(view->label, LV_ALIGN_CENTER, 0, show_title ? 8 : 0);
+            view->age_label = lv_label_create(view->card);
+            lv_label_set_text(view->age_label, "");
+            lv_obj_set_style_text_font(view->age_label, &lv_font_montserrat_16, 0);
+            lv_obj_align(view->age_label, LV_ALIGN_BOTTOM_MID, 0, -4);
             tile_count++;
             continue;
         }
 
         view->label = lv_label_create(view->card);
-        lv_label_set_text(view->label, "—");
+        lv_label_set_text(view->label, "-");
         bool value_bold = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textBold"));
         bool value_italic = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textItalic"));
-        lv_obj_set_style_text_font(view->label, styled_font(view->text_size, value_bold, value_italic), 0);
+        view->text_bold = value_bold || view->text_bold;
+        view->text_italic = value_italic || view->text_italic;
+        lv_obj_set_style_text_font(view->label, font_for(view->text_px, view->text_bold, view->text_italic), 0);
         if (cJSON_IsTrue(cJSON_GetObjectItem(tile, "textUnderline"))) {
             lv_obj_set_style_text_decor(view->label, LV_TEXT_DECOR_UNDERLINE, 0);
         }
@@ -1618,6 +1780,11 @@ static void show_page(int index)
                 view->icon_label = lv_label_create(view->card);
                 lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_CLICKABLE);
             }
+            if (view->show_age) {
+                view->age_label = lv_label_create(view->card);
+                lv_label_set_text(view->age_label, "");
+                lv_obj_clear_flag(view->age_label, LV_OBJ_FLAG_CLICKABLE);
+            }
             layout_value_row(view);
         } else {
             /* Reine Wertanzeige */
@@ -1627,7 +1794,15 @@ static void show_page(int index)
                 lv_obj_align(view->icon_label, LV_ALIGN_LEFT_MID, 0, 8);
                 lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_CLICKABLE);
             }
-            lv_obj_align(view->label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+            if (view->show_age) {
+                view->age_label = lv_label_create(view->card);
+                lv_label_set_text(view->age_label, "");
+                lv_obj_set_style_text_font(view->age_label, &lv_font_montserrat_16, 0);
+                lv_obj_align(view->age_label, LV_ALIGN_BOTTOM_MID, 0, 0);
+                lv_obj_align(view->label, LV_ALIGN_BOTTOM_LEFT, 0, -18);
+            } else {
+                lv_obj_align(view->label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+            }
         }
         tile_count++;
     }
@@ -1650,9 +1825,21 @@ static void show_page(int index)
     ESP_LOGI(TAG_UI, "Seite fertig (%d Kacheln)", tile_count);
 }
 
+static bool night_now(void)
+{
+    int64_t now = clock_base + (esp_timer_get_time() - clock_set_at) / 1000000;
+    if (now < 0) now = 0;
+    int hour = (int) ((now % 86400) / 3600);
+    if (night_from == night_to) return true;
+    if (night_from < night_to) return hour >= night_from && hour < night_to;
+    return hour >= night_from || hour < night_to;
+}
+
 static void apply_backlight(void)
 {
-    bool on = !(idle_mode == 2 && homedisplay_ui_busy() == false && esp_timer_get_time() - touched_at > idle_timeout_us);
+    bool idle_off = idle_mode == 2 && homedisplay_ui_busy() == false && esp_timer_get_time() - touched_at > idle_timeout_us;
+    int level = (night_dim && night_now()) ? night_brightness : day_brightness;
+    bool on = !idle_off && level > 0;
     if (on && !backlight_on) refresh_now = true;
     backlight_on = on;
     homedisplay_board_backlight(on);
@@ -1666,10 +1853,6 @@ static void clock_tick(lv_timer_t *timer)
     if (now < 0) now = 0;
     int seconds = (int) (now % 86400);
     int hour = seconds / 3600;
-    bool night = night_from == night_to || (night_from < night_to ? hour >= night_from && hour < night_to : hour >= night_from || hour < night_to);
-    (void) night;
-    (void) day_brightness;
-    (void) night_brightness;
     char info[96];
     /* Nur Ziffern – LVGL-Symbole wirken auf dem RGB-Panel unscharf. */
     snprintf(info, sizeof(info), "%02d:%02d", hour, (seconds / 60) % 60);
@@ -2081,11 +2264,10 @@ void homedisplay_ui_apply_config(const char *json)
     if (item) night_from = item->valueint;
     item = cJSON_GetObjectItem(root, "nightTo");
     if (item) night_to = item->valueint;
+    item = cJSON_GetObjectItem(root, "nightDim");
+    if (cJSON_IsBool(item)) night_dim = cJSON_IsTrue(item);
     cJSON_Delete(root);
-    if (day_brightness <= 0 && night_brightness <= 0) {
-        backlight_on = false;
-        homedisplay_board_backlight(false);
-    }
+    apply_backlight();
 }
 
 void homedisplay_ui_apply_state(const char *json)
@@ -2202,6 +2384,40 @@ static void apply_state_body(cJSON *root)
                 }
             }
             if (tiles[index].label) label_set_folded(tiles[index].label, text ? text : "-");
+            const char *age = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "age"));
+            const char *sub = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "sub"));
+            if (tiles[index].age_label) {
+                label_set_folded(tiles[index].age_label, (sub && sub[0]) ? sub : (age ? age : ""));
+            }
+            cJSON *lines = cJSON_GetObjectItem(tile, "lines");
+            if (cJSON_IsArray(lines)) {
+                int line_count = cJSON_GetArraySize(lines);
+                for (int row_index = 0; row_index < 6 && row_index < line_count; row_index++) {
+                    cJSON *line = cJSON_GetArrayItem(lines, row_index);
+                    if (tiles[index].rows[row_index] && !tiles[index].dots[row_index]) {
+                        const char *caption = cJSON_GetStringValue(cJSON_GetObjectItem(line, "title"));
+                        const char *value_text = cJSON_GetStringValue(cJSON_GetObjectItem(line, "text"));
+                        char composed[96];
+                        snprintf(composed, sizeof(composed), "%s%s%s",
+                                 caption ? caption : "",
+                                 (caption && caption[0] && value_text && value_text[0]) ? "  " : "",
+                                 value_text ? value_text : "");
+                        label_set_folded(tiles[index].rows[row_index], composed[0] ? composed : "-");
+                    }
+                    if (tiles[index].dots[row_index]) {
+                        bool dot_on = cJSON_IsTrue(cJSON_GetObjectItem(line, "on"));
+                        lv_obj_set_style_bg_opa(tiles[index].dots[row_index], dot_on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+                        lv_obj_set_style_bg_color(tiles[index].dots[row_index], lv_color_hex(0x3DDC97), 0);
+                    }
+                }
+            }
+            if (tiles[index].arc && has_number) {
+                int span = tiles[index].gauge_max - tiles[index].gauge_min;
+                int percent = span == 0 ? 0 : (number - tiles[index].gauge_min) * 100 / span;
+                if (percent < 0) percent = 0;
+                if (percent > 100) percent = 100;
+                lv_arc_set_value(tiles[index].arc, percent);
+            }
             if (tiles[index].value_row) layout_value_row(&tiles[index]);
             apply_status_color(&tiles[index], color);
             if (!has_number) continue;

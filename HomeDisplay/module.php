@@ -990,7 +990,7 @@ class HomeDisplay extends IPSModuleStrict
             $this->notePanelVisible($device['id'], (int) $_GET['visible'] === 1);
         }
 
-        return $this->stateForLayout(is_array($layout) ? $layout : [], $device['id'], $since);
+        return $this->stateForLayout(is_array($layout) ? $layout : [], $device['id'], $since, true);
     }
 
     /**
@@ -1071,7 +1071,7 @@ class HomeDisplay extends IPSModuleStrict
                     continue;
                 }
                 if ($kind === 'chart') {
-                    $tiles[] = $this->chartStateTile($tile, $tileId, $instanceId);
+                    $tiles[] = $this->chartStateTile($tile, $tileId, $instanceId, $compactCharts);
                     continue;
                 }
                 if ($kind === 'scene') {
@@ -1087,6 +1087,22 @@ class HomeDisplay extends IPSModuleStrict
                     continue;
                 }
                 if ($kind === 'system') {
+                    continue;
+                }
+                if ($kind === 'multi' || $kind === 'contacts') {
+                    $tiles[] = $this->rowsStateTile($tile, $tileId, $kind);
+                    continue;
+                }
+                if ($kind === 'gauge') {
+                    $tiles[] = $this->gaugeStateTile($tile, $tileId);
+                    continue;
+                }
+                if ($kind === 'countdown') {
+                    $tiles[] = $this->countdownStateTile($tile, $tileId);
+                    continue;
+                }
+                if ($kind === 'appointment') {
+                    $tiles[] = $this->appointmentStateTile($tile, $tileId);
                     continue;
                 }
                 if ($kind !== 'value' && $kind !== 'display') {
@@ -1118,7 +1134,7 @@ class HomeDisplay extends IPSModuleStrict
                 if (isset($pending[$tileId])) {
                     $quality = 'pending';
                 }
-                $tiles[] = [
+                $entry = [
                     'tileId' => $tileId,
                     'text' => $text,
                     'value' => $value,
@@ -1126,6 +1142,11 @@ class HomeDisplay extends IPSModuleStrict
                     'quality' => $quality,
                     'pending' => isset($pending[$tileId]),
                 ];
+                $age = $this->ageText($tile, $variableId);
+                if ($age !== '') {
+                    $entry['age'] = $age;
+                }
+                $tiles[] = $entry;
             }
         }
         $seq = $this->tileStateSeq($tiles);
@@ -1151,11 +1172,11 @@ class HomeDisplay extends IPSModuleStrict
     private array $chartStateCache = [];
 
     /** @param array<string, mixed> $tile @return array<string, mixed> */
-    private function chartStateTile(array $tile, string $tileId, int $instanceId): array
+    private function chartStateTile(array $tile, string $tileId, int $instanceId, bool $compact = false): array
     {
         $refresh = max(0, (int) ($tile['chartRefreshSec'] ?? 0));
+        $cacheKey = $instanceId . ':' . $tileId . ($compact ? ':c' : '');
         if ($refresh > 0) {
-            $cacheKey = $instanceId . ':' . $tileId;
             $cached = $this->chartStateCache[$cacheKey] ?? null;
             if (is_array($cached) && (time() - (int) $cached['at']) < $refresh && is_array($cached['payload'])) {
                 return $cached['payload'];
@@ -1179,6 +1200,23 @@ class HomeDisplay extends IPSModuleStrict
             }
         }
         $series = $seriesList !== [] ? $seriesList[0] : [];
+        if (count($series) < 2 && $primaryId > 0 && IPS_VariableExists($primaryId)) {
+            $rawNow = GetValue($primaryId);
+            $current = null;
+            if (is_bool($rawNow)) {
+                $current = $rawNow ? 1.0 : 0.0;
+            } elseif (is_int($rawNow) || is_float($rawNow) || (is_string($rawNow) && is_numeric($rawNow))) {
+                $current = (float) $rawNow;
+            }
+            if ($current !== null) {
+                $series = [$current, $current];
+                if ($seriesList === []) {
+                    $seriesList = [$series];
+                } else {
+                    $seriesList[0] = $series;
+                }
+            }
+        }
         if ($primaryId > 0 && IPS_VariableExists($primaryId)) {
             $text = $this->formatVariable($primaryId, $tile);
             $raw = GetValue($primaryId);
@@ -1206,8 +1244,11 @@ class HomeDisplay extends IPSModuleStrict
             'seriesMax' => $max,
             'chartSeq' => (int) sprintf('%u', crc32(json_encode($seriesList) . '|' . $text)),
         ];
+        if ($compact) {
+            unset($payload['seriesAll'], $payload['seriesYesterday']);
+        }
         if ($refresh > 0) {
-            $this->chartStateCache[$instanceId . ':' . $tileId] = ['at' => time(), 'payload' => $payload];
+            $this->chartStateCache[$cacheKey] = ['at' => time(), 'payload' => $payload];
         }
 
         return $payload;
@@ -1282,12 +1323,189 @@ class HomeDisplay extends IPSModuleStrict
             }
         }
 
-        return [
+        $entry = [
             'tileId' => $tileId,
             'text' => $text,
             'forecast' => $forecast,
             'quality' => $quality,
         ];
+        $age = $this->ageText($tile, $variableId);
+        if ($age !== '') {
+            $entry['age'] = $age;
+        }
+        return $entry;
+    }
+
+    /** @param array<string, mixed> $tile */
+    private function ageText(array $tile, int $variableId): string
+    {
+        if (empty($tile['showAge']) || $variableId <= 0 || !IPS_VariableExists($variableId)) {
+            return '';
+        }
+        $info = IPS_GetVariable($variableId);
+        $updated = (int) ($info['VariableUpdated'] ?? 0);
+        if ($updated <= 0) {
+            return '';
+        }
+        $delta = max(0, time() - $updated);
+        if ($delta < 45) {
+            return 'gerade eben';
+        }
+        if ($delta < 3600) {
+            return 'vor ' . (int) max(1, round($delta / 60)) . ' min';
+        }
+        if ($delta < 86400) {
+            return 'vor ' . (int) max(1, round($delta / 3600)) . ' h';
+        }
+        return 'vor ' . (int) max(1, round($delta / 86400)) . ' d';
+    }
+
+    /** @param array<string, mixed> $tile @return array<string, mixed> */
+    private function rowsStateTile(array $tile, string $tileId, string $kind): array
+    {
+        $lines = [];
+        foreach (array_slice(is_array($tile['rows'] ?? null) ? $tile['rows'] : [], 0, 6) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $variableId = (int) ($row['variableId'] ?? 0);
+            $text = '—';
+            $on = false;
+            if ($variableId > 0 && IPS_VariableExists($variableId)) {
+                if ($kind === 'contacts') {
+                    $raw = GetValue($variableId);
+                    $on = is_bool($raw) ? $raw : (is_numeric($raw) ? ((float) $raw) != 0.0 : trim((string) $raw) !== '');
+                    $text = $on ? 'Ein' : 'Aus';
+                } else {
+                    $text = $this->formatVariable($variableId, [
+                        'unit' => (string) ($row['unit'] ?? ''),
+                        'decimals' => (int) ($row['decimals'] ?? 0),
+                    ]);
+                }
+            }
+            $lines[] = [
+                'title' => (string) ($row['title'] ?? ''),
+                'text' => $text,
+                'on' => $on,
+            ];
+        }
+        return [
+            'tileId' => $tileId,
+            'lines' => $lines,
+            'quality' => $lines === [] ? 'empty' : 'ok',
+        ];
+    }
+
+    /** @param array<string, mixed> $tile @return array<string, mixed> */
+    private function gaugeStateTile(array $tile, string $tileId): array
+    {
+        $variableId = (int) ($tile['variableId'] ?? 0);
+        $text = '—';
+        $value = null;
+        $quality = 'empty';
+        if ($variableId > 0 && IPS_VariableExists($variableId)) {
+            $text = $this->formatVariable($variableId, $tile);
+            $raw = GetValue($variableId);
+            if (is_bool($raw)) {
+                $value = $raw ? 1 : 0;
+            } elseif (is_numeric($raw)) {
+                $value = (float) $raw;
+            }
+            $quality = 'ok';
+        }
+        $entry = [
+            'tileId' => $tileId,
+            'text' => $text,
+            'value' => $value,
+            'quality' => $quality,
+        ];
+        $age = $this->ageText($tile, $variableId);
+        if ($age !== '') {
+            $entry['age'] = $age;
+        }
+        return $entry;
+    }
+
+    /** @param array<string, mixed> $tile @return array<string, mixed> */
+    private function countdownStateTile(array $tile, string $tileId): array
+    {
+        $variableId = (int) ($tile['variableId'] ?? 0);
+        $text = '—';
+        $quality = 'empty';
+        if ($variableId > 0 && IPS_VariableExists($variableId)) {
+            $raw = GetValue($variableId);
+            $remain = null;
+            if (is_numeric($raw)) {
+                $number = (int) $raw;
+                $remain = (string) ($tile['countdownMode'] ?? '') === 'seconds' ? $number : $number - time();
+            }
+            if ($remain === null) {
+                $text = '—';
+            } elseif ($remain <= 0) {
+                $text = 'fertig';
+            } else {
+                $hours = intdiv($remain, 3600);
+                $minutes = intdiv($remain % 3600, 60);
+                $text = $hours > 0 ? sprintf('%d h %02d min', $hours, $minutes) : sprintf('%d min', max(1, $minutes));
+            }
+            $quality = 'ok';
+        }
+        return ['tileId' => $tileId, 'text' => $text, 'quality' => $quality];
+    }
+
+    /** @param array<string, mixed> $tile @return array<string, mixed> */
+    private function appointmentStateTile(array $tile, string $tileId): array
+    {
+        $variableId = (int) ($tile['variableId'] ?? 0);
+        $text = '—';
+        $sub = '';
+        $quality = 'empty';
+        if ($variableId > 0 && IPS_VariableExists($variableId)) {
+            $raw = GetValue($variableId);
+            $stamp = $this->appointmentStamp($raw);
+            if (is_string($raw)) {
+                $text = trim($raw) !== '' ? trim($raw) : '—';
+            } elseif (is_scalar($raw)) {
+                $text = trim((string) $raw);
+            }
+            if ($stamp !== null) {
+                $days = (int) floor(($stamp - strtotime('today')) / 86400);
+                if ($days === 0) {
+                    $sub = 'heute';
+                } elseif ($days === 1) {
+                    $sub = 'in 1 Tag';
+                } elseif ($days > 1) {
+                    $sub = 'in ' . $days . ' Tagen';
+                } else {
+                    $sub = 'überfällig';
+                }
+                if (!is_string($raw) || preg_match('/^\d{4}-\d{2}-\d{2}$/', trim($raw)) || preg_match('/^\d{1,2}\.\d{1,2}\.\d{4}$/', trim($raw))) {
+                    $text = date('d.m.Y', $stamp);
+                }
+            }
+            $quality = 'ok';
+        }
+        return ['tileId' => $tileId, 'text' => $text, 'sub' => $sub, 'quality' => $quality];
+    }
+
+    /** @param mixed $raw */
+    private function appointmentStamp($raw): ?int
+    {
+        if (is_int($raw) || is_float($raw)) {
+            $number = (int) $raw;
+            return $number > 1000000000 ? $number : null;
+        }
+        $text = trim((string) $raw);
+        if ($text === '') {
+            return null;
+        }
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $text, $match)) {
+            return strtotime($match[1] . '-' . $match[2] . '-' . $match[3] . ' 00:00:00') ?: null;
+        }
+        if (preg_match('/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/', $text, $match)) {
+            return strtotime(sprintf('%04d-%02d-%02d 00:00:00', (int) $match[3], (int) $match[2], (int) $match[1])) ?: null;
+        }
+        return null;
     }
 
     /** @param array<string, mixed> $tile @return array<string, mixed> */

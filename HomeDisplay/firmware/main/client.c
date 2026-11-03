@@ -195,7 +195,17 @@ static esp_err_t request_to_base(const char *base, const char *path, const char 
             }
             total += chunk;
         }
+        bool truncated = false;
+        if (error == ESP_OK && total >= (int) response_length - 1) {
+            char extra;
+            int more = esp_http_client_read(client, &extra, 1);
+            truncated = more > 0;
+        }
         response[total < 0 ? 0 : total] = '\0';
+        if (error == ESP_OK && truncated) {
+            ESP_LOGW(TAG, "Antwort abgeschnitten %s (%d Byte)", path, total);
+            error = ESP_ERR_INVALID_SIZE;
+        }
         if (error == ESP_OK && status == 401) {
             ESP_LOGW(TAG, "Token abgelehnt (%s)", path);
             token[0] = '\0';
@@ -268,7 +278,7 @@ static void ui_request_error(const char *step, const char *path)
     if (last_http_status > 0) {
         snprintf(detail, sizeof(detail), "%s\nHTTP %d auf %s\n%s", step, last_http_status, path, base_url);
     } else {
-        snprintf(detail, sizeof(detail), "%s\n%s\n%s\nHook bis …/hook/homedisplay", step,
+        snprintf(detail, sizeof(detail), "%s\n%s\n%s\nHook bis .../hook/homedisplay", step,
                  esp_err_to_name(last_transport_error), base_url);
     }
     ui_setup(detail);
@@ -305,7 +315,7 @@ static void pair_until_token(void)
 {
     ensure_pairing_code();
     homedisplay_ui_set_pairing_code(pairing_code);
-    ui_setup("Starte Kopplung\nWarte auf WLAN …");
+    ui_setup("Starte Kopplung\nWarte auf WLAN ...");
     char body[96];
     char response[512];
     snprintf(body, sizeof(body), "{\"code\":\"%s\",\"firmware\":\"" HOMEDISPLAY_FIRMWARE_VERSION "\"}", pairing_code);
@@ -314,12 +324,12 @@ static void pair_until_token(void)
         esp_task_wdt_reset();
         if (!homedisplay_wifi_connected()) {
             if (strcmp(last_detail, "wlan") != 0) {
-                ui_setup("WLAN verbinden …\nSSID und Passwort prüfen");
+                ui_setup("WLAN verbinden ...\nSSID und Passwort prüfen");
                 strcpy(last_detail, "wlan");
             }
         } else if (base_url[0] == '\0') {
             if (strcmp(last_detail, "mdns") != 0) {
-                ui_setup("WLAN verbunden\nSuche Dienst (mDNS) …");
+                ui_setup("WLAN verbunden\nSuche Dienst (mDNS) ...");
                 strcpy(last_detail, "mdns");
             }
             discover();
@@ -910,7 +920,7 @@ static void pull_manifest(char *response, size_t length)
         return;
     }
     esp_task_wdt_reset();
-    ui_setup("Verbinde mit Server\nRufe Manifest ab …");
+    ui_setup("Verbinde mit Server\nRufe Manifest ab ...");
     if (request("/v1/manifest", "GET", NULL, response, length) != ESP_OK) {
         if (last_http_status == 401) {
             ui_setup("Token ungültig\nClaimCode in IPS prüfen\nNeu koppeln (Serial: k)");
@@ -941,7 +951,7 @@ static void pull_manifest(char *response, size_t length)
     layout_held = min_firmware && version_of(HOMEDISPLAY_FIRMWARE_VERSION) < version_of(min_firmware);
     cJSON_Delete(root);
     if (next_config[0] && strcmp(next_config, config_sha) != 0) {
-        ui_setup("Server verbunden\nLade Einstellungen …");
+        ui_setup("Server verbunden\nLade Einstellungen ...");
         if (request("/v1/config", "GET", NULL, response, length) == ESP_OK) {
             snprintf(config_sha, sizeof(config_sha), "%s", next_config);
             apply_config_document(response);
@@ -966,25 +976,25 @@ static void pull_manifest(char *response, size_t length)
             return;
         }
     }
-    ui_setup("Hole Vorlage vom Server\nLayout wird geladen …");
+    ui_setup("Hole Vorlage vom Server\nLayout wird geladen ...");
     if (request("/v1/layout", "GET", NULL, response, length) != ESP_OK) {
         ui_setup("Vorlage nicht erreichbar\n/v1/layout fehlgeschlagen");
         return;
     }
-    ui_setup("Verarbeite Vorlage\nLade Katalogbilder …");
+    ui_setup("Verarbeite Vorlage\nLade Katalogbilder ...");
     esp_task_wdt_reset();
     fetch_images(response);
     esp_task_wdt_reset();
     /* Ansicht zuerst zeigen – Kameras/Medien kommen danach bzw. über /v1/state,
      * damit eine hängende ONVIF-Kamera den Start nicht blockiert. */
-    ui_setup("Verarbeite Vorlage\nZeichne Ansicht …");
+    ui_setup("Verarbeite Vorlage\nZeichne Ansicht ...");
     snprintf(layout_sha, sizeof(layout_sha), "%s", next_layout);
     homedisplay_ui_apply_layout(response);
     write_cache(LAYOUT_CACHE, response);
     remember("layout_sha", layout_sha);
     last_seq = -1;
     esp_task_wdt_reset();
-    ui_setup("Ansicht geladen\nLade Kameras und Medien …");
+    ui_setup("Ansicht geladen\nLade Kameras und Medien ...");
     fetch_layout_cameras(response);
     esp_task_wdt_reset();
     fetch_layout_media(response);
@@ -1085,11 +1095,11 @@ static void client_task(void *argument)
     if (strlen(CONFIG_HOMEDISPLAY_ADAPTER_URL) > 0 && base_url[0] == '\0') snprintf(base_url, sizeof(base_url), "%s", CONFIG_HOMEDISPLAY_ADAPTER_URL);
     mdns_init();
     homedisplay_ui_set_action(post_action);
-    char *response = heap_caps_malloc(16384, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    size_t response_length = 16384;
+    char *response = heap_caps_malloc(49152, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    size_t response_length = 49152;
     if (!response) {
-        response = malloc(8192);
-        response_length = 8192;
+        response = malloc(16384);
+        response_length = 16384;
     }
     if (!response) {
         homedisplay_ui_status("Zu wenig Speicher");
@@ -1107,13 +1117,13 @@ static void client_task(void *argument)
     esp_task_wdt_reset();
     ensure_pairing_code();
     homedisplay_ui_set_pairing_code(pairing_code);
-    ui_setup("Warte auf WLAN …\nSSID und Empfang prüfen");
+    ui_setup("Warte auf WLAN ...\nSSID und Empfang prüfen");
     while (!homedisplay_wifi_connected()) {
         esp_task_wdt_reset();
         homedisplay_serial_poll();
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-    ui_setup("WLAN verbunden\nStarte Synchronisation …");
+    ui_setup("WLAN verbunden\nStarte Synchronisation ...");
     if (token[0] == '\0') {
         pair_until_token();
     } else {
@@ -1136,12 +1146,12 @@ static void client_task(void *argument)
         int64_t now = esp_timer_get_time();
         if (!homedisplay_wifi_connected()) {
             set_online(false);
-            ui_setup("WLAN getrennt\nVerbindung wird wiederhergestellt …");
+            ui_setup("WLAN getrennt\nVerbindung wird wiederhergestellt ...");
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
         }
         if (base_url[0] == '\0') {
-            ui_setup("WLAN verbunden\nSuche Dienst (mDNS) …");
+            ui_setup("WLAN verbunden\nSuche Dienst (mDNS) ...");
             discover();
             if (base_url[0] == '\0') {
                 vTaskDelay(pdMS_TO_TICKS(2000));
@@ -1180,7 +1190,7 @@ static void client_task(void *argument)
             failures++;
             if (failures >= 3) {
                 set_online(false);
-                ui_setup("Server antwortet nicht\n/v1/state fehlgeschlagen\nManifest wird erneut versucht …");
+                ui_setup("Server antwortet nicht\n/v1/state fehlgeschlagen\nManifest wird erneut versucht ...");
             }
             if (failures == 20 && strlen(CONFIG_HOMEDISPLAY_ADAPTER_URL) == 0) {
                 /* Adapter eventuell umgezogen: erneut per mDNS suchen. */

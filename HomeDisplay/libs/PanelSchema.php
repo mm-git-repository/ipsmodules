@@ -58,7 +58,9 @@ final class HomeDisplayPanelSchema
     ];
 
     /** system: Diagnosekachel, die das Panel selbst mit Firmware, WLAN, Laufzeit und Datenalter füllt. */
-    public const KINDS = ['value', 'display', 'chart', 'energyflow', 'nav', 'label', 'image', 'camera', 'separator', 'scene', 'weather', 'presence'];
+    public const KINDS = ['value', 'display', 'chart', 'energyflow', 'nav', 'label', 'image', 'camera', 'separator', 'scene', 'weather', 'presence', 'multi', 'contacts', 'gauge', 'countdown', 'appointment'];
+
+    public const FONT_PX = [16, 20, 24, 28, 32, 36, 40, 48];
 
     public const LABEL_STYLES = ['text', 'section'];
 
@@ -147,6 +149,7 @@ final class HomeDisplayPanelSchema
                 if (!in_array($kind, self::KINDS, true)) {
                     throw new InvalidArgumentException('Unbekannte Kachelart: ' . $kind);
                 }
+                self::validateTypography($tile);
                 $col = self::cell($tile, 'col');
                 $row = self::cell($tile, 'row');
                 $colSpan = max(1, (int) ($tile['colSpan'] ?? 1));
@@ -512,6 +515,23 @@ final class HomeDisplayPanelSchema
                         $public['textSize'] = $textSize;
                     }
                 }
+                if ($kind === 'multi' || $kind === 'contacts') {
+                    $public['rows'] = self::publicRows($tile, $kind === 'multi');
+                }
+                if ($kind === 'gauge') {
+                    $public['variableId'] = (int) ($tile['variableId'] ?? 0);
+                    $public['valueMin'] = (float) ($tile['valueMin'] ?? 0);
+                    $public['valueMax'] = (float) ($tile['valueMax'] ?? 100);
+                    $public['unit'] = (string) ($tile['unit'] ?? '');
+                    $public['decimals'] = max(0, min(3, (int) ($tile['decimals'] ?? 0)));
+                }
+                if ($kind === 'countdown') {
+                    $public['countdownMode'] = (string) ($tile['countdownMode'] ?? '') === 'seconds' ? 'seconds' : 'until';
+                    $public['variableId'] = (int) ($tile['variableId'] ?? 0);
+                }
+                if ($kind === 'appointment') {
+                    $public['variableId'] = (int) ($tile['variableId'] ?? 0);
+                }
                 $tiles[] = $public;
             }
             $publicPage = [
@@ -564,6 +584,32 @@ final class HomeDisplayPanelSchema
         $align = (string) ($tile['titleAlign'] ?? '');
         if (in_array($align, ['center', 'right'], true)) {
             $public['titleAlign'] = $align;
+        }
+        $titlePx = self::resolvedPx($tile, 'titlePx', '');
+        if ($titlePx !== null) {
+            $public['titlePx'] = $titlePx;
+        }
+        $textPx = self::resolvedPx($tile, 'textPx', 'textSize');
+        if ($textPx !== null) {
+            $public['textPx'] = $textPx;
+        }
+        if (!empty($tile['titleBold'])) {
+            $public['titleBold'] = true;
+        }
+        if (!empty($tile['titleItalic'])) {
+            $public['titleItalic'] = true;
+        }
+        if (!empty($tile['textBold'])) {
+            $public['textBold'] = true;
+        }
+        if (!empty($tile['textItalic'])) {
+            $public['textItalic'] = true;
+        }
+        if (!empty($tile['textUnderline'])) {
+            $public['textUnderline'] = true;
+        }
+        if (!empty($tile['showAge'])) {
+            $public['showAge'] = true;
         }
         foreach (['bgColor', 'onColor'] as $key) {
             $value = strtolower(trim((string) ($tile[$key] ?? '')));
@@ -860,6 +906,59 @@ final class HomeDisplayPanelSchema
     }
 
     /** @param array<string, mixed> $tile @param array<string, bool> $pageIds */
+    /** @param array<string, mixed> $tile */
+    private static function resolvedPx(array $tile, string $pxKey, string $legacyKey): ?int
+    {
+        if (isset($tile[$pxKey]) && is_numeric($tile[$pxKey])) {
+            $px = (int) $tile[$pxKey];
+            if (!in_array($px, self::FONT_PX, true)) {
+                throw new InvalidArgumentException('Schriftgröße muss 16, 20, 24, 28, 32, 36, 40 oder 48 px sein.');
+            }
+            return $px;
+        }
+        if ($legacyKey === '') {
+            return null;
+        }
+        $name = (string) ($tile[$legacyKey] ?? '');
+        $map = ['small' => 20, 'normal' => 28, 'large' => 36, 'xlarge' => 48];
+        if (isset($map[$name])) {
+            return $map[$name];
+        }
+        if ($name !== '' && $name !== 'auto') {
+            throw new InvalidArgumentException('Unbekannte Schriftgröße.');
+        }
+        return null;
+    }
+
+    /** @param array<string, mixed> $tile */
+    private static function validateTypography(array $tile): void
+    {
+        self::resolvedPx($tile, 'titlePx', '');
+        self::resolvedPx($tile, 'textPx', 'textSize');
+    }
+
+    /** @param array<string, mixed> $tile @return list<array<string, mixed>> */
+    private static function publicRows(array $tile, bool $withFormat): array
+    {
+        $rows = [];
+        $source = is_array($tile['rows'] ?? null) ? $tile['rows'] : [];
+        foreach (array_slice($source, 0, 6) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $item = [
+                'variableId' => (int) ($row['variableId'] ?? 0),
+                'title' => mb_substr(trim((string) ($row['title'] ?? '')), 0, 40),
+            ];
+            if ($withFormat) {
+                $item['unit'] = mb_substr((string) ($row['unit'] ?? ''), 0, 12);
+                $item['decimals'] = max(0, min(3, (int) ($row['decimals'] ?? 0)));
+            }
+            $rows[] = $item;
+        }
+        return $rows;
+    }
+
     private static function validateKind(array $tile, string $kind, array $pageIds, bool $publish): void
     {
         if ($kind === 'value') {
@@ -1159,6 +1258,38 @@ final class HomeDisplayPanelSchema
             }
             if ($publish && !HomeDisplayCatalogStore::imageExists($imageId)) {
                 throw new InvalidArgumentException('Das Bild der Kachel wurde gelöscht.');
+            }
+            return;
+        }
+        if ($kind === 'multi' || $kind === 'contacts') {
+            $rows = is_array($tile['rows'] ?? null) ? $tile['rows'] : [];
+            if (count($rows) > 6) {
+                throw new InvalidArgumentException('Höchstens sechs Zeilen.');
+            }
+            if ($publish && $rows === []) {
+                throw new InvalidArgumentException($kind === 'multi' ? 'Mehrwert ohne Zeilen.' : 'Kontakte ohne Zeilen.');
+            }
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    throw new InvalidArgumentException('Zeile ungültig.');
+                }
+                $vid = (int) ($row['variableId'] ?? 0);
+                if ($publish && ($vid <= 0 || !IPS_VariableExists($vid))) {
+                    throw new InvalidArgumentException('Zeile ohne Variable.');
+                }
+            }
+            return;
+        }
+        if ($kind === 'gauge' || $kind === 'countdown' || $kind === 'appointment') {
+            $vid = (int) ($tile['variableId'] ?? 0);
+            if ($publish && ($vid <= 0 || !IPS_VariableExists($vid))) {
+                throw new InvalidArgumentException('Kachel ohne Variable.');
+            }
+            if ($kind === 'countdown') {
+                $mode = (string) ($tile['countdownMode'] ?? 'until');
+                if (!in_array($mode, ['until', 'seconds'], true)) {
+                    throw new InvalidArgumentException('Unbekannter Countdown-Modus.');
+                }
             }
             return;
         }

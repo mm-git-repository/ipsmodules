@@ -27,6 +27,8 @@
       <div class="dropdown" id="menu-edit">
         <button type="button" id="edit-details">Details der Kachel …</button>
         <button type="button" id="edit-delete">Kachel entfernen</button>
+        <button type="button" id="edit-duplicate">Kachel kopieren</button>
+        <button type="button" id="edit-style">Stil übertragen</button>
         <hr>
         <button type="button" id="resize-1x1">Größe 1×1</button>
         <button type="button" id="resize-2x1">Größe 2×1</button>
@@ -93,6 +95,11 @@
             <div class="palette-item" draggable="true" data-kind="image">Bild</div>
             <div class="palette-item" draggable="true" data-kind="camera">Kamera</div>
             <div class="palette-item" draggable="true" data-kind="separator">Trennlinie</div>
+            <div class="palette-item" draggable="true" data-kind="multi">Mehrwert</div>
+            <div class="palette-item" draggable="true" data-kind="contacts">Kontakte</div>
+            <div class="palette-item" draggable="true" data-kind="gauge">Bogen</div>
+            <div class="palette-item" draggable="true" data-kind="countdown">Countdown</div>
+            <div class="palette-item" draggable="true" data-kind="appointment">Termin</div>
                       </div>
         </div>
       </div>
@@ -152,12 +159,28 @@
           <label id="p-own-bg-wrap"><input id="p-own-bg" type="checkbox"> <span id="p-own-bg-label">Eigene Farbe</span> <input id="p-bg-color" type="color" value="#2a4f7c"></label>
           <label id="p-own-on-wrap"><input id="p-own-on" type="checkbox"> Farbe Ein <input id="p-on-color" type="color" value="#ffb547"></label>
         </div>
+        <div id="p-font-wrap">
+          <div id="p-title-font" class="font-row">
+            <label>Überschrift <select id="p-title-px"></select></label>
+            <span id="p-title-preview" class="font-sample">Aa</span>
+            <label class="switch"><input id="p-title-bold" type="checkbox"> Fett</label>
+            <label class="switch"><input id="p-title-italic" type="checkbox"> Kursiv</label>
+          </div>
+          <div id="p-body-font" class="font-row">
+            <label>Inhalt <select id="p-text-px"></select></label>
+            <span id="p-text-preview" class="font-sample">12,3</span>
+            <label class="switch"><input id="p-text-bold" type="checkbox"> Fett</label>
+            <label class="switch"><input id="p-text-italic" type="checkbox"> Kursiv</label>
+            <label class="switch" id="p-text-underline-wrap"><input id="p-text-underline" type="checkbox"> Unterstrichen</label>
+          </div>
+          <label class="switch" id="p-show-age-wrap"><input id="p-show-age" type="checkbox"> Alter anzeigen</label>
+        </div>
         <div data-for="nav">
           <label>Symbol
             <select id="p-icon"></select>
           </label>
         </div>
-        <div data-for="value camera chart">
+        <div data-for="value camera chart gauge countdown appointment">
           <label>Variable <span class="pick-row"><input id="p-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="variable">Auswählen</button></span></label>
         </div>
         <div data-for="chart">
@@ -219,17 +242,6 @@
           </div>
           <label><input id="p-scene-show-state-text" type="checkbox"> Text Ein/Aus anzeigen</label>
           <label><input id="p-scene-confirm" type="checkbox"> Bestätigung an der Anzeige</label>
-          <label>Textgröße
-            <select id="p-scene-text-size">
-              <option value="small">Klein</option>
-              <option value="normal">Normal</option>
-              <option value="large">Groß</option>
-              <option value="xlarge">Sehr groß</option>
-            </select>
-          </label>
-          <label><input id="p-scene-text-bold" type="checkbox"> Fett</label>
-          <label><input id="p-scene-text-italic" type="checkbox"> Kursiv</label>
-          <label><input id="p-scene-text-underline" type="checkbox"> Unterstrichen</label>
           <p class="hint">Jede Zeile setzt beim Tippen eine Lampe auf den gewählten Wert. Farbe optional über eine Integer-Variable (Profil HexColor). Die Kachel zeigt Ein, wenn alle Lampen der Szene aktuell dem hinterlegten Wert entsprechen – Icon und Farbe „Ein“ gelten dann.</p>
         </div>
         <div data-for="weather">
@@ -297,14 +309,6 @@
           </div>
           <div id="p-value-style">
             <label><input id="p-own-text" type="checkbox"> Eigene Textfarbe <input id="p-text-color" type="color" value="#f4f7fb"></label>
-            <label>Textgröße
-              <select id="p-text-size">
-                <option value="small">Klein</option>
-                <option value="normal" selected>Normal</option>
-                <option value="large">Groß</option>
-                <option value="xlarge">Sehr groß</option>
-              </select>
-            </label>
             <div class="row">
               <label>Schwellwert <input id="p-threshold" placeholder="leer = aus"></label>
               <label>Farbe ab Schwellwert
@@ -375,21 +379,32 @@
         <div data-for="nav">
           <label>Zielseite <select id="p-target"></select></label>
         </div>
-        <div data-for="label">
-          <label>Text <textarea id="p-text" rows="3"></textarea></label>
-          <label>Schriftgröße
-            <select id="p-label-size">
-              <option value="auto">Automatisch</option>
-              <option value="small">Klein</option>
-              <option value="normal">Normal</option>
-              <option value="large">Groß</option>
-              <option value="xlarge">Sehr groß</option>
+        <div data-for="multi contacts">
+          <div id="p-rows"></div>
+          <button type="button" id="p-row-add">Zeile hinzufügen</button>
+          <p class="hint">Höchstens sechs Zeilen. Jede Zeile hat eine eigene Variable.</p>
+        </div>
+        <div data-for="gauge">
+          <div class="row">
+            <label>Min <input id="p-gauge-min" type="number" step="any" value="0"></label>
+            <label>Max <input id="p-gauge-max" type="number" step="any" value="100"></label>
+          </div>
+          <div class="row">
+            <label>Einheit <input id="p-gauge-unit"></label>
+            <label>Nachkommastellen <input id="p-gauge-decimals" type="number" min="0" max="3" value="0"></label>
+          </div>
+        </div>
+        <div data-for="countdown">
+          <label>Modus
+            <select id="p-countdown-mode">
+              <option value="until">Zielzeitpunkt (Unix)</option>
+              <option value="seconds">Restsekunden</option>
             </select>
           </label>
-          <label><input id="p-label-bold" type="checkbox"> Fett</label>
-          <label><input id="p-label-italic" type="checkbox"> Kursiv</label>
-          <label><input id="p-label-underline" type="checkbox"> Unterstrichen</label>
-          <p class="hint">Automatisch skaliert den Text auf die Kachel. Eine feste Größe und Fett, Kursiv oder Unterstrichen gelten auch auf der Anzeige.</p>
+        </div>
+        <div data-for="label">
+          <label>Text <textarea id="p-text" rows="3"></textarea></label>
+          <p class="hint">Automatisch skaliert den Text im Editor. Eine feste Pixelgröße gilt auch auf der Anzeige.</p>
         </div>
         <div data-for="display" class="hidden"></div>
         <div data-for="energyflow">
@@ -539,6 +554,18 @@
         <dt>Läuft über</dt><dd id="s-service-instance">–</dd>
         <dt>Verwaltungsseite</dt><dd id="s-admin-url">–</dd>
       </dl>
+      <h4>Helligkeit</h4>
+      <p class="hint">Die Beleuchtung kann nur an oder aus. 0 schaltet sie aus, jeder Wert darüber schaltet sie an. Nachts gilt der Nachtwert, wenn „Nachts dimmen“ an ist.</p>
+      <label>Anzeige <select id="s-bright-panel"></select></label>
+      <label class="switch"><input id="s-night-dim" type="checkbox"> Nachts dimmen</label>
+      <div class="row">
+        <label>Tag (0–100) <input id="s-day-brightness" type="number" min="0" max="100" value="70"></label>
+        <label>Nacht (0–100) <input id="s-night-brightness" type="number" min="0" max="100" value="15"></label>
+      </div>
+      <div class="row">
+        <label>Nacht ab Stunde <input id="s-night-from" type="number" min="0" max="23" value="22"></label>
+        <label>Nacht bis Stunde <input id="s-night-to" type="number" min="0" max="23" value="6"></label>
+      </div>
       <h4>Anzeigen</h4>
       <table id="s-panels" class="panels">
         <thead><tr><th>Anzeige</th><th>Kopplung</th><th>Status</th><th>Ansicht</th></tr></thead>

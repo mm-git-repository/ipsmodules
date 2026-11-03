@@ -98,49 +98,16 @@ final class HomeDisplayChart
     /** @return list<float> Verlauf für den Vortag (gleicher Zeitraum). */
     public static function seriesYesterday(int $variableId, string $period): array
     {
-        if ($variableId <= 0) {
-            return [];
-        }
-        $archive = self::archiveId();
-        if ($archive <= 0) {
-            return [];
-        }
         $period = self::normalizePeriod($period);
         $end = time();
-        if ($period === '1h') {
-            $start = $end - 7200;
-            $stop = $end - 3600;
+        $span = match ($period) {
+            '1h' => 3600,
+            '6h' => 6 * 3600,
+            '24h' => 86400,
+            default => 7 * 86400,
+        };
 
-            return self::downsample(self::loggedSeries($archive, $variableId, $start, $stop, 500), self::MAX_POINTS);
-        }
-        if ($period === '6h') {
-            $start = $end - 12 * 3600;
-            $stop = $end - 6 * 3600;
-            $values = self::aggregatedSeries($archive, $variableId, 0, $start, $stop);
-            if (count($values) < 2) {
-                $values = self::loggedSeries($archive, $variableId, $start, $stop, 500);
-            }
-
-            return self::downsample($values, self::MAX_POINTS);
-        }
-        if ($period === '24h') {
-            $start = $end - 2 * 86400;
-            $stop = $end - 86400;
-            $values = self::aggregatedSeries($archive, $variableId, 0, $start, $stop);
-            if (count($values) < 2) {
-                $values = self::loggedSeries($archive, $variableId, $start, $stop, 1000);
-            }
-
-            return self::downsample($values, self::MAX_POINTS);
-        }
-        $start = $end - 14 * 86400;
-        $stop = $end - 7 * 86400;
-        $values = self::aggregatedSeries($archive, $variableId, 1, $start, $stop);
-        if (count($values) < 2) {
-            $values = self::loggedSeries($archive, $variableId, $start, $stop, 2000);
-        }
-
-        return self::downsample($values, self::MAX_POINTS);
+        return self::seriesBetween($variableId, $period, $end - 2 * $span, $end - $span);
     }
 
     public static function normalizePeriod(string $period): string
@@ -175,39 +142,94 @@ final class HomeDisplayChart
      */
     public static function series(int $variableId, string $period): array
     {
-        if ($variableId <= 0) {
+        $period = self::normalizePeriod($period);
+
+        return self::seriesBetween($variableId, $period, 0, time());
+    }
+
+    /**
+     * Aggregierte Werte ohne Lücken. Das Archiv speichert Rohdaten nur bei Änderung;
+     * ein stiller Wert ergibt sonst keine Linie. Start liegt auf der Aggregationsgrenze,
+     * sonst liefert IP-Symcon den Zeitraum leer zurück.
+     *
+     * @return list<float>
+     */
+    private static function seriesBetween(int $variableId, string $period, int $rangeStart, int $rangeEnd): array
+    {
+        if ($variableId <= 0 || $rangeEnd <= 0) {
             return [];
         }
         $archive = self::archiveId();
         if ($archive <= 0) {
             return [];
         }
-        $end = time();
-        $period = self::normalizePeriod($period);
-        if ($period === '1h') {
-            $start = $end - 3600;
-            $values = self::loggedSeries($archive, $variableId, $start, $end, 500);
-        } elseif ($period === '6h') {
-            $start = $end - 6 * 3600;
-            $values = self::aggregatedSeries($archive, $variableId, 0, $start, $end);
-            if (count($values) < 2) {
-                $values = self::loggedSeries($archive, $variableId, $start, $end, 500);
-            }
-        } elseif ($period === '24h') {
-            $start = $end - 86400;
-            $values = self::aggregatedSeries($archive, $variableId, 0, $start, $end);
-            if (count($values) < 2) {
-                $values = self::loggedSeries($archive, $variableId, $start, $end, 1000);
-            }
-        } else {
-            $start = $end - 7 * 86400;
-            $values = self::aggregatedSeries($archive, $variableId, 1, $start, $end);
-            if (count($values) < 2) {
-                $values = self::loggedSeries($archive, $variableId, $start, $end, 2000);
+        [$start, $level] = self::alignedWindow($period, $rangeStart, $rangeEnd);
+        $values = self::aggregatedSeries($archive, $variableId, $level, $start, $rangeEnd);
+        if (count($values) < 2) {
+            $logged = self::loggedSeries($archive, $variableId, $start, $rangeEnd, 1000);
+            if (count($logged) > count($values)) {
+                $values = $logged;
             }
         }
+        $values = self::ensureSpan($archive, $variableId, $start, $values);
 
-        return self::downsample($values, self::MAX_POINTS);
+        return self::downsample(self::roundSeries($values), self::MAX_POINTS);
+    }
+
+    /** @return array{0: int, 1: int} Start auf der Grenze, dazu die Aggregationsstufe. */
+    private static function alignedWindow(string $period, int $rawStart, int $end): array
+    {
+        if ($period === '1h') {
+            $start = $rawStart > 0 ? $rawStart : $end - 3600;
+            $start -= $start % 300;
+
+            return [$start, 5];
+        }
+        if ($period === '6h' || $period === '24h') {
+            $start = $rawStart > 0 ? $rawStart : $end - ($period === '6h' ? 6 * 3600 : 86400);
+            $start = (int) strtotime(date('Y-m-d H:00:00', $start));
+
+            return [$start, 0];
+        }
+        $start = $rawStart > 0 ? $rawStart : $end - 7 * 86400;
+        $start = (int) strtotime(date('Y-m-d 00:00:00', $start));
+
+        return [$start, 1];
+    }
+
+    /** @param list<float> $values @return list<float> */
+    private static function ensureSpan(int $archive, int $variableId, int $start, array $values): array
+    {
+        if (count($values) >= 2) {
+            return $values;
+        }
+        $prior = self::loggedSeries($archive, $variableId, 0, max(0, $start), 1);
+        $baseline = $prior[0] ?? ($values[0] ?? null);
+        if ($baseline === null) {
+            return [];
+        }
+        if ($values === [] || $values[0] === $baseline) {
+            return [$baseline, $baseline];
+        }
+
+        return [$baseline, $values[0]];
+    }
+
+    /** @param list<float> $values @return list<float> */
+    private static function roundSeries(array $values): array
+    {
+        $out = [];
+        foreach ($values as $value) {
+            if (!is_finite($value)) {
+                continue;
+            }
+            $out[] = round($value, 3);
+        }
+        if (count($out) === 1) {
+            $out[] = $out[0];
+        }
+
+        return $out;
     }
 
     /** @return list<float> */
