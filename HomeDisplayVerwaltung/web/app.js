@@ -4692,12 +4692,19 @@ async function openProbe() {
       setStatus("Noch keine Anzeige-Instanz angelegt.");
       return;
     }
-    await loadProbe(true);
   } catch (error) {
     setStatus(error.message);
     return;
   }
   $("probe-dialog").showModal();
+  requestAnimationFrame(() => scaleProbeViewport());
+  try {
+    await loadProbe(true);
+  } catch (error) {
+    setStatus(error.message);
+    const meta = $("probe-meta");
+    if (meta) meta.textContent = error.message;
+  }
   requestAnimationFrame(() => {
     scaleProbeViewport();
     scheduleFitTileText($("probe-grid"));

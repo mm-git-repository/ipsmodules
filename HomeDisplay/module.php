@@ -1071,7 +1071,7 @@ class HomeDisplay extends IPSModuleStrict
                     continue;
                 }
                 if ($kind === 'chart') {
-                    $tiles[] = $this->chartStateTile($tile, $tileId, $instanceId, $compactCharts);
+                    $tiles[] = $this->chartStateTile($tile, $tileId, $instanceId);
                     continue;
                 }
                 if ($kind === 'scene') {
