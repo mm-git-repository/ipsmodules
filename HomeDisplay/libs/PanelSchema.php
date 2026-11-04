@@ -273,6 +273,19 @@ final class HomeDisplayPanelSchema
                         $public['chartYMax'] = (float) ($tile['chartYMax'] ?? 100);
                     }
                     $public['chartCompareYesterday'] = !empty($tile['chartCompareYesterday']);
+                    if (!empty($tile['chartShowAxes'])) {
+                        $public['chartShowAxes'] = true;
+                    }
+                    if (!empty($tile['chartShowGrid'])) {
+                        $public['chartShowGrid'] = true;
+                    }
+                    if (array_key_exists('chartShowValue', $tile) && !$tile['chartShowValue']) {
+                        $public['chartShowValue'] = false;
+                    }
+                    $chartColor = strtolower(trim((string) ($tile['chartColor'] ?? '')));
+                    if (preg_match('/^#[0-9a-f]{6}$/', $chartColor) === 1) {
+                        $public['chartColor'] = $chartColor;
+                    }
                     $refresh = (int) ($tile['chartRefreshSec'] ?? 0);
                     if ($refresh > 0) {
                         $public['chartRefreshSec'] = max(60, min(86400, $refresh));

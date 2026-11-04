@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 static const char *TAG_UI = "ui";
 
@@ -36,6 +37,7 @@ static bool show_page_may_yield;
 #define CHART_POINT_MAX 56
 #define UI_CLIENT_LOCK_MS 2000
 static lv_point_t chart_point_pool[CHART_SLOT_MAX][CHART_POINT_MAX];
+static lv_point_t chart_yest_pool[CHART_SLOT_MAX][CHART_POINT_MAX];
 static int chart_slot_count;
 static bool color_mono;
 static uint32_t theme_bg = 0x102033;
@@ -74,8 +76,25 @@ typedef struct {
     lv_obj_t *chart_note;
     int chart_logged;
     lv_point_t *chart_points;
+    lv_point_t *chart_yest;
+    int chart_count;
+    int chart_yest_count;
     int chart_w;
     int chart_h;
+    int chart_pad_l;
+    int chart_pad_b;
+    int chart_plot_w;
+    int chart_plot_h;
+    bool chart_area;
+    bool chart_axes;
+    bool chart_grid;
+    bool chart_show_value;
+    uint32_t chart_color;
+    char chart_period[8];
+    char chart_unit[16];
+    int chart_decimals;
+    lv_obj_t *chart_y_label[3];
+    lv_obj_t *chart_x_label[3];
     lv_obj_t *icon_label;
     lv_obj_t *title_icon;
     bool icon_large;
@@ -127,6 +146,9 @@ typedef struct {
     int gauge_min;
     int gauge_max;
 } tile_view_t;
+
+static void chart_draw_event(lv_event_t *event);
+static void layout_chart_head(tile_view_t *view);
 
 static void ui_wdt_kick(void)
 {
@@ -662,6 +684,46 @@ static void layout_value_row(tile_view_t *view)
         lv_obj_set_style_text_color(view->age_label, lv_color_hex(text_fg()), 0);
         lv_obj_set_style_text_align(view->age_label, LV_TEXT_ALIGN_CENTER, 0);
     }
+}
+
+/* Überschrift und aktueller Wert teilen sich die obere Zeile. Symbol sitzt am Text. */
+static void layout_chart_head(tile_view_t *view)
+{
+    if (!view || !view->card) return;
+    lv_obj_update_layout(view->card);
+    lv_coord_t inner = lv_obj_get_content_width(view->card);
+    if (inner < 16) inner = 16;
+    lv_coord_t value_w = 0;
+    if (view->chart_show_value && view->label) {
+        const lv_font_t *font = font_for(view->text_px ? view->text_px : 20, view->text_bold, view->text_italic);
+        value_w = text_width_capped(lv_label_get_text(view->label), font, inner / 2) + 8;
+        lv_obj_set_width(view->label, value_w);
+        lv_obj_set_style_text_align(view->label, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_align(view->label, LV_ALIGN_TOP_RIGHT, 0, 0);
+    }
+    if (view->title_row) {
+        lv_coord_t row_w = inner - value_w;
+        if (row_w < 8) row_w = 8;
+        const lv_font_t *title_font = font_for(view->title_px ? view->title_px : 20, view->title_bold, view->title_italic);
+        lv_coord_t title_h = lv_font_get_line_height(title_font);
+        lv_obj_set_size(view->title_row, row_w, title_h);
+        lv_obj_align(view->title_row, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_flex_align_t main = LV_FLEX_ALIGN_START;
+        if (strcmp(view->row_align, "center") == 0) main = LV_FLEX_ALIGN_CENTER;
+        else if (strcmp(view->row_align, "right") == 0) main = LV_FLEX_ALIGN_END;
+        lv_obj_set_flex_align(view->title_row, main, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        if (view->title_label) {
+            lv_obj_set_style_text_font(view->title_label, title_font, 0);
+            lv_obj_set_style_text_color(view->title_label, lv_color_hex(text_fg()), 0);
+            lv_coord_t max_text = row_w - (view->title_icon ? 32 : 0);
+            if (max_text < 8) max_text = 8;
+            lv_obj_set_width(view->title_label, LV_SIZE_CONTENT);
+            lv_obj_set_style_max_width(view->title_label, max_text, 0);
+            lv_label_set_long_mode(view->title_label, LV_LABEL_LONG_DOT);
+        }
+        lv_obj_move_foreground(view->title_row);
+    }
+    if (view->label) lv_obj_move_foreground(view->label);
 }
 
 static void hold_target(tile_view_t *tile, int value)
@@ -2029,7 +2091,7 @@ static void show_page(int index)
             lv_obj_set_style_text_color(name, lv_color_hex(text_fg()), 0);
             lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
             lv_obj_clear_flag(name, LV_OBJ_FLAG_CLICKABLE);
-        } else if (show_title) {
+        } else if (show_title && strcmp(kind, "chart") != 0) {
             lv_obj_t *title_row_icon = NULL;
             lv_align_t title_pos = LV_ALIGN_TOP_LEFT;
             lv_coord_t title_x = 0;
@@ -2053,36 +2115,100 @@ static void show_page(int index)
 
         if (strcmp(kind, "chart") == 0) {
             lv_obj_set_style_pad_all(view->card, 4, 0);
+            const char *style = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "chartStyle"));
+            view->chart_area = !style || strcmp(style, "line") != 0;
+            view->chart_axes = cJSON_IsTrue(cJSON_GetObjectItem(tile, "chartShowAxes"));
+            view->chart_grid = cJSON_IsTrue(cJSON_GetObjectItem(tile, "chartShowGrid"));
+            view->chart_show_value = !cJSON_IsFalse(cJSON_GetObjectItem(tile, "chartShowValue"));
+            view->chart_color = color_mono ? 0xFFFFFF : theme_accent;
+            const char *chart_color = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "chartColor"));
+            if (!color_mono && chart_color && chart_color[0] == '#') {
+                view->chart_color = parse_hex_color(chart_color, view->chart_color);
+            }
+            const char *period = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "chartPeriod"));
+            snprintf(view->chart_period, sizeof(view->chart_period), "%s", period && period[0] ? period : "24h");
+            const char *unit = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "unit"));
+            snprintf(view->chart_unit, sizeof(view->chart_unit), "%s", unit ? unit : "");
+            view->chart_decimals = json_int(tile, "decimals", 1);
+            if (view->chart_decimals < 0) view->chart_decimals = 0;
+            if (view->chart_decimals > 3) view->chart_decimals = 3;
+            snprintf(view->row_align, sizeof(view->row_align), "%s", title_align);
+            if (show_title) {
+                view->title_row = lv_obj_create(view->card);
+                style_flat(view->title_row);
+                lv_obj_set_style_bg_opa(view->title_row, LV_OPA_TRANSP, 0);
+                lv_obj_set_style_pad_all(view->title_row, 0, 0);
+                lv_obj_set_flex_flow(view->title_row, LV_FLEX_FLOW_ROW);
+                lv_obj_set_style_pad_column(view->title_row, 4, 0);
+                lv_obj_set_style_text_color(view->title_row, lv_color_hex(text_fg()), 0);
+                lv_obj_clear_flag(view->title_row, LV_OBJ_FLAG_CLICKABLE);
+                if (show_title_icon && title_icon_src && title_icon_src[0]) {
+                    make_icon_label(view->title_row, view, title_icon_src, &view->title_icon, false);
+                    lv_obj_set_style_text_color(view->title_icon, lv_color_hex(text_fg()), 0);
+                    snprintf(view->title_icon_name, sizeof(view->title_icon_name), "%s", title_icon_src);
+                }
+                view->title_label = lv_label_create(view->title_row);
+                label_set_folded(view->title_label, view->title[0] ? view->title : "-");
+                lv_obj_set_style_text_color(view->title_label, lv_color_hex(text_fg()), 0);
+                lv_obj_clear_flag(view->title_label, LV_OBJ_FLAG_CLICKABLE);
+            }
+            int head = 0;
+            if (show_title) head = lv_font_get_line_height(font_for(view->title_px, view->title_bold, view->title_italic));
+            if (view->chart_show_value) {
+                int value_h = lv_font_get_line_height(font_for(view->text_px, view->text_bold, view->text_italic));
+                if (value_h > head) head = value_h;
+            }
+            if (head > 0) head += 4;
             int chart_w = card_w - 8;
-            int chart_h = card_h - 8 - (show_title ? 28 : 0);
+            int chart_h = card_h - 8 - head;
             if (chart_w < 8) chart_w = 8;
             if (chart_h < 8) chart_h = 8;
             view->chart_w = chart_w;
             view->chart_h = chart_h;
             if (chart_slot_count < CHART_SLOT_MAX) {
-                view->chart_points = chart_point_pool[chart_slot_count++];
-                view->chart_line = lv_line_create(view->card);
+                view->chart_points = chart_point_pool[chart_slot_count];
+                view->chart_yest = chart_yest_pool[chart_slot_count];
+                chart_slot_count++;
+                view->chart_line = lv_obj_create(view->card);
                 style_flat(view->chart_line);
-                lv_obj_set_style_line_width(view->chart_line, 3, 0);
-                lv_obj_set_style_line_color(view->chart_line, lv_color_hex(color_mono ? 0xFFFFFF : theme_accent), 0);
-                lv_obj_set_style_line_rounded(view->chart_line, true, 0);
+                lv_obj_set_style_bg_opa(view->chart_line, LV_OPA_TRANSP, 0);
+                lv_obj_set_style_pad_all(view->chart_line, 0, 0);
                 lv_obj_clear_flag(view->chart_line, LV_OBJ_FLAG_CLICKABLE);
                 lv_obj_set_size(view->chart_line, chart_w, chart_h);
                 lv_obj_align(view->chart_line, LV_ALIGN_BOTTOM_MID, 0, 0);
                 lv_obj_add_flag(view->chart_line, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_event_cb(view->chart_line, chart_draw_event, LV_EVENT_DRAW_MAIN, view);
                 view->chart_logged = -1;
+                for (int axis = 0; axis < 3; axis++) {
+                    view->chart_y_label[axis] = lv_label_create(view->chart_line);
+                    view->chart_x_label[axis] = lv_label_create(view->chart_line);
+                    lv_obj_set_style_text_font(view->chart_y_label[axis], &lv_font_montserrat_16, 0);
+                    lv_obj_set_style_text_font(view->chart_x_label[axis], &lv_font_montserrat_16, 0);
+                    lv_obj_set_style_text_color(view->chart_y_label[axis], lv_color_hex(text_fg()), 0);
+                    lv_obj_set_style_text_color(view->chart_x_label[axis], lv_color_hex(text_fg()), 0);
+                    lv_obj_set_style_text_opa(view->chart_y_label[axis], LV_OPA_80, 0);
+                    lv_obj_set_style_text_opa(view->chart_x_label[axis], LV_OPA_80, 0);
+                    lv_obj_add_flag(view->chart_y_label[axis], LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_add_flag(view->chart_x_label[axis], LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_clear_flag(view->chart_y_label[axis], LV_OBJ_FLAG_CLICKABLE);
+                    lv_obj_clear_flag(view->chart_x_label[axis], LV_OBJ_FLAG_CLICKABLE);
+                }
                 view->chart_note = lv_label_create(view->card);
                 lv_label_set_text(view->chart_note, "Verlauf wird geladen");
                 lv_obj_set_style_text_font(view->chart_note, &lv_font_montserrat_16, 0);
                 lv_obj_set_style_text_color(view->chart_note, lv_color_hex(text_fg()), 0);
                 lv_obj_set_style_text_opa(view->chart_note, LV_OPA_70, 0);
-                lv_obj_align(view->chart_note, LV_ALIGN_CENTER, 0, show_title ? 14 : 0);
+                lv_obj_align(view->chart_note, LV_ALIGN_CENTER, 0, head > 0 ? head / 2 : 0);
                 lv_obj_clear_flag(view->chart_note, LV_OBJ_FLAG_CLICKABLE);
             }
-            view->label = lv_label_create(view->card);
-            lv_label_set_text(view->label, "-");
-            lv_obj_set_style_text_font(view->label, font_for(view->text_px, view->text_bold, view->text_italic), 0);
-            lv_obj_align(view->label, LV_ALIGN_TOP_RIGHT, -4, 2);
+            if (view->chart_show_value) {
+                view->label = lv_label_create(view->card);
+                lv_label_set_text(view->label, "-");
+                lv_obj_set_style_text_font(view->label, font_for(view->text_px, view->text_bold, view->text_italic), 0);
+                lv_obj_set_style_text_color(view->label, lv_color_hex(text_fg()), 0);
+                lv_obj_clear_flag(view->label, LV_OBJ_FLAG_CLICKABLE);
+            }
+            layout_chart_head(view);
             tile_count++;
             continue;
         }
@@ -2800,6 +2926,176 @@ void homedisplay_ui_apply_state(const char *json)
     cJSON_Delete(root);
 }
 
+static void chart_stroke(lv_draw_ctx_t *ctx, const lv_point_t *points, int count, int ox, int oy, lv_color_t color, lv_opa_t opa, lv_coord_t width)
+{
+    if (!points || count < 2) return;
+    lv_draw_line_dsc_t dsc;
+    lv_draw_line_dsc_init(&dsc);
+    dsc.color = color;
+    dsc.opa = opa;
+    dsc.width = width;
+    dsc.round_start = 1;
+    dsc.round_end = 1;
+    for (int index = 1; index < count; index++) {
+        lv_point_t from = { (lv_coord_t) (ox + points[index - 1].x), (lv_coord_t) (oy + points[index - 1].y) };
+        lv_point_t to = { (lv_coord_t) (ox + points[index].x), (lv_coord_t) (oy + points[index].y) };
+        lv_draw_line(ctx, &dsc, &from, &to);
+    }
+}
+
+static void chart_fill_under(lv_draw_ctx_t *ctx, const lv_point_t *points, int count, int ox, int oy, int bottom, lv_color_t color)
+{
+    lv_draw_rect_dsc_t rect;
+    lv_draw_rect_dsc_init(&rect);
+    rect.bg_color = color;
+    rect.bg_opa = LV_OPA_40;
+    for (int index = 1; index < count; index++) {
+        lv_coord_t x1 = (lv_coord_t) (ox + points[index - 1].x);
+        lv_coord_t y1 = (lv_coord_t) (oy + points[index - 1].y);
+        lv_coord_t x2 = (lv_coord_t) (ox + points[index].x);
+        lv_coord_t y2 = (lv_coord_t) (oy + points[index].y);
+        if (x2 <= x1) continue;
+        lv_draw_mask_line_param_t mask;
+        lv_draw_mask_line_points_init(&mask, x1, y1, x2, y2, LV_DRAW_MASK_LINE_SIDE_BOTTOM);
+        int16_t mask_id = lv_draw_mask_add(&mask, NULL);
+        if (mask_id >= 0) {
+            lv_area_t area;
+            area.x1 = x1;
+            area.x2 = x2 - 1;
+            area.y1 = LV_MIN(y1, y2);
+            area.y2 = (lv_coord_t) bottom;
+            lv_draw_rect(ctx, &rect, &area);
+            lv_draw_mask_remove_id(mask_id);
+        }
+        lv_draw_mask_free_param(&mask);
+    }
+}
+
+static void chart_draw_event(lv_event_t *event)
+{
+    tile_view_t *view = lv_event_get_user_data(event);
+    if (!view || view->chart_count < 2 || !view->chart_points) return;
+    lv_obj_t *obj = lv_event_get_target(event);
+    lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(event);
+    lv_area_t coords;
+    lv_obj_get_coords(obj, &coords);
+    int ox = coords.x1 + view->chart_pad_l;
+    int oy = coords.y1;
+    int plot_w = view->chart_plot_w;
+    int plot_h = view->chart_plot_h;
+    if (view->chart_grid && plot_w > 2 && plot_h > 2) {
+        lv_draw_line_dsc_t grid;
+        lv_draw_line_dsc_init(&grid);
+        grid.color = lv_color_hex(text_fg());
+        grid.opa = LV_OPA_30;
+        grid.width = 1;
+        for (int step = 0; step < 3; step++) {
+            int y = oy + (plot_h - 1) * step / 2;
+            int x = ox + (plot_w - 1) * step / 2;
+            lv_point_t left = { (lv_coord_t) ox, (lv_coord_t) y };
+            lv_point_t right = { (lv_coord_t) (ox + plot_w - 1), (lv_coord_t) y };
+            lv_point_t top = { (lv_coord_t) x, (lv_coord_t) oy };
+            lv_point_t bottom = { (lv_coord_t) x, (lv_coord_t) (oy + plot_h - 1) };
+            lv_draw_line(ctx, &grid, &left, &right);
+            lv_draw_line(ctx, &grid, &top, &bottom);
+        }
+    }
+    lv_color_t ink = lv_color_hex(view->chart_color ? view->chart_color : theme_accent);
+    if (view->chart_yest && view->chart_yest_count >= 2) {
+        chart_stroke(ctx, view->chart_yest, view->chart_yest_count, ox, oy, lv_color_hex(0x9FB2C8), LV_OPA_70, 2);
+    }
+    if (view->chart_area) chart_fill_under(ctx, view->chart_points, view->chart_count, ox, oy, oy + plot_h - 1, ink);
+    chart_stroke(ctx, view->chart_points, view->chart_count, ox, oy, ink, LV_OPA_COVER, 3);
+}
+
+static int64_t chart_period_span(const char *period)
+{
+    if (period && strcmp(period, "1h") == 0) return 3600;
+    if (period && strcmp(period, "6h") == 0) return 6 * 3600;
+    if (period && strcmp(period, "7d") == 0) return 7 * 86400;
+    return 86400;
+}
+
+static void chart_format_stamp(char *out, size_t length, int64_t unix_time, const char *period, bool relative, int64_t span, int slot)
+{
+    if (relative) {
+        if (slot == 2) {
+            snprintf(out, length, "jetzt");
+            return;
+        }
+        int64_t back = slot == 0 ? span : span / 2;
+        if (back >= 86400 && back % 86400 == 0) snprintf(out, length, "-%dd", (int) (back / 86400));
+        else if (back >= 3600 && back % 3600 == 0) snprintf(out, length, "-%dh", (int) (back / 3600));
+        else snprintf(out, length, "-%dm", (int) ((back + 30) / 60));
+        return;
+    }
+    time_t stamp = (time_t) unix_time;
+    struct tm broken;
+    gmtime_r(&stamp, &broken);
+    if (period && strcmp(period, "7d") == 0) {
+        static const char *weekday[] = { "So", "Mo", "Di", "Mi", "Do", "Fr", "Sa" };
+        int day = broken.tm_wday;
+        if (day < 0 || day > 6) day = 0;
+        snprintf(out, length, "%s %d.%d.", weekday[day], broken.tm_mday, broken.tm_mon + 1);
+        return;
+    }
+    snprintf(out, length, "%02d:%02d", broken.tm_hour, broken.tm_min);
+}
+
+static void chart_format_number(char *out, size_t length, double value, int decimals, const char *unit)
+{
+    char raw[24];
+    if (decimals < 0) decimals = 0;
+    if (decimals > 3) decimals = 3;
+    snprintf(raw, sizeof(raw), "%.*f", decimals, value);
+    for (char *cursor = raw; *cursor; cursor++) {
+        if (*cursor == '.') *cursor = ',';
+    }
+    if (unit && unit[0]) snprintf(out, length, "%s %s", raw, unit);
+    else snprintf(out, length, "%s", raw);
+}
+
+static int chart_sample(cJSON *series, double *values, int cap, double *out_min, double *out_max, bool extend)
+{
+    int total = cJSON_IsArray(series) ? cJSON_GetArraySize(series) : 0;
+    if (total < 2 || cap < 2) return 0;
+    int count = total > cap ? cap : total;
+    for (int index = 0; index < count; index++) {
+        int source = count == total ? index : (int) ((long) index * (total - 1) / (count - 1));
+        cJSON *point = cJSON_GetArrayItem(series, source);
+        double value = cJSON_IsNumber(point) ? point->valuedouble : 0.0;
+        values[index] = value;
+        if (!extend && index == 0) {
+            if (out_min) *out_min = value;
+            if (out_max) *out_max = value;
+        } else {
+            if (out_min && value < *out_min) *out_min = value;
+            if (out_max && value > *out_max) *out_max = value;
+        }
+    }
+    return count;
+}
+
+static void chart_place_points(lv_point_t *points, const double *values, int count, int plot_w, int plot_h, double y_min, double span)
+{
+    if (!points || count < 2 || plot_w < 2 || plot_h < 2) return;
+    for (int index = 0; index < count; index++) {
+        double norm = (values[index] - y_min) / span;
+        if (norm < 0.0) norm = 0.0;
+        if (norm > 1.0) norm = 1.0;
+        points[index].x = (lv_coord_t) ((plot_w - 1) * index / (count - 1));
+        points[index].y = (lv_coord_t) (plot_h - 1 - (int) (norm * (plot_h - 1)));
+    }
+}
+
+static void chart_hide_axes(tile_view_t *view)
+{
+    for (int index = 0; index < 3; index++) {
+        if (view->chart_y_label[index]) lv_obj_add_flag(view->chart_y_label[index], LV_OBJ_FLAG_HIDDEN);
+        if (view->chart_x_label[index]) lv_obj_add_flag(view->chart_x_label[index], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void paint_chart(tile_view_t *view, cJSON *tile)
 {
     if (!view || !view->chart_line || !view->chart_points) return;
@@ -2811,7 +3107,9 @@ static void paint_chart(tile_view_t *view, cJSON *tile)
         view->chart_logged = total;
     }
     if (total < 2) {
+        view->chart_count = 0;
         lv_obj_add_flag(view->chart_line, LV_OBJ_FLAG_HIDDEN);
+        chart_hide_axes(view);
         if (view->chart_note) {
             const char *note = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "chartNote"));
             const char *text = "Keine Verlaufsdaten";
@@ -2823,18 +3121,13 @@ static void paint_chart(tile_view_t *view, cJSON *tile)
         return;
     }
     if (view->chart_note) lv_obj_add_flag(view->chart_note, LV_OBJ_FLAG_HIDDEN);
-    int count = total > CHART_POINT_MAX ? CHART_POINT_MAX : total;
     double values[CHART_POINT_MAX];
     double data_min = 0.0;
     double data_max = 0.0;
-    for (int index = 0; index < count; index++) {
-        int source = count == total ? index : (int) ((long) index * (total - 1) / (count - 1));
-        cJSON *point = cJSON_GetArrayItem(series, source);
-        double value = cJSON_IsNumber(point) ? point->valuedouble : 0.0;
-        values[index] = value;
-        if (index == 0 || value < data_min) data_min = value;
-        if (index == 0 || value > data_max) data_max = value;
-    }
+    int count = chart_sample(series, values, CHART_POINT_MAX, &data_min, &data_max, false);
+    double yest_values[CHART_POINT_MAX];
+    cJSON *yesterday = cJSON_GetObjectItem(tile, "seriesYesterday");
+    int yest_count = chart_sample(yesterday, yest_values, CHART_POINT_MAX, &data_min, &data_max, true);
     double y_min = data_min;
     double y_max = data_max;
     cJSON *min_item = cJSON_GetObjectItem(tile, "seriesMin");
@@ -2853,18 +3146,57 @@ static void paint_chart(tile_view_t *view, cJSON *tile)
     }
     span = y_max - y_min;
     if (span < 0.000001) span = 1.0;
-    int plot_w = view->chart_w > 1 ? view->chart_w : 2;
-    int plot_h = view->chart_h > 1 ? view->chart_h : 2;
-    for (int index = 0; index < count; index++) {
-        double norm = (values[index] - y_min) / span;
-        if (norm < 0.0) norm = 0.0;
-        if (norm > 1.0) norm = 1.0;
-        view->chart_points[index].x = (lv_coord_t) ((plot_w - 1) * index / (count - 1));
-        view->chart_points[index].y = (lv_coord_t) (plot_h - 1 - (int) (norm * (plot_h - 1)));
+    int pad_l = view->chart_axes ? 64 : 0;
+    int pad_b = view->chart_axes ? 20 : 0;
+    if (pad_l > view->chart_w - 8) pad_l = view->chart_w / 3;
+    if (pad_b > view->chart_h - 8) pad_b = view->chart_h / 4;
+    int plot_w = view->chart_w - pad_l;
+    int plot_h = view->chart_h - pad_b;
+    if (plot_w < 2) plot_w = 2;
+    if (plot_h < 2) plot_h = 2;
+    view->chart_pad_l = pad_l;
+    view->chart_pad_b = pad_b;
+    view->chart_plot_w = plot_w;
+    view->chart_plot_h = plot_h;
+    chart_place_points(view->chart_points, values, count, plot_w, plot_h, y_min, span);
+    view->chart_count = count;
+    if (view->chart_yest && yest_count >= 2) {
+        chart_place_points(view->chart_yest, yest_values, yest_count, plot_w, plot_h, y_min, span);
+        view->chart_yest_count = yest_count;
+    } else {
+        view->chart_yest_count = 0;
     }
-    lv_line_set_points(view->chart_line, view->chart_points, (uint16_t) count);
-    lv_obj_set_size(view->chart_line, plot_w, plot_h);
+    lv_obj_set_size(view->chart_line, view->chart_w, view->chart_h);
     lv_obj_clear_flag(view->chart_line, LV_OBJ_FLAG_HIDDEN);
+    if (view->chart_axes) {
+        char text[40];
+        double marks[3] = { y_max, (y_min + y_max) / 2.0, y_min };
+        for (int index = 0; index < 3; index++) {
+            chart_format_number(text, sizeof(text), marks[index], view->chart_decimals, index == 0 ? view->chart_unit : "");
+            lv_label_set_text(view->chart_y_label[index], text);
+            lv_obj_set_width(view->chart_y_label[index], pad_l > 4 ? pad_l - 4 : pad_l);
+            lv_obj_set_style_text_align(view->chart_y_label[index], LV_TEXT_ALIGN_RIGHT, 0);
+            int y = (plot_h - 1) * index / 2 - 8;
+            if (y < 0) y = 0;
+            lv_obj_align(view->chart_y_label[index], LV_ALIGN_TOP_LEFT, 0, y);
+            lv_obj_clear_flag(view->chart_y_label[index], LV_OBJ_FLAG_HIDDEN);
+        }
+        int64_t now = clock_base + (esp_timer_get_time() - clock_set_at) / 1000000;
+        int64_t span_s = chart_period_span(view->chart_period);
+        bool relative = now < 1600000000LL;
+        int64_t stamps[3] = { now - span_s, now - span_s / 2, now };
+        for (int index = 0; index < 3; index++) {
+            chart_format_stamp(text, sizeof(text), stamps[index], view->chart_period, relative, span_s, index);
+            lv_label_set_text(view->chart_x_label[index], text);
+            lv_obj_clear_flag(view->chart_x_label[index], LV_OBJ_FLAG_HIDDEN);
+        }
+        lv_obj_align(view->chart_x_label[0], LV_ALIGN_BOTTOM_LEFT, pad_l, 0);
+        lv_obj_align(view->chart_x_label[1], LV_ALIGN_BOTTOM_MID, pad_l / 2, 0);
+        lv_obj_align(view->chart_x_label[2], LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    } else {
+        chart_hide_axes(view);
+    }
+    lv_obj_invalidate(view->chart_line);
 }
 
 static void apply_state_body(cJSON *root)
@@ -2916,6 +3248,7 @@ static void apply_state_body(cJSON *root)
                 }
             }
             if (tiles[index].label) label_set_folded(tiles[index].label, text ? text : "-");
+            if (tiles[index].chart_line) layout_chart_head(&tiles[index]);
             const char *age = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "age"));
             const char *sub = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "sub"));
             if (tiles[index].age_label) {

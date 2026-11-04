@@ -1226,11 +1226,15 @@ class HomeDisplay extends IPSModuleStrict
             }
             $quality = ($series !== [] && count($series) >= 2) || $value !== null ? 'ok' : 'empty';
         }
-        [$min, $max] = HomeDisplayChart::yBounds($tile, $seriesList);
         $yesterday = [];
         if (!empty($tile['chartCompareYesterday']) && $primaryId > 0) {
             $yesterday = HomeDisplayChart::seriesYesterday($primaryId, $period);
         }
+        $boundsSeries = $seriesList;
+        if ($yesterday !== []) {
+            $boundsSeries[] = $yesterday;
+        }
+        [$min, $max] = HomeDisplayChart::yBounds($tile, $boundsSeries);
         $payload = [
             'tileId' => $tileId,
             'text' => $text,
@@ -1241,13 +1245,16 @@ class HomeDisplay extends IPSModuleStrict
             'seriesYesterday' => $yesterday,
             'seriesMin' => $min,
             'seriesMax' => $max,
-            'chartSeq' => (int) sprintf('%u', crc32(json_encode($seriesList) . '|' . $text)),
+            'chartSeq' => (int) sprintf('%u', crc32(json_encode($seriesList) . '|' . json_encode($yesterday) . '|' . $text)),
         ];
         if (count($series) < 2) {
             $payload['chartNote'] = $primaryNote !== '' ? $primaryNote : 'noData';
         }
         if ($compact) {
-            unset($payload['seriesAll'], $payload['seriesYesterday']);
+            unset($payload['seriesAll']);
+            if ($yesterday === []) {
+                unset($payload['seriesYesterday']);
+            }
         }
         $this->chartStateCache[$cacheKey] = ['at' => time(), 'payload' => $payload];
 

@@ -598,31 +598,67 @@ function chartBoundsForTile(tile, live, seriesList, likeDisplay = false) {
   return bounds;
 }
 
+function chartColorOf(tile) {
+  return tile && /^#[0-9a-fA-F]{6}$/.test(tile.chartColor || "") ? tile.chartColor : "#ffb547";
+}
+
+function chartShowValue(tile) {
+  return !tile || tile.chartShowValue !== false;
+}
+
+function chartAxisTimes(period) {
+  const span = period === "1h" ? 3600000 : (period === "6h" ? 21600000 : (period === "7d" ? 7 * 86400000 : 86400000));
+  const end = Date.now();
+  const fmt = (ms) => {
+    const date = new Date(ms);
+    if (period === "7d") {
+      const days = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+      return `${days[date.getDay()]} ${date.getDate()}.${date.getMonth() + 1}.`;
+    }
+    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  };
+  return [fmt(end - span), fmt(end - span / 2), fmt(end)];
+}
+
+function chartNumber(value, decimals, unit) {
+  const places = Math.max(0, Math.min(3, Number(decimals) || 0));
+  const text = Number(value).toFixed(places).replace(".", ",");
+  return unit ? `${text} ${unit}` : text;
+}
+
 function chartHtmlForTile(tile, live, options = {}) {
   const likeDisplay = Boolean(options.likeDisplay);
   const seriesList = chartSeriesFromTile(tile, live, !likeDisplay);
-  const bounds = chartBoundsForTile(tile, live, seriesList, likeDisplay);
-  const style = likeDisplay ? "line" : (tile.chartStyle || "area");
-  const yesterday = !likeDisplay && live && Array.isArray(live.seriesYesterday) && chartSeriesUsable(live.seriesYesterday)
+  const yesterday = live && Array.isArray(live.seriesYesterday) && chartSeriesUsable(live.seriesYesterday)
     ? normalizeChartSeries(live.seriesYesterday)
     : [];
-  return chartSvgMulti(seriesList, style, bounds.min, bounds.max, yesterday, chartEmptyText(live && live.chartNote));
+  const boundsSeries = yesterday.length ? seriesList.concat([yesterday]) : seriesList;
+  const bounds = chartBoundsForTile(tile, live, boundsSeries, likeDisplay);
+  if ((tile.chartYMode || "auto") !== "fixed" && yesterday.length) {
+    const extra = chartSeriesMinMax(yesterday);
+    bounds.min = Math.min(bounds.min, extra.min);
+    bounds.max = Math.max(bounds.max, extra.max);
+  }
+  const style = tile.chartStyle || "area";
+  return chartSvgMulti(seriesList, style, bounds.min, bounds.max, yesterday, chartEmptyText(live && live.chartNote), tile);
 }
 
-function chartSvgMulti(seriesList, style, min, max, yesterday, emptyText) {
+function chartSvgMulti(seriesList, style, min, max, yesterday, emptyText, tile) {
   const empty = emptyText || "Keine Verlaufsdaten";
   if (!seriesList || !seriesList.length) return `<div class="chart-empty">${empty}</div>`;
   const w = 100;
   const h = 36;
   const range = max - min || 1;
-  const line = (series, className) => {
+  const color = chartColorOf(tile);
+  const line = (series, className, stroke) => {
     if (!series || series.length < 2) return "";
     const points = series.map((v, i) => {
       const x = (i / (series.length - 1)) * w;
       const y = h - 2 - ((v - min) / range) * (h - 4);
       return `${x.toFixed(2)},${y.toFixed(2)}`;
     }).join(" ");
-    return `<polyline class="${className}" points="${points}"></polyline>`;
+    const ink = stroke ? ` style="stroke:${stroke}"` : "";
+    return `<polyline class="${className}" points="${points}"${ink}></polyline>`;
   };
   const primary = seriesList[0] || [];
   let area = "";
@@ -632,15 +668,30 @@ function chartSvgMulti(seriesList, style, min, max, yesterday, emptyText) {
       const y = h - 2 - ((v - min) / range) * (h - 4);
       return `${x.toFixed(2)},${y.toFixed(2)}`;
     }).join(" ");
-    area = `<polygon class="oh-chart-area" points="0,${h} ${pts} ${w},${h}"></polygon>`;
+    area = `<polygon class="oh-chart-area" points="0,${h} ${pts} ${w},${h}" style="fill:${color}"></polygon>`;
+  }
+  let grid = "";
+  if (tile && tile.chartShowGrid) {
+    for (let step = 0; step < 3; step++) {
+      const y = (step / 2) * h;
+      const x = (step / 2) * w;
+      grid += `<line class="oh-chart-grid" x1="0" y1="${y}" x2="${w}" y2="${y}"/>`;
+      grid += `<line class="oh-chart-grid" x1="${x}" y1="0" x2="${x}" y2="${h}"/>`;
+    }
   }
   const extras = seriesList.slice(1).map((s) => line(s, "oh-chart-line oh-chart-line-alt")).join("");
   const yesterdayLine = yesterday && yesterday.length >= 2 ? line(yesterday, "oh-chart-line oh-chart-yesterday") : "";
-  const primaryLine = line(primary, "oh-chart-line");
+  const primaryLine = line(primary, "oh-chart-line", color);
   if (!primaryLine && !extras && !yesterdayLine) {
     return `<div class="chart-empty">${empty}</div>`;
   }
-  return `<svg class="oh-chart-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${area}${yesterdayLine}${primaryLine}${extras}</svg>`;
+  const svg = `<svg class="oh-chart-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${grid}${area}${yesterdayLine}${primaryLine}${extras}</svg>`;
+  if (!tile || !tile.chartShowAxes) return `<div class="oh-chart-frame"><div class="oh-chart-plot">${svg}</div></div>`;
+  const decimals = tile.decimals != null ? tile.decimals : 1;
+  const unit = tile.unit || "";
+  const yLabels = [chartNumber(max, decimals, unit), chartNumber((min + max) / 2, decimals, ""), chartNumber(min, decimals, "")];
+  const xLabels = chartAxisTimes(tile.chartPeriod || "24h");
+  return `<div class="oh-chart-frame with-axes"><div class="oh-chart-y">${yLabels.map((label) => `<span>${escapeHtml(label)}</span>`).join("")}</div><div class="oh-chart-plot">${svg}</div><div class="oh-chart-x">${xLabels.map((label) => `<span>${escapeHtml(label)}</span>`).join("")}</div></div>`;
 }
 
 function paintChartTileContent(element, tile, live, mode) {
@@ -650,16 +701,16 @@ function paintChartTileContent(element, tile, live, mode) {
   const stateText = live && live.text ? escapeHtml(live.text) : (mode === "probe" ? "—" : escapeHtml(tile.unit ? `12,3 ${tile.unit}` : "—"));
   const likeDisplay = mode === "probe";
   const chartHtml = chartHtmlForTile(tile, live, { likeDisplay });
+  const valueText = chartShowValue(tile) ? stateText : "";
   if (likeDisplay) {
-    const title = tile.showTitle === false ? "" : escapeHtml(label);
-    element.innerHTML = `<div class="probe-chart"><div class="probe-chart-head"><span class="probe-chart-title">${title}</span><span class="probe-chart-value">${stateText}</span></div><div class="probe-chart-plot">${chartHtml}</div></div>`;
+    element.innerHTML = `<div class="probe-chart">${ohCardMarkup(label, valueText, chartHtml, "", tile)}</div>`;
     return;
   }
   const periodKey = tile.chartPeriod || "24h";
   const periodLabel = CHART_PERIOD_LABELS[periodKey] || periodKey;
   const kicker = element.querySelector(".kicker");
   const kickerHtml = kicker ? kicker.outerHTML : "";
-  element.innerHTML = `${kickerHtml}<div class="tile-scale">${ohCardMarkup(label, stateText, chartHtml, escapeHtml(periodLabel))}</div>`;
+  element.innerHTML = `${kickerHtml}<div class="tile-scale">${ohCardMarkup(label, valueText, chartHtml, escapeHtml(periodLabel), tile)}</div>`;
 }
 
 function variableArchived(id) {
@@ -2986,6 +3037,10 @@ function renderProperties() {
   if (tile.kind === "chart") {
     if ($("p-chart-period")) $("p-chart-period").value = tile.chartPeriod || "24h";
     if ($("p-chart-style")) $("p-chart-style").value = tile.chartStyle || "area";
+    if ($("p-chart-color")) $("p-chart-color").value = chartColorOf(tile);
+    if ($("p-chart-axes")) $("p-chart-axes").checked = Boolean(tile.chartShowAxes);
+    if ($("p-chart-grid")) $("p-chart-grid").checked = Boolean(tile.chartShowGrid);
+    if ($("p-chart-value")) $("p-chart-value").checked = chartShowValue(tile);
     if ($("p-chart-unit")) $("p-chart-unit").value = tile.unit || "";
     if ($("p-chart-decimals")) $("p-chart-decimals").value = tile.decimals ?? 1;
     if ($("p-chart-y-mode")) $("p-chart-y-mode").value = tile.chartYMode || "auto";
@@ -3290,6 +3345,12 @@ function applyProperties() {
   if (tile.kind === "chart") {
     tile.chartPeriod = $("p-chart-period") ? $("p-chart-period").value : "24h";
     tile.chartStyle = $("p-chart-style") ? $("p-chart-style").value : "area";
+    const chartColor = ($("p-chart-color")?.value || "").toLowerCase();
+    if (/^#[0-9a-f]{6}$/.test(chartColor) && chartColor !== "#ffb547") tile.chartColor = chartColor;
+    else delete tile.chartColor;
+    tile.chartShowAxes = Boolean($("p-chart-axes")?.checked);
+    tile.chartShowGrid = Boolean($("p-chart-grid")?.checked);
+    tile.chartShowValue = $("p-chart-value") ? $("p-chart-value").checked : true;
     tile.unit = $("p-chart-unit") ? $("p-chart-unit").value : "";
     tile.decimals = $("p-chart-decimals") ? Number($("p-chart-decimals").value) || 0 : 0;
     tile.chartYMode = $("p-chart-y-mode") ? $("p-chart-y-mode").value : "auto";
@@ -3442,7 +3503,7 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-show-title-icon", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-show-title-icon", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
