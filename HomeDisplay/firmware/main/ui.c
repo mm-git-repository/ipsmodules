@@ -479,6 +479,15 @@ static const icon_cp_t ICON_CP[] = {
     {"tv", 0xF0502}, {"speaker", 0xF04C3}, {"washing", 0xF072A}, {"bed", 0xF02E3}, {"bell", 0xF009A},
     {"leaf", 0xF032A}, {"fire", 0xF0238},
     {"kitchen", 0xF04DE}, {"pool", 0xF0606}, {"hall", 0xF181E}, {"kids", 0xF18FB},
+    {"bubbles", 0xF0CD1}, {"bubbleChart", 0xF05E3}, {"waves", 0xF078D},
+    {"shutterOpen", 0xF111E}, {"valveOpen", 0xF1068}, {"valveClosed", 0xF1067},
+    {"pumpOff", 0xF1B22}, {"doorOpen", 0xF081C}, {"doorClosed", 0xF081B},
+    {"garageOpen", 0xF06DA}, {"lockOpen", 0xF033F}, {"fanOff", 0xF081D},
+    {"plugOff", 0xF06A6}, {"bellOff", 0xF009B}, {"wifiOff", 0xF05AA},
+    {"speakerOff", 0xF04C4}, {"tvOff", 0xF083B}, {"waterOff", 0xF058D},
+    {"coolOff", 0xF14E3}, {"fireOff", 0xF1722}, {"motionOff", 0xF1435},
+    {"smokeOff", 0xF1809}, {"windowOpen", 0xF05B1}, {"blindsOpen", 0xF1011},
+    {"blindsClosed", 0xF00AC},
 };
 
 static const char *pua(unsigned cp)
@@ -539,38 +548,16 @@ static void refresh_icons(tile_view_t *tile, bool on)
 
 static const lv_font_t *font_for(int px, bool bold, bool italic);
 
-/* Symbol auf die Zeilenhöhe zoomen. Die Slot-Breite entspricht dieser Höhe. */
-static void fit_icon_in_slot(lv_obj_t *label, int target_px)
+/* Symbol direkt in der Zeile. Ein Zoom-Slot schneidet die Glyphe in LVGL 8 ab. */
+static lv_obj_t *make_icon_label(lv_obj_t *parent, tile_view_t *view, const char *icon, lv_obj_t **label_out, bool large)
 {
-    if (!label || target_px < 8) return;
-    bool large = target_px > 36;
-    int base = large ? 48 : 28;
-    lv_obj_set_style_text_font(label, large ? &mdi_48 : &mdi_28, 0);
-    int zoom = (target_px * 256) / base;
-    if (zoom < 80) zoom = 80;
-    if (zoom > 640) zoom = 640;
-    lv_obj_set_style_transform_zoom(label, zoom, 0);
-    lv_obj_set_style_transform_pivot_x(label, base / 2, 0);
-    lv_obj_set_style_transform_pivot_y(label, base / 2, 0);
-    lv_obj_t *slot = lv_obj_get_parent(label);
-    if (slot) lv_obj_set_size(slot, target_px, target_px);
-    lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
-}
-
-static lv_obj_t *make_icon_slot(lv_obj_t *parent, tile_view_t *view, const char *icon, lv_obj_t **label_out)
-{
-    lv_obj_t *slot = lv_obj_create(parent);
-    lv_obj_set_size(slot, 28, 28);
-    style_flat(slot);
-    lv_obj_set_style_bg_opa(slot, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_pad_all(slot, 0, 0);
-    lv_obj_clear_flag(slot, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t *label = lv_label_create(slot);
+    lv_obj_t *label = lv_label_create(parent);
     if (label_out) *label_out = label;
-    show_icon_label(label, view, icon, false, false);
+    show_icon_label(label, view, icon, false, large);
+    lv_obj_set_style_flex_grow(label, 0, 0);
+    lv_obj_set_style_min_width(label, large ? 48 : 28, 0);
     lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
-    return slot;
+    return label;
 }
 
 static lv_coord_t text_width_capped(const char *text, const lv_font_t *font, lv_coord_t max_w)
@@ -602,17 +589,25 @@ static void layout_value_row(tile_view_t *view)
         title_h = lv_font_get_line_height(title_font);
         lv_obj_set_size(view->title_row, inner_w, title_h);
         lv_obj_align(view->title_row, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_flex_align_t main_align = LV_FLEX_ALIGN_START;
-        if (strcmp(view->row_align, "center") == 0) main_align = LV_FLEX_ALIGN_CENTER;
-        else if (strcmp(view->row_align, "right") == 0) main_align = LV_FLEX_ALIGN_END;
-        lv_obj_set_flex_align(view->title_row, main_align, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        if (view->title_icon) fit_icon_in_slot(view->title_icon, (int) title_h);
+        lv_obj_set_flex_align(view->title_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_text_color(view->title_row, lv_color_hex(text_fg()), 0);
+        bool title_icon_large = title_h > 36;
+        if (view->title_icon && view->title_icon_name[0]) {
+            show_icon_label(view->title_icon, view, view->title_icon_name, false, title_icon_large);
+            lv_obj_set_style_text_color(view->title_icon, lv_color_hex(text_fg()), 0);
+            lv_obj_set_style_flex_grow(view->title_icon, 0, 0);
+        }
         if (view->title_label) {
             lv_obj_set_style_text_font(view->title_label, title_font, 0);
-            lv_coord_t icon_w = view->title_icon ? title_h + 4 : 0;
+            lv_obj_set_style_text_color(view->title_label, lv_color_hex(text_fg()), 0);
+            lv_coord_t icon_w = view->title_icon ? (title_icon_large ? 48 : 28) + 4 : 0;
             lv_coord_t max_text = inner_w - icon_w;
             if (max_text < 8) max_text = 8;
-            lv_obj_set_width(view->title_label, text_width_capped(lv_label_get_text(view->title_label), title_font, max_text));
+            lv_obj_set_width(view->title_label, max_text);
+            lv_text_align_t title_align = LV_TEXT_ALIGN_LEFT;
+            if (strcmp(view->row_align, "center") == 0) title_align = LV_TEXT_ALIGN_CENTER;
+            else if (strcmp(view->row_align, "right") == 0) title_align = LV_TEXT_ALIGN_RIGHT;
+            lv_obj_set_style_text_align(view->title_label, title_align, 0);
             lv_label_set_long_mode(view->title_label, LV_LABEL_LONG_DOT);
         }
         lv_obj_move_foreground(view->title_row);
@@ -620,15 +615,12 @@ static void layout_value_row(tile_view_t *view)
 
     bool want_icon = view->icon_label && view->icon_name[0] && strcmp(view->icon_place, "none") != 0;
     if (view->icon_label) {
-        lv_obj_t *slot = lv_obj_get_parent(view->icon_label);
         if (want_icon) {
             lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
-            if (slot && slot != view->card) lv_obj_clear_flag(slot, LV_OBJ_FLAG_HIDDEN);
             show_icon_label(view->icon_label, view, view->icon_name, false, text_h > 36);
-            fit_icon_in_slot(view->icon_label, (int) text_h);
+            lv_obj_set_style_flex_grow(view->icon_label, 0, 0);
         } else {
             lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
-            if (slot && slot != view->card) lv_obj_add_flag(slot, LV_OBJ_FLAG_HIDDEN);
         }
     }
 
@@ -648,6 +640,7 @@ static void layout_value_row(tile_view_t *view)
     if (view->age_label) {
         lv_obj_set_width(view->age_label, inner_w);
         lv_obj_set_style_text_font(view->age_label, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(view->age_label, lv_color_hex(text_fg()), 0);
         lv_obj_set_style_text_align(view->age_label, LV_TEXT_ALIGN_CENTER, 0);
     }
 }
@@ -973,20 +966,12 @@ static void page_event(lv_event_t *event)
     show_page((int) (intptr_t) lv_event_get_user_data(event));
 }
 
-static int64_t home_tap_at;
-
 static void home_event(lv_event_t *event)
 {
     (void) event;
     note_touch();
     if (locked) return;
-    int64_t now = esp_timer_get_time();
-    if (home_tap_at != 0 && now - home_tap_at < 400000) {
-        home_tap_at = 0;
-        homedisplay_client_reload_layout();
-        return;
-    }
-    home_tap_at = now;
+    homedisplay_client_reload_layout();
 }
 
 static void gesture_event(lv_event_t *event)
@@ -1287,6 +1272,65 @@ static bool storage_image_ready_limit(const char *file, size_t max_bytes)
         return false;
     }
     return true;
+}
+
+static bool png_ihdr_size(const char *file, int *width, int *height)
+{
+    if (!file || !file[0] || !width || !height) return false;
+    char path[96];
+    snprintf(path, sizeof(path), "/storage/%s", file);
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return false;
+    unsigned char hdr[24];
+    size_t got = fread(hdr, 1, sizeof(hdr), fp);
+    fclose(fp);
+    if (got < sizeof(hdr)) return false;
+    if (hdr[0] != 0x89 || hdr[1] != 'P' || hdr[2] != 'N' || hdr[3] != 'G') return false;
+    *width = (int) ((hdr[16] << 24) | (hdr[17] << 16) | (hdr[18] << 8) | hdr[19]);
+    *height = (int) ((hdr[20] << 24) | (hdr[21] << 16) | (hdr[22] << 8) | hdr[23]);
+    return *width > 0 && *height > 0;
+}
+
+/* Volle Displayfläche in RGB565, mit der Reserve aus dem Plan. */
+static bool raster_fits_display(const char *file, size_t max_bytes, int *width, int *height)
+{
+    if (!storage_image_ready_limit(file, max_bytes)) return false;
+    int w = 0;
+    int h = 0;
+    bool jpeg = jpeg_sof_size(file, &w, &h);
+    bool png = !jpeg && png_ihdr_size(file, &w, &h);
+    if (!jpeg && !png) {
+        ESP_LOGW(TAG_UI, "Bild verworfen (kein Baseline-JPEG oder PNG): %s", file);
+        return false;
+    }
+    if ((long) w * (long) h * 2L > 1024L * 600L * 2L) {
+        ESP_LOGW(TAG_UI, "Bild verworfen (zu groß %dx%d): %s", w, h, file);
+        return false;
+    }
+    if (width) *width = w;
+    if (height) *height = h;
+    return true;
+}
+
+static void place_cover_image(lv_obj_t *img, const char *file, int box_w, int box_h)
+{
+    int width = 0;
+    int height = 0;
+    if (!img || !raster_fits_display(file, 2u * 1024u * 1024u, &width, &height)) return;
+    char path[96];
+    snprintf(path, sizeof(path), "S:/%s", file);
+    lv_img_set_src(img, path);
+    if (width > 0 && height > 0 && box_w > 0 && box_h > 0) {
+        int zoom_w = (box_w * 256) / width;
+        int zoom_h = (box_h * 256) / height;
+        int zoom = zoom_w > zoom_h ? zoom_w : zoom_h;
+        if (zoom < 1) zoom = 1;
+        if (zoom > 4096) zoom = 4096;
+        lv_img_set_pivot(img, width / 2, height / 2);
+        lv_img_set_zoom(img, zoom);
+    }
+    if (box_w > 0 && box_h > 0) lv_obj_set_size(img, box_w, box_h);
+    lv_obj_center(img);
 }
 
 static void show_background(cJSON *page)
@@ -1753,9 +1797,9 @@ static void show_page(int index)
             lv_obj_set_style_pad_all(view->card, 0, 0);
             if (view->image_backdrop) lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
             view->image_img = lv_img_create(view->card);
-            (void) file;
             lv_obj_set_size(view->image_img, card_w, card_h);
             lv_obj_center(view->image_img);
+            if (file && file[0]) place_cover_image(view->image_img, file, card_w, card_h);
             if (view->image_backdrop) lv_obj_move_background(view->card);
             tile_count++;
             continue;
@@ -1882,16 +1926,19 @@ static void show_page(int index)
             lv_obj_set_flex_flow(view->title_row, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(view->title_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
             lv_obj_set_style_pad_column(view->title_row, 4, 0);
+            lv_obj_set_style_text_color(view->title_row, lv_color_hex(text_fg()), 0);
             lv_obj_clear_flag(view->title_row, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_align(view->title_row, LV_ALIGN_TOP_LEFT, 0, 0);
             if (show_title_icon && title_icon_src && title_icon_src[0]) {
-                make_icon_slot(view->title_row, view, title_icon_src, &view->title_icon);
+                make_icon_label(view->title_row, view, title_icon_src, &view->title_icon, false);
+                lv_obj_set_style_text_color(view->title_icon, lv_color_hex(text_fg()), 0);
                 snprintf(view->title_icon_name, sizeof(view->title_icon_name), "%s", title_icon_src);
             }
             lv_obj_t *name = lv_label_create(view->title_row);
             label_set_folded(name, view->title[0] ? view->title : "-");
             view->title_label = name;
             lv_obj_set_style_text_font(name, title_font, 0);
+            lv_obj_set_style_text_color(name, lv_color_hex(text_fg()), 0);
             lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
             lv_obj_clear_flag(name, LV_OBJ_FLAG_CLICKABLE);
         } else if (show_title) {
@@ -2130,12 +2177,13 @@ static void show_page(int index)
             lv_obj_set_style_pad_column(line, 6, 0);
             bool before = strcmp(view->icon_place, "before") == 0;
             bool after = strcmp(view->icon_place, "after") == 0;
-            if (icon && icon[0] && before) make_icon_slot(line, view, icon, &view->icon_label);
+            if (icon && icon[0] && before) make_icon_label(line, view, icon, &view->icon_label, false);
             lv_obj_set_parent(view->label, line);
-            if (icon && icon[0] && after) make_icon_slot(line, view, icon, &view->icon_label);
+            if (icon && icon[0] && after) make_icon_label(line, view, icon, &view->icon_label, false);
             if (view->show_age) {
                 view->age_label = lv_label_create(view->value_box);
                 lv_label_set_text(view->age_label, "");
+                lv_obj_set_style_text_color(view->age_label, lv_color_hex(text_fg()), 0);
                 lv_obj_clear_flag(view->age_label, LV_OBJ_FLAG_CLICKABLE);
             }
             layout_value_row(view);
@@ -2826,17 +2874,9 @@ static void apply_state_body(cJSON *root)
 bool homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
 {
     if (!tile_id || !tile_id[0] || !file || !file[0]) return false;
-    if (!storage_image_ready_limit(file, 400 * 1024)) return false;
     int width = 0;
     int height = 0;
-    if (!jpeg_sof_size(file, &width, &height)) {
-        ESP_LOGW(TAG_UI, "Kamera-Bild verworfen (kein Baseline-JPEG): %s", file);
-        return false;
-    }
-    if ((long) width * (long) height * 2L > 800L * 1024L) {
-        ESP_LOGW(TAG_UI, "Kamera-Bild verworfen (zu groß %dx%d): %s", width, height, file);
-        return false;
-    }
+    if (!raster_fits_display(file, 900u * 1024u, &width, &height)) return false;
     char path[96];
     snprintf(path, sizeof(path), "S:/%s", file);
     ESP_LOGI(TAG_UI, "Kamera-Bild %s: %dx%d", file, width, height);
@@ -2864,13 +2904,13 @@ bool homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
 void homedisplay_ui_refresh_image(const char *tile_id, const char *file)
 {
     if (!tile_id || !tile_id[0] || !file || !file[0]) return;
-    if (!storage_image_ready_limit(file, 400 * 1024)) return;
-    char path[96];
-    snprintf(path, sizeof(path), "S:/%s", file);
+    if (!raster_fits_display(file, 2u * 1024u * 1024u, NULL, NULL)) return;
     if (!ui_client_lock()) return;
     for (int index = 0; index < tile_count; index++) {
         if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].image_img) {
-            lv_img_set_src(tiles[index].image_img, path);
+            int box_w = lv_obj_get_width(tiles[index].image_img);
+            int box_h = lv_obj_get_height(tiles[index].image_img);
+            place_cover_image(tiles[index].image_img, file, box_w, box_h);
             break;
         }
     }

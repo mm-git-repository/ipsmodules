@@ -18,7 +18,16 @@ const ICONS = [
   ["motion", "Bewegung", 0xF0D91], ["window", "Fenster", 0xF05AE], ["garage", "Garage", 0xF06D9], ["smoke", "Rauch", 0xF0392], ["thermostat", "Thermostat", 0xF0393],
   ["solar", "Solar", 0xF0A72], ["camera", "Kamera", 0xF07AE], ["tv", "Fernseher", 0xF0502], ["speaker", "Lautsprecher", 0xF04C3], ["washing", "Waschmaschine", 0xF072A],
   ["bed", "Bett", 0xF02E3], ["bell", "Klingel", 0xF009A], ["leaf", "Blatt", 0xF032A], ["fire", "Feuer", 0xF0238],
-  ["kitchen", "Küche", 0xF04DE], ["pool", "Pool", 0xF0606], ["hall", "Gang", 0xF181E], ["kids", "Kinderzimmer", 0xF18FB]
+  ["kitchen", "Küche", 0xF04DE], ["pool", "Pool", 0xF0606], ["hall", "Gang", 0xF181E], ["kids", "Kinderzimmer", 0xF18FB],
+  ["bubbles", "Luftblasen", 0xF0CD1], ["bubbleChart", "Blasen (Sprechblase)", 0xF05E3], ["waves", "Wellen", 0xF078D],
+  ["shutterOpen", "Rollladen oben", 0xF111E], ["valveOpen", "Ventil offen", 0xF1068], ["valveClosed", "Ventil zu", 0xF1067],
+  ["pumpOff", "Pumpe aus", 0xF1B22], ["doorOpen", "Tür offen", 0xF081C], ["doorClosed", "Tür zu", 0xF081B],
+  ["garageOpen", "Garage offen", 0xF06DA], ["lockOpen", "Schloss offen", 0xF033F], ["fanOff", "Lüftung aus", 0xF081D],
+  ["plugOff", "Steckdose aus", 0xF06A6], ["bellOff", "Klingel aus", 0xF009B], ["wifiOff", "WLAN aus", 0xF05AA],
+  ["speakerOff", "Lautsprecher aus", 0xF04C4], ["tvOff", "Fernseher aus", 0xF083B], ["waterOff", "Wasser aus", 0xF058D],
+  ["coolOff", "Kühlen aus", 0xF14E3], ["fireOff", "Feuer aus", 0xF1722], ["motionOff", "Bewegung aus", 0xF1435],
+  ["smokeOff", "Rauchmelder aus", 0xF1809], ["windowOpen", "Fenster offen", 0xF05B1],
+  ["blindsOpen", "Jalousie offen", 0xF1011], ["blindsClosed", "Jalousie zu", 0xF00AC]
 ];
 const DISPLAY_PROFILES = {
   "waveshare-5b-1024x600": { label: "Waveshare 5B (1024×600)", width: 1024, height: 600, defaultColumns: 3, defaultRows: 4, maxColumns: 4, maxRows: 6 },
@@ -97,8 +106,8 @@ const FLOW_SLOT_LABELS = {
   }
 };
 
-function editorKicker(mode, text) {
-  return mode === "edit" && text ? `<div class="kicker">${text}</div>` : "";
+function editorKicker() {
+  return "";
 }
 
 function flowAnimSeconds(w) {
@@ -381,8 +390,16 @@ function chartSeriesMinMax(series) {
   return { min, max };
 }
 
-function chartSvgMarkup(series, style, min, max) {
-  if (!series || series.length < 2) return `<div class="chart-empty">Keine Verlaufsdaten</div>`;
+function chartEmptyText(note) {
+  if (note === "notLogged") return "Variable wird nicht archiviert";
+  if (note === "noArchive") return "Kein Archiv vorhanden";
+  if (note === "noData") return "Keine geloggten Werte";
+  return "Keine Verlaufsdaten";
+}
+
+function chartSvgMarkup(series, style, min, max, emptyText) {
+  const empty = emptyText || "Keine Verlaufsdaten";
+  if (!series || series.length < 2) return `<div class="chart-empty">${empty}</div>`;
   const w = 100;
   const h = 36;
   const range = max - min || 1;
@@ -589,11 +606,12 @@ function chartHtmlForTile(tile, live, options = {}) {
   const yesterday = !likeDisplay && live && Array.isArray(live.seriesYesterday) && chartSeriesUsable(live.seriesYesterday)
     ? normalizeChartSeries(live.seriesYesterday)
     : [];
-  return chartSvgMulti(seriesList, style, bounds.min, bounds.max, yesterday);
+  return chartSvgMulti(seriesList, style, bounds.min, bounds.max, yesterday, chartEmptyText(live && live.chartNote));
 }
 
-function chartSvgMulti(seriesList, style, min, max, yesterday) {
-  if (!seriesList || !seriesList.length) return `<div class="chart-empty">Keine Verlaufsdaten</div>`;
+function chartSvgMulti(seriesList, style, min, max, yesterday, emptyText) {
+  const empty = emptyText || "Keine Verlaufsdaten";
+  if (!seriesList || !seriesList.length) return `<div class="chart-empty">${empty}</div>`;
   const w = 100;
   const h = 36;
   const range = max - min || 1;
@@ -620,7 +638,7 @@ function chartSvgMulti(seriesList, style, min, max, yesterday) {
   const yesterdayLine = yesterday && yesterday.length >= 2 ? line(yesterday, "oh-chart-line oh-chart-yesterday") : "";
   const primaryLine = line(primary, "oh-chart-line");
   if (!primaryLine && !extras && !yesterdayLine) {
-    return `<div class="chart-empty">Keine Verlaufsdaten</div>`;
+    return `<div class="chart-empty">${empty}</div>`;
   }
   return `<svg class="oh-chart-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${area}${yesterdayLine}${primaryLine}${extras}</svg>`;
 }
@@ -4936,7 +4954,7 @@ $("probe-panel").addEventListener("change", () => {
   loadProbe(true).catch((error) => setStatus(error.message));
 });
 $("probe-refresh").addEventListener("click", () => loadProbe(true).catch((error) => setStatus(error.message)));
-$("probe-home").addEventListener("dblclick", () => {
+$("probe-home").addEventListener("click", () => {
   loadProbe(true).catch((error) => setStatus(error.message));
 });
 $("open-probe").addEventListener("click", openProbe);

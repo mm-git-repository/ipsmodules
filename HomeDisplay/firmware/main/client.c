@@ -456,10 +456,14 @@ static esp_err_t download_to_file(const char *path, const char *target, int time
     }
     char buffer[1024];
     size_t total = 0;
-    int64_t deadline = esp_timer_get_time() + (int64_t) config.timeout_ms * 1000;
+    /* timeout_ms ist die Pause ohne neue Bytes. Ein langsamer, aber laufender Strom läuft weiter. */
+    int64_t stall_us = (int64_t) config.timeout_ms * 1000;
+    int64_t deadline = esp_timer_get_time() + stall_us;
+    int64_t overall = esp_timer_get_time() + 60000000LL;
     while (true) {
         esp_task_wdt_reset();
-        if (esp_timer_get_time() > deadline) {
+        int64_t now = esp_timer_get_time();
+        if (now > overall || now > deadline) {
             ESP_LOGW(TAG, "Download-Timeout %s nach %u Byte", path, (unsigned) total);
             error = ESP_ERR_TIMEOUT;
             break;
@@ -469,7 +473,15 @@ static esp_err_t download_to_file(const char *path, const char *target, int time
             error = ESP_FAIL;
             break;
         }
-        if (read == 0) break;
+        if (read == 0) {
+            int64_t length = esp_http_client_get_content_length(client);
+            if (length > 0 && (int64_t) total < length) {
+                ESP_LOGW(TAG, "Download unvollständig %s (%u von %u Byte)", path, (unsigned) total, (unsigned) length);
+                error = ESP_FAIL;
+            }
+            break;
+        }
+        deadline = esp_timer_get_time() + stall_us;
         total += (size_t) read;
         if (max_bytes > 0 && total > max_bytes) {
             ESP_LOGW(TAG, "Download zu groß %s (%u Byte)", path, (unsigned) total);
@@ -659,8 +671,8 @@ static void fetch_one_camera(const char *tile_id, const char *file, bool quiet)
         homedisplay_ui_status(status);
     }
     ESP_LOGI(TAG, "Kamera laden %s", tile_id);
-    int timeout = quiet ? 4000 : 20000;
-    if (download_to_file(path, target, timeout, 900 * 1024) == ESP_OK) {
+    (void) quiet;
+    if (download_to_file(path, target, 20000, 900 * 1024) == ESP_OK) {
         ESP_LOGI(TAG, "Kamera geladen %s", tile_id);
         if (homedisplay_ui_refresh_camera(tile_id, name)) camera_mark_shown(tile_id, which);
     } else {

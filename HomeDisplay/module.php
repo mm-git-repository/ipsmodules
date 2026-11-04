@@ -1188,12 +1188,29 @@ class HomeDisplay extends IPSModuleStrict
         $quality = 'empty';
         $value = null;
         $seriesList = [];
+        $primaryNote = '';
         foreach ($defs as $def) {
             $variableId = (int) $def['variableId'];
             if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
                 continue;
             }
             $points = HomeDisplayChart::series($variableId, $period);
+            $trace = HomeDisplayChart::lastTrace();
+            $reason = (string) ($trace['note'] ?? '');
+            $this->SendDebug(
+                'Diagramm',
+                $tileId . ' var=' . $variableId
+                    . ' archiv=' . (int) ($trace['archive'] ?? 0)
+                    . ' logging=' . (!empty($trace['logged']) ? 'ja' : 'nein')
+                    . ' agg=' . (int) ($trace['agg'] ?? 0)
+                    . ' log=' . (int) ($trace['log'] ?? 0)
+                    . ' punkte=' . count($points)
+                    . ' grund=' . ($reason !== '' ? $reason : 'ok'),
+                0
+            );
+            if ($variableId === $primaryId) {
+                $primaryNote = $reason;
+            }
             if ($points !== []) {
                 $seriesList[] = $points;
             }
@@ -1226,6 +1243,9 @@ class HomeDisplay extends IPSModuleStrict
             'seriesMax' => $max,
             'chartSeq' => (int) sprintf('%u', crc32(json_encode($seriesList) . '|' . $text)),
         ];
+        if (count($series) < 2) {
+            $payload['chartNote'] = $primaryNote !== '' ? $primaryNote : 'noData';
+        }
         if ($compact) {
             unset($payload['seriesAll'], $payload['seriesYesterday']);
         }
@@ -2227,10 +2247,8 @@ class HomeDisplay extends IPSModuleStrict
         }
         flock($lock, LOCK_UN);
         fclose($lock);
-        if (is_file($paths['jpeg'])) {
-            $stale = file_get_contents($paths['jpeg']);
-            return is_string($stale) && $stale !== '' ? $stale : null;
-        }
+        $this->SendDebug('Kamera', 'Umwandlung leer für ' . (string) ($tile['tileId'] ?? '') . ', gespeichertes Vollbild wird nicht gesendet', 0);
+
         return null;
     }
 

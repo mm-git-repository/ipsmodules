@@ -147,35 +147,110 @@ final class HomeDisplayChart
         return self::seriesBetween($variableId, $period, 0, time());
     }
 
+    /** @var array{archive: int, logged: bool, agg: int, log: int, out: int, note: string} */
+    private static array $lastTrace = [
+        'archive' => 0,
+        'logged' => false,
+        'agg' => 0,
+        'log' => 0,
+        'out' => 0,
+        'note' => 'noData',
+    ];
+
+    /** @return array{archive: int, logged: bool, agg: int, log: int, out: int, note: string} */
+    public static function lastTrace(): array
+    {
+        return self::$lastTrace;
+    }
+
     /**
-     * Aggregierte Werte ohne Lücken. Das Archiv speichert Rohdaten nur bei Änderung;
-     * ein stiller Wert ergibt sonst keine Linie. Start liegt auf der Aggregationsgrenze,
-     * sonst liefert IP-Symcon den Zeitraum leer zurück.
+     * Aggregation mit echter Spanne bleibt die Quelle. Sonst entsteht der Stufenverlauf
+     * aus dem letzten Wert davor, den geloggten Werten und dem aktuellen Wert.
+     * Ein konstanter Verlauf wird als waagerechte Linie gezeichnet.
      *
      * @return list<float>
      */
     private static function seriesBetween(int $variableId, string $period, int $rangeStart, int $rangeEnd): array
     {
         if ($variableId <= 0 || $rangeEnd <= 0) {
+            self::rememberTrace(0, false, 0, 0, 0, 'noData');
+
+            return [];
+        }
+        $loggedFlag = self::variableLogged($variableId);
+        if (!$loggedFlag) {
+            self::rememberTrace(0, false, 0, 0, 0, 'notLogged');
+
             return [];
         }
         $archive = self::archiveId();
         if ($archive <= 0) {
+            self::rememberTrace(0, true, 0, 0, 0, 'noArchive');
+
             return [];
         }
         [$start, $level] = self::alignedWindow($period, $rangeStart, $rangeEnd);
-        $values = self::aggregatedSeries($archive, $variableId, $level, $start, $rangeEnd);
-        $span = self::seriesHasSpan($values);
-        if (!$span) {
-            $logged = self::loggedSeries($archive, $variableId, $start, $rangeEnd, 1000);
-            if (count($logged) >= 2) {
-                $values = $logged;
-            } elseif (count($values) < 2) {
-                $values = $logged;
+        $aggregated = self::aggregatedSeries($archive, $variableId, $level, $start, $rangeEnd);
+        if (self::seriesHasSpan($aggregated)) {
+            $out = self::downsample(self::roundSeries($aggregated), self::MAX_POINTS);
+            self::rememberTrace($archive, true, count($aggregated), 0, count($out), '');
+
+            return $out;
+        }
+        $prior = self::loggedSeries($archive, $variableId, 0, max(0, $start), 1);
+        $logged = self::loggedSeries($archive, $variableId, $start, $rangeEnd, 1000);
+        $values = [];
+        if ($prior !== []) {
+            $values[] = $prior[0];
+        }
+        foreach ($logged as $value) {
+            if ($values !== [] && abs($values[count($values) - 1] - $value) < 0.000001) {
+                continue;
+            }
+            $values[] = $value;
+        }
+        if ($rangeEnd >= time() - 5) {
+            $current = self::currentNumeric($variableId);
+            if ($current !== null && ($values === [] || abs($values[count($values) - 1] - $current) > 0.000001)) {
+                $values[] = $current;
             }
         }
+        if (count($values) === 1) {
+            $values[] = $values[0];
+        }
+        if (count($values) < 2) {
+            self::rememberTrace($archive, true, count($aggregated), count($logged), 0, 'noData');
 
-        return self::downsample(self::roundSeries($values), self::MAX_POINTS);
+            return [];
+        }
+        $out = self::downsample(self::roundSeries($values), self::MAX_POINTS);
+        if (count($out) < 2) {
+            $out = [round($values[0], 3), round($values[count($values) - 1], 3)];
+        }
+        self::rememberTrace($archive, true, count($aggregated), count($logged), count($out), '');
+
+        return $out;
+    }
+
+    private static function rememberTrace(int $archive, bool $logged, int $agg, int $log, int $out, string $note): void
+    {
+        self::$lastTrace = [
+            'archive' => $archive,
+            'logged' => $logged,
+            'agg' => $agg,
+            'log' => $log,
+            'out' => $out,
+            'note' => $note,
+        ];
+    }
+
+    private static function currentNumeric(int $variableId): ?float
+    {
+        if ($variableId <= 0 || !function_exists('GetValue') || !function_exists('IPS_VariableExists') || !IPS_VariableExists($variableId)) {
+            return null;
+        }
+
+        return self::numericValue(GetValue($variableId));
     }
 
     /** @param list<float> $values */

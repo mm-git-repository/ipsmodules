@@ -22,7 +22,10 @@ final class HomeDisplayPanelSchema
     public const ICONS = [
         'energy', 'temperature', 'light', 'shutter', 'pump', 'valve', 'alarm', 'home', 'clock', 'info',
         'lightOn', 'lightOff', 'humidity', 'sun', 'moon', 'water', 'heat', 'cool', 'fan', 'door', 'lock', 'plug', 'batteryIcon', 'wifi', 'car',
-        'motion', 'window', 'garage', 'smoke', 'thermostat', 'solar', 'camera', 'tv', 'speaker', 'washing', 'bed', 'bell',         'leaf', 'fire', 'kitchen', 'pool', 'hall', 'kids',
+        'motion', 'window', 'garage', 'smoke', 'thermostat', 'solar', 'camera', 'tv', 'speaker', 'washing', 'bed', 'bell', 'leaf', 'fire', 'kitchen', 'pool', 'hall', 'kids',
+        'bubbles', 'bubbleChart', 'waves', 'shutterOpen', 'valveOpen', 'valveClosed', 'pumpOff', 'doorOpen', 'doorClosed',
+        'garageOpen', 'lockOpen', 'fanOff', 'plugOff', 'bellOff', 'wifiOff', 'speakerOff', 'tvOff', 'waterOff', 'coolOff',
+        'fireOff', 'motionOff', 'smokeOff', 'windowOpen', 'blindsOpen', 'blindsClosed',
     ];
 
     public const BATTERY_LABELS = ['inside', 'left', 'right', 'top', 'bottom'];

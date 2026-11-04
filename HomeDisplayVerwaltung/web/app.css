@@ -408,6 +408,7 @@ label.small { font-size: 12px; color: var(--muted); }
   max-width: 100%;
 }
 .tile.value .value-badge-title .value-title-text {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -421,8 +422,8 @@ label.small { font-size: 12px; color: var(--muted); }
   line-height: 1;
 }
 .tile.value .value-badge-title .value-title-icon .mdi { font-size: 1em; line-height: 1; }
-.tile.value .value-badge-title.align-center { justify-content: center; }
-.tile.value .value-badge-title.align-right { justify-content: flex-end; }
+.tile.value .value-badge-title.align-center .value-title-text { text-align: center; }
+.tile.value .value-badge-title.align-right .value-title-text { text-align: right; }
 .tile.value .value-badge-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -602,8 +603,6 @@ label.small { font-size: 12px; color: var(--muted); }
   max-width: calc(100% - 8px);
   max-height: calc(100% - 8px);
 }
-.tile.camera:has(.kicker) img.live-preview { top: 26px; height: calc(100% - 34px); max-height: calc(100% - 34px); }
-.tile.camera.has-title:has(.kicker) img.live-preview { top: 52px; height: calc(100% - 60px); max-height: calc(100% - 60px); }
 .tile.camera .kicker { position: relative; z-index: 1; }
 .tile-scale .camera-preview,
 .tile.camera .camera-preview { flex: 1; display: flex; align-items: center; justify-content: center; width: 100%; border: 1px dashed #5a7391; border-radius: 0.5em; color: #9fb2c8; font-size: 1em; text-align: center; padding: 0.6em; min-height: 0; overflow: hidden; }
