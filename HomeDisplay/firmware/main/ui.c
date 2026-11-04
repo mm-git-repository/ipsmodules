@@ -1542,7 +1542,7 @@ static void show_page(int index)
             style_flat(button);
             lv_obj_set_style_bg_color(button, lv_color_hex(item == index ? accent_tab() : accent_tab_bg()), 0);
             lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
-            lv_obj_set_style_text_color(button, lv_color_hex(item == index ? 0x102033 : text_fg()), 0);
+            lv_obj_set_style_text_color(button, lv_color_hex(text_fg()), 0);
             lv_obj_t *row = lv_obj_create(button);
             lv_obj_set_size(row, TAB_W - 16, LV_SIZE_CONTENT);
             style_flat(row);
@@ -1551,13 +1551,14 @@ static void show_page(int index)
             lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
             lv_obj_set_style_pad_column(row, 4, 0);
+            lv_obj_set_style_text_color(row, lv_color_hex(text_fg()), 0);
             lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_center(row);
             const char *tab_icon = cJSON_GetStringValue(cJSON_GetObjectItem(candidate, "icon"));
             int caption_w = TAB_W - 16;
             if (tab_icon && tab_icon[0]) {
                 lv_obj_t *symbol = lv_label_create(row);
-                paint_icon_label(symbol, tab_icon, false, false, item == index ? 0x102033 : text_fg());
+                paint_icon_label(symbol, tab_icon, false, false, text_fg());
                 lv_obj_clear_flag(symbol, LV_OBJ_FLAG_CLICKABLE);
                 caption_w -= 32;
             }
@@ -1567,6 +1568,7 @@ static void show_page(int index)
             lv_label_set_long_mode(caption, LV_LABEL_LONG_DOT);
             lv_obj_set_width(caption, caption_w);
             lv_obj_set_style_text_font(caption, &lv_font_montserrat_28, 0);
+            lv_obj_set_style_text_color(caption, lv_color_hex(text_fg()), 0);
             lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_add_event_cb(button, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) item);
             tab_x += TAB_W;
