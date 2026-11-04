@@ -17,7 +17,8 @@ const ICONS = [
   ["plug", "Steckdose", 0xF06A5], ["batteryIcon", "Akku", 0xF0079], ["wifi", "WLAN", 0xF05A9], ["car", "Auto", 0xF010B],
   ["motion", "Bewegung", 0xF0D91], ["window", "Fenster", 0xF05AE], ["garage", "Garage", 0xF06D9], ["smoke", "Rauch", 0xF0392], ["thermostat", "Thermostat", 0xF0393],
   ["solar", "Solar", 0xF0A72], ["camera", "Kamera", 0xF07AE], ["tv", "Fernseher", 0xF0502], ["speaker", "Lautsprecher", 0xF04C3], ["washing", "Waschmaschine", 0xF072A],
-  ["bed", "Bett", 0xF02E3], ["bell", "Klingel", 0xF009A], ["leaf", "Blatt", 0xF032A], ["fire", "Feuer", 0xF0238]
+  ["bed", "Bett", 0xF02E3], ["bell", "Klingel", 0xF009A], ["leaf", "Blatt", 0xF032A], ["fire", "Feuer", 0xF0238],
+  ["kitchen", "Küche", 0xF04DE], ["pool", "Pool", 0xF0606], ["hall", "Gang", 0xF181E], ["kids", "Kinderzimmer", 0xF18FB]
 ];
 const DISPLAY_PROFILES = {
   "waveshare-5b-1024x600": { label: "Waveshare 5B (1024×600)", width: 1024, height: 600, defaultColumns: 3, defaultRows: 4, maxColumns: 4, maxRows: 6 },
@@ -995,13 +996,21 @@ function markDirty() {
 }
 
 function updateTitle() {
-  if (!state.layout) {
-    $("title").textContent = "";
-    return;
-  }
+  const version = state.libraryVersion || "";
+  const build = state.libraryBuild ? ` · Build ${state.libraryBuild}` : "";
   const flag = state.dirty ? " *" : "";
-  const version = state.layout.version ? ` v${state.layout.version}` : " (neu)";
-  $("title").textContent = `${state.layout.name}${version}${state.layout.published ? "" : " – Entwurf"}${flag}`;
+  $("title").textContent = version ? `${version}${build}${flag}` : "";
+}
+
+function fillTabButton(button, page, fallback) {
+  button.textContent = "";
+  if (page && page.icon) {
+    const icon = document.createElement("span");
+    icon.className = "tab-icon";
+    icon.innerHTML = iconVisual(page.icon);
+    button.appendChild(icon);
+  }
+  button.appendChild(document.createTextNode((page && (page.title || fallback)) || fallback || ""));
 }
 
 /* ---------- Menüs ---------- */
@@ -1095,7 +1104,7 @@ function renderPageTabs() {
   for (const page of state.layout.pages) {
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = page.title || pageTitle(page.id);
+    fillTabButton(button, page, pageTitle(page.id));
     if (page.id === state.page) button.classList.add("active");
     button.addEventListener("click", () => {
       state.page = page.id;
@@ -1192,20 +1201,44 @@ function renderPageBackground() {
   }
 }
 
+function isBackgroundImage(tile) {
+  return Boolean(tile && tile.kind === "image" && tile.imageBackground === true);
+}
+
+function rectsOverlap(a, b) {
+  const aw = a.colSpan || 1;
+  const ah = a.rowSpan || 1;
+  const bw = b.colSpan || 1;
+  const bh = b.rowSpan || 1;
+  return a.col < b.col + bw && b.col < a.col + aw && a.row < b.row + bh && b.row < a.row + ah;
+}
+
+function overlapAllowed(a, b) {
+  if (!a || !b) return false;
+  const background = isBackgroundImage(a) ? a : (isBackgroundImage(b) ? b : null);
+  const other = background === a ? b : a;
+  return Boolean(background) && other.kind === "value";
+}
+
 function tileAt(col, row) {
   const page = currentPage();
   if (!page) return null;
-  return page.tiles.find((tile) => col >= tile.col && col < tile.col + (tile.colSpan || 1) && row >= tile.row && row < tile.row + (tile.rowSpan || 1)) || null;
+  const hits = page.tiles.filter((tile) => col >= tile.col && col < tile.col + (tile.colSpan || 1) && row >= tile.row && row < tile.row + (tile.rowSpan || 1));
+  return hits.find((tile) => !isBackgroundImage(tile)) || hits[0] || null;
 }
 
 function fits(tile, col, row, colSpan, rowSpan, ignoreId) {
   const page = currentPage();
   if (col < 0 || row < 0 || col + colSpan > state.layout.columns || row + rowSpan > state.layout.rows) return false;
+  const moving = tile || { col, row, colSpan, rowSpan, kind: "" };
   for (const other of page.tiles) {
     if (other.tileId === ignoreId) continue;
     const overlapX = col < other.col + (other.colSpan || 1) && other.col < col + colSpan;
     const overlapY = row < other.row + (other.rowSpan || 1) && other.row < row + rowSpan;
-    if (overlapX && overlapY) return false;
+    if (!overlapX || !overlapY) continue;
+    const candidate = tile || moving;
+    if (tile && overlapAllowed(candidate, other)) continue;
+    return false;
   }
   return true;
 }
@@ -1217,6 +1250,135 @@ function freeCell(colSpan, rowSpan) {
     }
   }
   return null;
+}
+
+function rangesOverlap(a0, a1, b0, b1) {
+  return a0 < b1 && b0 < a1;
+}
+
+function tilesShareEdge(a, b) {
+  const aRight = a.col + (a.colSpan || 1);
+  const aBottom = a.row + (a.rowSpan || 1);
+  const bRight = b.col + (b.colSpan || 1);
+  const bBottom = b.row + (b.rowSpan || 1);
+  const side = (aRight === b.col || bRight === a.col) && rangesOverlap(a.row, aBottom, b.row, bBottom);
+  const end = (aBottom === b.row || bBottom === a.row) && rangesOverlap(a.col, aRight, b.col, bRight);
+  return side || end;
+}
+
+function groupBlocks(tiles) {
+  const members = (tiles || []).filter((tile) => tile.group && String(tile.group).trim() !== "");
+  const parent = members.map((_, index) => index);
+  const find = (index) => {
+    let cursor = index;
+    while (parent[cursor] !== cursor) cursor = parent[cursor];
+    return cursor;
+  };
+  for (let i = 0; i < members.length; i += 1) {
+    for (let j = i + 1; j < members.length; j += 1) {
+      if (String(members[i].group) !== String(members[j].group)) continue;
+      if (!tilesShareEdge(members[i], members[j])) continue;
+      parent[find(j)] = find(i);
+    }
+  }
+  const blocks = new Map();
+  members.forEach((tile, index) => {
+    const root = find(index);
+    if (!blocks.has(root)) blocks.set(root, []);
+    blocks.get(root).push(tile);
+  });
+  return [...blocks.values()];
+}
+
+function groupOuterSides(tile, tiles) {
+  if (!tile || !tile.group) return null;
+  const block = groupBlocks(tiles).find((item) => item.some((member) => member.tileId === tile.tileId));
+  if (!block) return null;
+  const others = block.filter((member) => member.tileId !== tile.tileId);
+  const right = tile.col + (tile.colSpan || 1);
+  const bottom = tile.row + (tile.rowSpan || 1);
+  const touches = (side) => others.some((other) => {
+    const oRight = other.col + (other.colSpan || 1);
+    const oBottom = other.row + (other.rowSpan || 1);
+    if (side === "left") return oRight === tile.col && rangesOverlap(tile.row, bottom, other.row, oBottom);
+    if (side === "right") return other.col === right && rangesOverlap(tile.row, bottom, other.row, oBottom);
+    if (side === "top") return oBottom === tile.row && rangesOverlap(tile.col, right, other.col, oRight);
+    return other.row === bottom && rangesOverlap(tile.col, right, other.col, oRight);
+  });
+  return { left: !touches("left"), right: !touches("right"), top: !touches("top"), bottom: !touches("bottom") };
+}
+
+function paintGroupFrames(grid, tiles) {
+  for (const block of groupBlocks(tiles)) {
+    const cells = [];
+    for (const tile of block) {
+      for (let row = tile.row; row < tile.row + (tile.rowSpan || 1); row += 1) {
+        for (let col = tile.col; col < tile.col + (tile.colSpan || 1); col += 1) cells.push({ col, row });
+      }
+    }
+    if (!cells.length) continue;
+    const key = new Set(cells.map((cell) => `${cell.col}:${cell.row}`));
+    const minC = Math.min(...cells.map((cell) => cell.col));
+    const maxC = Math.max(...cells.map((cell) => cell.col));
+    const minR = Math.min(...cells.map((cell) => cell.row));
+    const maxR = Math.max(...cells.map((cell) => cell.row));
+    const rectangular = cells.length === (maxC - minC + 1) * (maxR - minR + 1);
+    if (rectangular) {
+      const frame = document.createElement("div");
+      frame.className = "group-frame rect";
+      frame.style.gridColumn = `${minC + 1} / span ${maxC - minC + 1}`;
+      frame.style.gridRow = `${minR + 1} / span ${maxR - minR + 1}`;
+      grid.appendChild(frame);
+      continue;
+    }
+    for (const cell of cells) {
+      const frame = document.createElement("div");
+      frame.className = "group-frame";
+      frame.style.gridColumn = `${cell.col + 1}`;
+      frame.style.gridRow = `${cell.row + 1}`;
+      const open = {
+        left: !key.has(`${cell.col - 1}:${cell.row}`),
+        right: !key.has(`${cell.col + 1}:${cell.row}`),
+        top: !key.has(`${cell.col}:${cell.row - 1}`),
+        bottom: !key.has(`${cell.col}:${cell.row + 1}`)
+      };
+      frame.style.borderLeftWidth = open.left ? "2px" : "0";
+      frame.style.borderRightWidth = open.right ? "2px" : "0";
+      frame.style.borderTopWidth = open.top ? "2px" : "0";
+      frame.style.borderBottomWidth = open.bottom ? "2px" : "0";
+      if (open.left && open.top) frame.style.borderTopLeftRadius = "8px";
+      if (open.right && open.top) frame.style.borderTopRightRadius = "8px";
+      if (open.left && open.bottom) frame.style.borderBottomLeftRadius = "8px";
+      if (open.right && open.bottom) frame.style.borderBottomRightRadius = "8px";
+      grid.appendChild(frame);
+    }
+  }
+}
+
+function valueOverBackground(tile, tiles) {
+  if (!tile || tile.kind !== "value") return false;
+  return (tiles || []).some((other) => isBackgroundImage(other) && rectsOverlap(tile, other));
+}
+
+function applyTileLayer(element, tile, tiles) {
+  const sides = groupOuterSides(tile, tiles);
+  if (sides) {
+    if (sides.left) element.style.marginLeft = "8px";
+    if (sides.right) element.style.marginRight = "8px";
+    if (sides.top) element.style.marginTop = "8px";
+    if (sides.bottom) element.style.marginBottom = "8px";
+  }
+  if (isBackgroundImage(tile)) element.classList.add("as-background");
+  if (valueOverBackground(tile, tiles)) element.classList.add("tile-ghost");
+}
+
+function cellUnderPointer(event, grid) {
+  if (!event || !grid || !state.layout) return null;
+  const rect = grid.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return null;
+  const col = Math.min(state.layout.columns - 1, Math.max(0, Math.floor((event.clientX - rect.left) / (rect.width / state.layout.columns))));
+  const row = Math.min(state.layout.rows - 1, Math.max(0, Math.floor((event.clientY - rect.top) / (rect.height / state.layout.rows))));
+  return { col, row };
 }
 
 function renderGrid() {
@@ -1235,11 +1397,6 @@ function renderGrid() {
   }
   for (let row = 0; row < state.layout.rows; row += 1) {
     for (let col = 0; col < state.layout.columns; col += 1) {
-      const tile = page.tiles.find((item) => item.col === col && item.row === row);
-      if (tile) {
-        grid.appendChild(renderTile(tile));
-        continue;
-      }
       if (covered.has(`${col}:${row}`)) continue;
       const cell = document.createElement("div");
       cell.className = "cell";
@@ -1255,6 +1412,9 @@ function renderGrid() {
       grid.appendChild(cell);
     }
   }
+  paintGroupFrames(grid, page.tiles);
+  const ordered = [...page.tiles].sort((a, b) => (isBackgroundImage(a) ? 0 : 1) - (isBackgroundImage(b) ? 0 : 1));
+  for (const tile of ordered) grid.appendChild(renderTile(tile));
   scheduleEditorTilePreviews();
   observeTileFitRoot(grid);
   scheduleFitTileText(grid);
@@ -1477,11 +1637,16 @@ function buildTileElement(tile, context) {
         if (tile.textBold) bits.push("font-weight:700");
         const readoutStyle = bits.length ? ` style="${bits.join(";")}"` : "";
         const iconStyle = tile.textColor ? ` style="color:${tile.textColor}"` : "";
-        const place = tile.iconPlace === "none" ? "none" : (iconId ? "before" : "none");
-        const titleHtml = tile.showTitle === false ? "" : `<div class="value-badge-title ${align}"${cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic)}>${escapeHtml(label)}</div>`;
-        const iconHtml = place !== "none" ? `<div class="value-badge-icon"${iconStyle}>${iconVisual(iconId)}</div>` : `<div class="value-badge-icon"></div>`;
+        const place = tile.iconPlace === "after" ? "after" : (tile.iconPlace === "none" || !iconId ? "none" : "before");
+        const headingId = titleIconShown(tile) ? titleIconId(tile) : "";
+        const headingIcon = headingId ? `<span class="value-title-icon">${iconVisual(headingId)}</span>` : "";
+        const titleHtml = tile.showTitle === false ? "" : `<div class="value-badge-title ${align}"${cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic)}>${headingIcon}<span class="value-title-text">${escapeHtml(label)}</span></div>`;
+        const valueIcon = place === "none" ? "" : `<span class="value-inline-icon"${iconStyle}>${iconVisual(iconId)}</span>`;
+        const readoutInner = place === "after"
+          ? `<span class="value-readout-text">${escapeHtml(readout)}</span>${valueIcon}`
+          : `${valueIcon}<span class="value-readout-text">${escapeHtml(readout)}</span>`;
         const ageHtml = tile.showAge ? `<div class="age-line">${escapeHtml((live && live.age) || "vor 4 min")}</div>` : "";
-        element.innerHTML = `${editorKicker(mode, kicker)}<div class="value-badge">${titleHtml}${iconHtml}<div class="value-readout"${readoutStyle}>${escapeHtml(readout)}</div>${ageHtml}</div>`;
+        element.innerHTML = `${editorKicker(mode, kicker)}<div class="value-badge">${titleHtml}<div class="value-badge-body"><div class="value-readout-row"><div class="value-readout"${readoutStyle}>${readoutInner}</div>${ageHtml}</div></div></div>`;
         cardBody = null;
       } else {
         cardBody = body || "";
@@ -1719,6 +1884,8 @@ function buildTileElement(tile, context) {
     badge.textContent = `${spanW}×${spanH}`;
     element.appendChild(badge);
   }
+  const layerTiles = (context && context.pageTiles) || (currentPage() ? currentPage().tiles : []);
+  applyTileLayer(element, tile, layerTiles);
   return element;
 }
 
@@ -1801,6 +1968,7 @@ function applyDimVisual(element, pct, tile) {
 }
 
 function bindTileControls(element, tile, mode, live) {
+  if (mode === "edit") return;
   const control = tile.control || "";
   const iconSwitch = (tileInteractionMode(tile) === "switch" || tile.kind === "scene") && tile.showIcon !== false && Boolean(tile.actionId);
   const stop = (event) => {
@@ -1960,24 +2128,42 @@ function bindDrop(target, col, row, existing) {
     const control = event.dataTransfer.getData("text/homedisplay-control");
     const variableId = Number(event.dataTransfer.getData("text/homedisplay-variable"));
     if (movedId) {
-      moveTile(movedId, col, row, existing);
+      let dropCol = col;
+      let dropRow = row;
+      let dropTarget = existing;
+      if (existing && isBackgroundImage(existing)) {
+        const hit = cellUnderPointer(event, target.closest("#grid") || target.parentElement);
+        if (hit) {
+          dropCol = hit.col;
+          dropRow = hit.row;
+        }
+        dropTarget = null;
+      }
+      moveTile(movedId, dropCol, dropRow, dropTarget);
       return;
     }
     if (variableId) {
       const variable = variableById(variableId);
-      if (existing) return;
-      if (!existing && isMediaPick(variable)) {
-        addTile("image", col, row, variable);
+      const onBackground = existing && isBackgroundImage(existing);
+      const hit = onBackground ? cellUnderPointer(event, target.closest("#grid") || target.parentElement) : null;
+      const placeCol = hit ? hit.col : col;
+      const placeRow = hit ? hit.row : row;
+      if (existing && !onBackground) return;
+      if (isMediaPick(variable)) {
+        addTile("image", placeCol, placeRow, variable);
         return;
       }
-      if (!existing && isImageUrlRef(variable)) {
-        addTile("camera", col, row, variable);
+      if (isImageUrlRef(variable)) {
+        addTile("camera", placeCol, placeRow, variable);
         return;
       }
-      if (!existing) addTile("value", col, row, variable);
+      addTile("value", placeCol, placeRow, variable);
       return;
     }
-    if (kind && !existing) addTile(kind, col, row, null, control);
+    if (kind && (!existing || isBackgroundImage(existing))) {
+      const hit = existing && isBackgroundImage(existing) ? cellUnderPointer(event, target.closest("#grid") || target.parentElement) : null;
+      addTile(kind, hit ? hit.col : col, hit ? hit.row : row, null, control);
+    }
   });
 }
 
@@ -2837,8 +3023,11 @@ function renderProperties() {
     $("p-image-catalog").classList.toggle("hidden", imgSource === "media");
     $("p-image-media").classList.toggle("hidden", imgSource !== "media");
   }
-  fillImageSelect($("p-image"));
-  $("p-image").value = tile.imageId || "";
+  if ($("p-image")) {
+    fillImageSelect($("p-image"));
+    $("p-image").value = tile.imageId || "";
+  }
+  if ($("p-image-background")) $("p-image-background").checked = tile.imageBackground === true;
   const image = state.images.find((item) => item.id === tile.imageId);
   $("p-image-preview").src = image ? `images/${image.id}.${image.ext}` : "";
   $("p-image-preview").classList.toggle("hidden", !image || imgSource === "media");
@@ -3167,6 +3356,8 @@ function applyProperties() {
       tile.imageId = $("p-image").value;
       delete tile.variableId;
     }
+    tile.imageBackground = $("p-image-background") ? $("p-image-background").checked : false;
+    if (!tile.imageBackground) delete tile.imageBackground;
   }
   if (tile.kind === "camera" && $("p-camerasource")) {
     const source = $("p-camerasource").value || "url";
@@ -3243,6 +3434,7 @@ if ($("p-imagesource")) {
     applyProperties();
   });
 }
+if ($("p-image-background")) $("p-image-background").addEventListener("change", applyProperties);
 for (const id of ["resize-1x1", "resize-2x1", "resize-1x2", "resize-2x2", "resize-full-width"]) {
   const button = $(id);
   if (!button) continue;
@@ -4508,7 +4700,7 @@ function renderProbe() {
     for (const page of layout.pages.slice(0, 6)) {
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = page.title || page.id;
+      fillTabButton(button, page, page.id);
       if (page.id === probe.page) button.classList.add("active");
       button.addEventListener("click", () => {
         probe.page = page.id;
@@ -4523,9 +4715,13 @@ function renderProbe() {
   applyPageBackground(grid, current || null);
   grid.style.gridTemplateColumns = `repeat(${layout.columns || 2}, 1fr)`;
   grid.style.gridTemplateRows = `repeat(${layout.rows || 4}, 1fr)`;
-  for (const tile of (current && current.tiles) || []) {
+  const pageTiles = (current && current.tiles) || [];
+  paintGroupFrames(grid, pageTiles);
+  const ordered = [...pageTiles].sort((a, b) => (isBackgroundImage(a) ? 0 : 1) - (isBackgroundImage(b) ? 0 : 1));
+  for (const tile of ordered) {
     const element = buildTileElement(tile, {
       mode: "probe",
+      pageTiles,
       stateByTileId: values,
       probeImageUrls: probe.probeImageUrls,
       probeImageErrors: probe.probeImageErrors,
@@ -4740,12 +4936,8 @@ $("probe-panel").addEventListener("change", () => {
   loadProbe(true).catch((error) => setStatus(error.message));
 });
 $("probe-refresh").addEventListener("click", () => loadProbe(true).catch((error) => setStatus(error.message)));
-$("probe-home").addEventListener("click", () => {
-  const layout = probe.snapshot && probe.snapshot.layout;
-  const first = layout && layout.pages && layout.pages[0];
-  if (!first) return;
-  probe.page = first.id;
-  renderProbe();
+$("probe-home").addEventListener("dblclick", () => {
+  loadProbe(true).catch((error) => setStatus(error.message));
 });
 $("open-probe").addEventListener("click", openProbe);
 
@@ -4772,6 +4964,9 @@ async function start() {
   try {
     const settings = await call("settings");
     state.previewPanelId = settings.panels && settings.panels[0] ? settings.panels[0].id : 0;
+    state.libraryVersion = settings.libraryVersion || "";
+    state.libraryBuild = settings.libraryBuild || 0;
+    updateTitle();
     state.catalog = await call("catalog");
     const variables = await call("variables");
     state.variables = (variables.variables || []).filter((variable) => {

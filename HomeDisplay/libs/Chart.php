@@ -165,15 +165,37 @@ final class HomeDisplayChart
         }
         [$start, $level] = self::alignedWindow($period, $rangeStart, $rangeEnd);
         $values = self::aggregatedSeries($archive, $variableId, $level, $start, $rangeEnd);
-        if (count($values) < 2) {
+        $span = self::seriesHasSpan($values);
+        if (!$span) {
             $logged = self::loggedSeries($archive, $variableId, $start, $rangeEnd, 1000);
-            if (count($logged) > count($values)) {
+            if (count($logged) >= 2) {
+                $values = $logged;
+            } elseif (count($values) < 2) {
                 $values = $logged;
             }
         }
-        $values = self::ensureSpan($archive, $variableId, $start, $values);
 
         return self::downsample(self::roundSeries($values), self::MAX_POINTS);
+    }
+
+    /** @param list<float> $values */
+    private static function seriesHasSpan(array $values): bool
+    {
+        if (count($values) < 2) {
+            return false;
+        }
+        $min = $values[0];
+        $max = $values[0];
+        foreach ($values as $value) {
+            if ($value < $min) {
+                $min = $value;
+            }
+            if ($value > $max) {
+                $max = $value;
+            }
+        }
+
+        return ($max - $min) > 0.000001;
     }
 
     /** @return array{0: int, 1: int} Start auf der Grenze, dazu die Aggregationsstufe. */
@@ -224,9 +246,6 @@ final class HomeDisplayChart
                 continue;
             }
             $out[] = round($value, 3);
-        }
-        if (count($out) === 1) {
-            $out[] = $out[0];
         }
 
         return $out;

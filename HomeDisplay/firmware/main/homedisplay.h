@@ -7,7 +7,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_touch.h"
 
-#define HOMEDISPLAY_FIRMWARE_VERSION "0.6.30"
+#define HOMEDISPLAY_FIRMWARE_VERSION "0.6.31"
 #define HOMEDISPLAY_LCD_H_RES 1024
 #define HOMEDISPLAY_LCD_V_RES 600
 
@@ -28,7 +28,7 @@ void homedisplay_ui_apply_layout(const char *json);
 bool homedisplay_ui_layout_ready(void);
 void homedisplay_ui_apply_config(const char *json);
 void homedisplay_ui_apply_state(const char *json);
-void homedisplay_ui_refresh_camera(const char *tile_id, const char *file);
+bool homedisplay_ui_refresh_camera(const char *tile_id, const char *file);
 void homedisplay_ui_refresh_image(const char *tile_id, const char *file);
 void homedisplay_ui_set_time(int64_t unix_time);
 void homedisplay_ui_set_action(homedisplay_action_fn callback);
@@ -47,6 +47,7 @@ void homedisplay_provision_start(void);
 
 /* Adapter-Client und OTA */
 void homedisplay_client_start(void);
+void homedisplay_client_reload_layout(void);
 esp_err_t homedisplay_ota_run(const char *url, const char *token, const char *sha256_hex, const char *signature_b64, int *progress);
 
 /* NVS-Zugriff für alle Module */

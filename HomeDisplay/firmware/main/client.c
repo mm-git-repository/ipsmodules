@@ -37,7 +37,16 @@ typedef struct {
 static char base_url[160];
 static char token[40];
 static char pairing_code[8];
+static volatile bool layout_reload_now;
 static char layout_sha[80];
+static void remember(const char *key, const char *value);
+
+void homedisplay_client_reload_layout(void)
+{
+    layout_sha[0] = '\0';
+    remember("layout_sha", "");
+    layout_reload_now = true;
+}
 static char config_sha[80];
 static char firmware_sha[80];
 static char firmware_signature[700];
@@ -581,11 +590,67 @@ static bool layout_tile_is_live(cJSON *layout, const char *tile_id)
     return false;
 }
 
+static bool camera_fetching;
+
+static void camera_slot_name(const char *file, char which, char *out, size_t length)
+{
+    const char *base = file ? file : "cam";
+    const char *slash = strrchr(base, '/');
+    if (slash) base = slash + 1;
+    const char *dot = strrchr(base, '.');
+    char stem[48];
+    const char *ext = ".jpg";
+    if (dot && dot != base) {
+        size_t count = (size_t) (dot - base);
+        if (count >= sizeof(stem)) count = sizeof(stem) - 1;
+        memcpy(stem, base, count);
+        stem[count] = '\0';
+        ext = dot;
+    } else {
+        snprintf(stem, sizeof(stem), "%s", base);
+    }
+    snprintf(out, length, "%s-%c%s", stem, which, ext);
+}
+
+static cam_stamp_entry_t camera_files[CAM_STAMP_MAX];
+
+static char camera_next_slot(const char *tile_id)
+{
+    for (int index = 0; index < CAM_STAMP_MAX; index++) {
+        if (camera_files[index].id[0] && strcmp(camera_files[index].id, tile_id) == 0) {
+            return camera_files[index].stamp == 'b' ? 'a' : 'b';
+        }
+    }
+    return 'a';
+}
+
+static void camera_mark_shown(const char *tile_id, char which)
+{
+    for (int index = 0; index < CAM_STAMP_MAX; index++) {
+        if (camera_files[index].id[0] && strcmp(camera_files[index].id, tile_id) == 0) {
+            camera_files[index].stamp = which;
+            return;
+        }
+    }
+    for (int index = 0; index < CAM_STAMP_MAX; index++) {
+        if (!camera_files[index].id[0]) {
+            snprintf(camera_files[index].id, sizeof(camera_files[index].id), "%s", tile_id);
+            camera_files[index].stamp = which;
+            return;
+        }
+    }
+}
+
 static void fetch_one_camera(const char *tile_id, const char *file, bool quiet)
 {
     if (!tile_id || !tile_id[0] || !file || !file[0]) return;
+    if (camera_fetching) return;
+    camera_fetching = true;
+    char which = camera_next_slot(tile_id);
+    char name[72];
+    camera_slot_name(file, which, name, sizeof(name));
     char target[96];
-    snprintf(target, sizeof(target), "/storage/%s", file);
+    snprintf(target, sizeof(target), "/storage/%s", name);
     char path[80];
     snprintf(path, sizeof(path), "/v1/camera/%s", tile_id);
     if (!quiet) {
@@ -594,15 +659,14 @@ static void fetch_one_camera(const char *tile_id, const char *file, bool quiet)
         homedisplay_ui_status(status);
     }
     ESP_LOGI(TAG, "Kamera laden %s", tile_id);
-    /* Läuft im Hintergrund-Task: großzügiges Timeout, da ONVIF-Snapshots mit
-       Retry im Modul mehrere Sekunden brauchen können, bevor sie fertig sind. */
     int timeout = quiet ? 4000 : 20000;
-    if (download_to_file(path, target, timeout, 900 * 1024) != ESP_OK) {
+    if (download_to_file(path, target, timeout, 900 * 1024) == ESP_OK) {
+        ESP_LOGI(TAG, "Kamera geladen %s", tile_id);
+        if (homedisplay_ui_refresh_camera(tile_id, name)) camera_mark_shown(tile_id, which);
+    } else {
         ESP_LOGW(TAG, "Kamera %s konnte nicht geladen werden", tile_id);
-        return;
     }
-    ESP_LOGI(TAG, "Kamera geladen %s", tile_id);
-    homedisplay_ui_refresh_camera(tile_id, file);
+    camera_fetching = false;
 }
 
 static cJSON *read_layout_cache(void)
@@ -1212,6 +1276,11 @@ static void client_task(void *argument)
             homedisplay_serial_poll();
             if (send_queued_action()) break;
             if (homedisplay_ui_take_refresh()) break;
+            if (layout_reload_now) {
+                layout_reload_now = false;
+                pull_manifest(response, response_length);
+                break;
+            }
             if (online) fetch_live_cameras();
             vTaskDelay(pdMS_TO_TICKS(120));
         }

@@ -1013,7 +1013,7 @@ class HomeDisplay extends IPSModuleStrict
      * @param array<string, mixed> $layout
      * @return array<string, mixed>
      */
-    private function stateForLayout(array $layout, int $instanceId, int $since): array
+    private function stateForLayout(array $layout, int $instanceId, int $since, bool $compactCharts = false): array
     {
         $runtime = $this->runtime();
         $pending = $runtime[(string) $instanceId]['pending'] ?? [];
@@ -1071,7 +1071,7 @@ class HomeDisplay extends IPSModuleStrict
                     continue;
                 }
                 if ($kind === 'chart') {
-                    $tiles[] = $this->chartStateTile($tile, $tileId, $instanceId);
+                    $tiles[] = $this->chartStateTile($tile, $tileId, $instanceId, $compactCharts);
                     continue;
                 }
                 if ($kind === 'scene') {
@@ -1174,15 +1174,14 @@ class HomeDisplay extends IPSModuleStrict
     /** @param array<string, mixed> $tile @return array<string, mixed> */
     private function chartStateTile(array $tile, string $tileId, int $instanceId, bool $compact = false): array
     {
-        $refresh = max(0, (int) ($tile['chartRefreshSec'] ?? 0));
-        $cacheKey = $instanceId . ':' . $tileId . ($compact ? ':c' : '');
-        if ($refresh > 0) {
-            $cached = $this->chartStateCache[$cacheKey] ?? null;
-            if (is_array($cached) && (time() - (int) $cached['at']) < $refresh && is_array($cached['payload'])) {
-                return $cached['payload'];
-            }
-        }
         $period = HomeDisplayChart::normalizePeriod((string) ($tile['chartPeriod'] ?? '24h'));
+        $refresh = max(0, (int) ($tile['chartRefreshSec'] ?? 0));
+        $ttl = $refresh > 0 ? $refresh : ($period === '1h' ? 30 : 60);
+        $cacheKey = $instanceId . ':' . $tileId . ($compact ? ':c' : '');
+        $cached = $this->chartStateCache[$cacheKey] ?? null;
+        if (is_array($cached) && (time() - (int) $cached['at']) < $ttl && is_array($cached['payload'])) {
+            return $cached['payload'];
+        }
         $defs = HomeDisplayChart::seriesDefinitions($tile);
         $primaryId = $defs !== [] ? (int) $defs[0]['variableId'] : (int) ($tile['variableId'] ?? 0);
         $text = '—';
@@ -1200,23 +1199,6 @@ class HomeDisplay extends IPSModuleStrict
             }
         }
         $series = $seriesList !== [] ? $seriesList[0] : [];
-        if (count($series) < 2 && $primaryId > 0 && IPS_VariableExists($primaryId)) {
-            $rawNow = GetValue($primaryId);
-            $current = null;
-            if (is_bool($rawNow)) {
-                $current = $rawNow ? 1.0 : 0.0;
-            } elseif (is_int($rawNow) || is_float($rawNow) || (is_string($rawNow) && is_numeric($rawNow))) {
-                $current = (float) $rawNow;
-            }
-            if ($current !== null) {
-                $series = [$current, $current];
-                if ($seriesList === []) {
-                    $seriesList = [$series];
-                } else {
-                    $seriesList[0] = $series;
-                }
-            }
-        }
         if ($primaryId > 0 && IPS_VariableExists($primaryId)) {
             $text = $this->formatVariable($primaryId, $tile);
             $raw = GetValue($primaryId);
@@ -1247,9 +1229,7 @@ class HomeDisplay extends IPSModuleStrict
         if ($compact) {
             unset($payload['seriesAll'], $payload['seriesYesterday']);
         }
-        if ($refresh > 0) {
-            $this->chartStateCache[$cacheKey] = ['at' => time(), 'payload' => $payload];
-        }
+        $this->chartStateCache[$cacheKey] = ['at' => time(), 'payload' => $payload];
 
         return $payload;
     }

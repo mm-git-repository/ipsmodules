@@ -22,7 +22,7 @@ final class HomeDisplayPanelSchema
     public const ICONS = [
         'energy', 'temperature', 'light', 'shutter', 'pump', 'valve', 'alarm', 'home', 'clock', 'info',
         'lightOn', 'lightOff', 'humidity', 'sun', 'moon', 'water', 'heat', 'cool', 'fan', 'door', 'lock', 'plug', 'batteryIcon', 'wifi', 'car',
-        'motion', 'window', 'garage', 'smoke', 'thermostat', 'solar', 'camera', 'tv', 'speaker', 'washing', 'bed', 'bell', 'leaf', 'fire',
+        'motion', 'window', 'garage', 'smoke', 'thermostat', 'solar', 'camera', 'tv', 'speaker', 'washing', 'bed', 'bell',         'leaf', 'fire', 'kitchen', 'pool', 'hall', 'kids',
     ];
 
     public const BATTERY_LABELS = ['inside', 'left', 'right', 'top', 'bottom'];
@@ -342,6 +342,9 @@ final class HomeDisplayPanelSchema
                         $public['imageSource'] = 'catalog';
                         $public['imageId'] = $imageId;
                         $public['imageFile'] = HomeDisplayCatalogStore::imageFileName($imageId);
+                    }
+                    if (!empty($tile['imageBackground'])) {
+                        $public['imageBackground'] = true;
                     }
                 }
                 if ($kind === 'camera') {

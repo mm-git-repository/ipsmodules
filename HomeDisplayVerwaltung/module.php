@@ -258,6 +258,16 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
     /** @return array<string, mixed> */
     private function settings(): array
     {
+        $libraryVersion = '1.8';
+        $libraryBuild = 0;
+        $libraryFile = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'library.json';
+        if (is_file($libraryFile)) {
+            $decoded = json_decode((string) file_get_contents($libraryFile), true);
+            if (is_array($decoded)) {
+                $libraryVersion = (string) ($decoded['version'] ?? $libraryVersion);
+                $libraryBuild = (int) ($decoded['build'] ?? 0);
+            }
+        }
         $instance = $this->serviceInstance();
         $panels = [];
         foreach ($this->panelIds() as $id) {
@@ -286,6 +296,8 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             'serviceInstanceName' => $instance > 0 ? IPS_GetName($instance) : '',
             'adminUrl' => $this->pageUrl(),
             'panels' => $panels,
+            'libraryVersion' => $libraryVersion,
+            'libraryBuild' => $libraryBuild,
         ];
     }
 

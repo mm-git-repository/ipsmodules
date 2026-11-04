@@ -667,17 +667,17 @@ final class HomeDisplayMedia
     public static function normalizeCameraBinary(string $binary, int $maxWidth = 0, int $maxHeight = 0, string $fit = 'cover', int $quality = 80): string
     {
         if ($binary === '' || !function_exists('imagecreatefromstring')) {
-            return $binary;
+            return '';
         }
         $source = @imagecreatefromstring($binary);
         if ($source === false) {
-            return $binary;
+            return '';
         }
         $width = imagesx($source);
         $height = imagesy($source);
         if ($width <= 0 || $height <= 0) {
             imagedestroy($source);
-            return $binary;
+            return '';
         }
         if ($maxWidth < 16) {
             $maxWidth = 1024;
@@ -735,7 +735,7 @@ final class HomeDisplayMedia
         if ($ok && is_string($encoded) && $encoded !== '') {
             return $encoded;
         }
-        return $binary;
+        return '';
     }
 
     /** @param array<string, mixed> $tile */

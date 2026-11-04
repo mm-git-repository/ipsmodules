@@ -66,6 +66,7 @@ typedef struct {
     lv_obj_t *battery_fill;
     lv_obj_t *camera_img;
     lv_obj_t *image_img;
+    bool image_backdrop;
     lv_obj_t *chart_line;
     lv_point_t *chart_points;
     int chart_w;
@@ -103,6 +104,8 @@ typedef struct {
     bool text_underline;
     bool value_row;
     bool show_title_row;
+    lv_obj_t *title_row;
+    lv_obj_t *value_box;
     char row_align[8];
     char icon_place[8];
     char title_icon_name[24];
@@ -252,6 +255,23 @@ static cJSON *layout_root;
 static tile_view_t tiles[TILE_MAX];
 static int tile_count;
 static int page_index;
+static char persisted_page_id[24];
+static bool persisted_page_loaded;
+
+static void ensure_persisted_page(void)
+{
+    if (persisted_page_loaded) return;
+    persisted_page_loaded = true;
+    homedisplay_nvs_get("page", persisted_page_id, sizeof(persisted_page_id));
+}
+
+static void store_page_id(const char *id)
+{
+    if (!id) id = "";
+    if (strcmp(persisted_page_id, id) == 0) return;
+    snprintf(persisted_page_id, sizeof(persisted_page_id), "%s", id);
+    homedisplay_nvs_set("page", persisted_page_id);
+}
 static int columns = 2;
 static int idle_mode;
 static char idle_clock_style[12] = "digital";
@@ -458,6 +478,7 @@ static const icon_cp_t ICON_CP[] = {
     {"garage", 0xF06D9}, {"smoke", 0xF0392}, {"thermostat", 0xF0393}, {"solar", 0xF0A72}, {"camera", 0xF07AE},
     {"tv", 0xF0502}, {"speaker", 0xF04C3}, {"washing", 0xF072A}, {"bed", 0xF02E3}, {"bell", 0xF009A},
     {"leaf", 0xF032A}, {"fire", 0xF0238},
+    {"kitchen", 0xF04DE}, {"pool", 0xF0606}, {"hall", 0xF181E}, {"kids", 0xF18FB},
 };
 
 static const char *pua(unsigned cp)
@@ -518,7 +539,51 @@ static void refresh_icons(tile_view_t *tile, bool on)
 
 static const lv_font_t *font_for(int px, bool bold, bool italic);
 
-/* Überschrift oben, Icon füllt die Restfläche, Wert unten. */
+/* Symbol auf die Zeilenhöhe zoomen. Die Slot-Breite entspricht dieser Höhe. */
+static void fit_icon_in_slot(lv_obj_t *label, int target_px)
+{
+    if (!label || target_px < 8) return;
+    bool large = target_px > 36;
+    int base = large ? 48 : 28;
+    lv_obj_set_style_text_font(label, large ? &mdi_48 : &mdi_28, 0);
+    int zoom = (target_px * 256) / base;
+    if (zoom < 80) zoom = 80;
+    if (zoom > 640) zoom = 640;
+    lv_obj_set_style_transform_zoom(label, zoom, 0);
+    lv_obj_set_style_transform_pivot_x(label, base / 2, 0);
+    lv_obj_set_style_transform_pivot_y(label, base / 2, 0);
+    lv_obj_t *slot = lv_obj_get_parent(label);
+    if (slot) lv_obj_set_size(slot, target_px, target_px);
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+}
+
+static lv_obj_t *make_icon_slot(lv_obj_t *parent, tile_view_t *view, const char *icon, lv_obj_t **label_out)
+{
+    lv_obj_t *slot = lv_obj_create(parent);
+    lv_obj_set_size(slot, 28, 28);
+    style_flat(slot);
+    lv_obj_set_style_bg_opa(slot, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(slot, 0, 0);
+    lv_obj_clear_flag(slot, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *label = lv_label_create(slot);
+    if (label_out) *label_out = label;
+    show_icon_label(label, view, icon, false, false);
+    lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+    return slot;
+}
+
+static lv_coord_t text_width_capped(const char *text, const lv_font_t *font, lv_coord_t max_w)
+{
+    lv_point_t size;
+    lv_txt_get_size(&size, text && text[0] ? text : " ", font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_coord_t width = size.x + 2;
+    if (width > max_w) width = max_w;
+    if (width < 8) width = 8;
+    return width;
+}
+
+/* Überschrift als Icon-vor-Text-Zeile. Zahl und Symbol darunter vertikal mittig. */
 static void layout_value_row(tile_view_t *view)
 {
     if (!view || !view->value_row || !view->label || !view->card) return;
@@ -531,56 +596,60 @@ static void layout_value_row(tile_view_t *view)
     const lv_font_t *font = font_for(view->text_px ? view->text_px : 28, view->text_bold, view->text_italic);
     lv_obj_set_style_text_font(view->label, font, 0);
     lv_coord_t text_h = lv_font_get_line_height(font);
-    lv_coord_t age_h = (view->show_age && view->age_label) ? lv_font_get_line_height(&lv_font_montserrat_16) + 2 : 0;
     const lv_font_t *title_font = font_for(view->title_px ? view->title_px : 28, view->title_bold, view->title_italic);
-    lv_coord_t title_h = view->show_title_row ? lv_font_get_line_height(title_font) + 4 : 0;
-    lv_coord_t free_top = title_h;
-    lv_coord_t free_h = inner_h - title_h - text_h - age_h - 2;
-    if (free_h < 8) free_h = 8;
+    lv_coord_t title_h = 0;
+    if (view->show_title_row && view->title_row) {
+        title_h = lv_font_get_line_height(title_font);
+        lv_obj_set_size(view->title_row, inner_w, title_h);
+        lv_obj_align(view->title_row, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_flex_align_t main_align = LV_FLEX_ALIGN_START;
+        if (strcmp(view->row_align, "center") == 0) main_align = LV_FLEX_ALIGN_CENTER;
+        else if (strcmp(view->row_align, "right") == 0) main_align = LV_FLEX_ALIGN_END;
+        lv_obj_set_flex_align(view->title_row, main_align, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        if (view->title_icon) fit_icon_in_slot(view->title_icon, (int) title_h);
+        if (view->title_label) {
+            lv_obj_set_style_text_font(view->title_label, title_font, 0);
+            lv_coord_t icon_w = view->title_icon ? title_h + 4 : 0;
+            lv_coord_t max_text = inner_w - icon_w;
+            if (max_text < 8) max_text = 8;
+            lv_obj_set_width(view->title_label, text_width_capped(lv_label_get_text(view->title_label), title_font, max_text));
+            lv_label_set_long_mode(view->title_label, LV_LABEL_LONG_DOT);
+        }
+        lv_obj_move_foreground(view->title_row);
+    }
 
     bool want_icon = view->icon_label && view->icon_name[0] && strcmp(view->icon_place, "none") != 0;
-    int icon_px = 0;
-    if (want_icon) {
-        icon_px = inner_w < free_h ? (int) inner_w : (int) free_h;
-        if (icon_px < 28) {
-            want_icon = false;
-            icon_px = 0;
-        }
-    }
     if (view->icon_label) {
+        lv_obj_t *slot = lv_obj_get_parent(view->icon_label);
         if (want_icon) {
             lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
-            view->icon_large = true;
-            show_icon_label(view->icon_label, view, view->icon_name, false, true);
-            int zoom = (icon_px * 256) / 48;
-            if (zoom < 128) zoom = 128;
-            if (zoom > 3072) zoom = 3072;
-            lv_obj_set_style_transform_zoom(view->icon_label, zoom, 0);
-            lv_obj_set_style_transform_pivot_x(view->icon_label, 24, 0);
-            lv_obj_set_style_transform_pivot_y(view->icon_label, 24, 0);
-            lv_coord_t icon_x = (inner_w - 48) / 2;
-            lv_coord_t icon_y = free_top + (free_h - 48) / 2;
-            if (icon_x < 0) icon_x = 0;
-            if (icon_y < free_top) icon_y = free_top;
-            lv_obj_align(view->icon_label, LV_ALIGN_TOP_LEFT, icon_x, icon_y);
+            if (slot && slot != view->card) lv_obj_clear_flag(slot, LV_OBJ_FLAG_HIDDEN);
+            show_icon_label(view->icon_label, view, view->icon_name, false, text_h > 36);
+            fit_icon_in_slot(view->icon_label, (int) text_h);
         } else {
             lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_style_transform_zoom(view->icon_label, 256, 0);
+            if (slot && slot != view->card) lv_obj_add_flag(slot, LV_OBJ_FLAG_HIDDEN);
         }
     }
 
-    lv_obj_set_width(view->label, inner_w);
+    lv_coord_t icon_w = want_icon ? text_h + 6 : 0;
+    lv_coord_t max_value = inner_w - icon_w;
+    if (max_value < 8) max_value = 8;
+    lv_obj_set_width(view->label, text_width_capped(lv_label_get_text(view->label), font, max_value));
     lv_label_set_long_mode(view->label, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(view->label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(view->label, LV_ALIGN_BOTTOM_MID, 0, -age_h);
+
+    if (view->value_box) {
+        lv_coord_t box_h = inner_h - title_h;
+        if (box_h < text_h) box_h = text_h;
+        lv_obj_set_size(view->value_box, inner_w, box_h);
+        lv_obj_align(view->value_box, LV_ALIGN_TOP_LEFT, 0, title_h);
+    }
     if (view->age_label) {
         lv_obj_set_width(view->age_label, inner_w);
         lv_obj_set_style_text_font(view->age_label, &lv_font_montserrat_16, 0);
         lv_obj_set_style_text_align(view->age_label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(view->age_label, LV_ALIGN_BOTTOM_MID, 0, 0);
-        lv_obj_move_foreground(view->age_label);
     }
-    if (view->title_label) lv_obj_move_foreground(view->title_label);
 }
 
 static void hold_target(tile_view_t *tile, int value)
@@ -904,6 +973,22 @@ static void page_event(lv_event_t *event)
     show_page((int) (intptr_t) lv_event_get_user_data(event));
 }
 
+static int64_t home_tap_at;
+
+static void home_event(lv_event_t *event)
+{
+    (void) event;
+    note_touch();
+    if (locked) return;
+    int64_t now = esp_timer_get_time();
+    if (home_tap_at != 0 && now - home_tap_at < 400000) {
+        home_tap_at = 0;
+        homedisplay_client_reload_layout();
+        return;
+    }
+    home_tap_at = now;
+}
+
 static void gesture_event(lv_event_t *event)
 {
     (void) event;
@@ -1172,7 +1257,8 @@ static bool jpeg_sof_size(const char *file, int *width, int *height)
         bool sof = (marker >= 0xC0 && marker <= 0xC3) || (marker >= 0xC5 && marker <= 0xC7)
             || (marker >= 0xC9 && marker <= 0xCB) || (marker >= 0xCD && marker <= 0xCF);
         if (sof) {
-            if (len >= 7 && fread(buf, 1, 5, fp) == 5) {
+            bool progressive = marker == 0xC2 || marker == 0xC6 || marker == 0xCA || marker == 0xCE;
+            if (!progressive && len >= 7 && fread(buf, 1, 5, fp) == 5) {
                 *height = (buf[1] << 8) | buf[2];
                 *width = (buf[3] << 8) | buf[4];
                 ok = *width > 0 && *height > 0;
@@ -1213,6 +1299,189 @@ static void show_background(cJSON *page)
     }
 }
 
+static bool tile_rects_overlap(cJSON *a, cJSON *b)
+{
+    int ac = json_int(a, "col", 0);
+    int ar = json_int(a, "row", 0);
+    int aw = json_int(a, "colSpan", 1);
+    int ah = json_int(a, "rowSpan", 1);
+    int bc = json_int(b, "col", 0);
+    int br = json_int(b, "row", 0);
+    int bw = json_int(b, "colSpan", 1);
+    int bh = json_int(b, "rowSpan", 1);
+    if (aw < 1) aw = 1;
+    if (ah < 1) ah = 1;
+    if (bw < 1) bw = 1;
+    if (bh < 1) bh = 1;
+    return ac < bc + bw && bc < ac + aw && ar < br + bh && br < ar + ah;
+}
+
+static bool group_edges_touch(cJSON *a, cJSON *b)
+{
+    const char *ga = cJSON_GetStringValue(cJSON_GetObjectItem(a, "group"));
+    const char *gb = cJSON_GetStringValue(cJSON_GetObjectItem(b, "group"));
+    if (!ga || !gb || !ga[0] || strcmp(ga, gb) != 0) return false;
+    int ac = json_int(a, "col", 0);
+    int ar = json_int(a, "row", 0);
+    int aw = json_int(a, "colSpan", 1);
+    int ah = json_int(a, "rowSpan", 1);
+    int bc = json_int(b, "col", 0);
+    int br = json_int(b, "row", 0);
+    int bw = json_int(b, "colSpan", 1);
+    int bh = json_int(b, "rowSpan", 1);
+    if (aw < 1) aw = 1;
+    if (ah < 1) ah = 1;
+    if (bw < 1) bw = 1;
+    if (bh < 1) bh = 1;
+    bool side = (ac + aw == bc || bc + bw == ac) && ar < br + bh && br < ar + ah;
+    bool end = (ar + ah == br || br + bh == ar) && ac < bc + bw && bc < ac + aw;
+    return side || end;
+}
+
+static int group_root(int *parent, int index)
+{
+    while (parent[index] != index) index = parent[index];
+    return index;
+}
+
+static void group_insets(cJSON *page, cJSON *tile, int *left, int *right, int *top, int *bottom)
+{
+    *left = *right = *top = *bottom = 0;
+    const char *group = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "group"));
+    if (!group || !group[0] || !page) return;
+    cJSON *items[24];
+    int count = 0;
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, cJSON_GetObjectItem(page, "tiles")) {
+        const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(item, "group"));
+        if (name && strcmp(name, group) == 0 && count < 24) items[count++] = item;
+    }
+    int parent[24];
+    for (int index = 0; index < count; index++) parent[index] = index;
+    for (int i = 0; i < count; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (!group_edges_touch(items[i], items[j])) continue;
+            parent[group_root(parent, j)] = group_root(parent, i);
+        }
+    }
+    int self = -1;
+    for (int index = 0; index < count; index++) if (items[index] == tile) self = index;
+    if (self < 0) return;
+    int root = group_root(parent, self);
+    int ac = json_int(tile, "col", 0);
+    int ar = json_int(tile, "row", 0);
+    int aw = json_int(tile, "colSpan", 1);
+    int ah = json_int(tile, "rowSpan", 1);
+    if (aw < 1) aw = 1;
+    if (ah < 1) ah = 1;
+    bool open_l = true, open_r = true, open_t = true, open_b = true;
+    for (int index = 0; index < count; index++) {
+        if (group_root(parent, index) != root || items[index] == tile) continue;
+        int bc = json_int(items[index], "col", 0);
+        int br = json_int(items[index], "row", 0);
+        int bw = json_int(items[index], "colSpan", 1);
+        int bh = json_int(items[index], "rowSpan", 1);
+        if (bw < 1) bw = 1;
+        if (bh < 1) bh = 1;
+        if (bc + bw == ac && br < ar + ah && ar < br + bh) open_l = false;
+        if (ac + aw == bc && br < ar + ah && ar < br + bh) open_r = false;
+        if (br + bh == ar && bc < ac + aw && ac < bc + bw) open_t = false;
+        if (ar + ah == br && bc < ac + aw && ac < bc + bw) open_b = false;
+    }
+    if (open_l) *left = 8;
+    if (open_r) *right = 8;
+    if (open_t) *top = 8;
+    if (open_b) *bottom = 8;
+}
+
+static void add_group_frame(int x, int y, int w, int h, lv_border_side_t sides, bool round_frame)
+{
+    if (!grid || w < 8 || h < 8) return;
+    lv_obj_t *frame = lv_obj_create(grid);
+    lv_obj_set_pos(frame, x, y);
+    lv_obj_set_size(frame, w, h);
+    style_flat(frame);
+    lv_obj_set_style_bg_opa(frame, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(frame, 2, 0);
+    lv_obj_set_style_border_side(frame, sides, 0);
+    lv_obj_set_style_border_color(frame, lv_color_hex(color_mono ? 0xFFFFFF : theme_accent), 0);
+    lv_obj_set_style_radius(frame, round_frame ? 8 : 0, 0);
+    lv_obj_clear_flag(frame, LV_OBJ_FLAG_CLICKABLE);
+}
+
+static void draw_group_frames(cJSON *page, int cell_w, int cell_h)
+{
+    cJSON *items[24];
+    int count = 0;
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, page ? cJSON_GetObjectItem(page, "tiles") : NULL) {
+        const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(item, "group"));
+        if (name && name[0] && count < 24) items[count++] = item;
+    }
+    int parent[24];
+    for (int index = 0; index < count; index++) parent[index] = index;
+    for (int i = 0; i < count; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (!group_edges_touch(items[i], items[j])) continue;
+            parent[group_root(parent, j)] = group_root(parent, i);
+        }
+    }
+    bool drawn[24] = {0};
+    for (int index = 0; index < count; index++) {
+        int root = group_root(parent, index);
+        if (drawn[root]) continue;
+        drawn[root] = true;
+        int cells[24][2];
+        int cell_count = 0;
+        int min_c = 99, min_r = 99, max_c = 0, max_r = 0;
+        for (int member = 0; member < count && cell_count < 24; member++) {
+            if (group_root(parent, member) != root) continue;
+            int col = json_int(items[member], "col", 0);
+            int row = json_int(items[member], "row", 0);
+            int span_c = json_int(items[member], "colSpan", 1);
+            int span_r = json_int(items[member], "rowSpan", 1);
+            if (span_c < 1) span_c = 1;
+            if (span_r < 1) span_r = 1;
+            for (int y = row; y < row + span_r && cell_count < 24; y++) {
+                for (int x = col; x < col + span_c && cell_count < 24; x++) {
+                    cells[cell_count][0] = x;
+                    cells[cell_count][1] = y;
+                    if (x < min_c) min_c = x;
+                    if (y < min_r) min_r = y;
+                    if (x > max_c) max_c = x;
+                    if (y > max_r) max_r = y;
+                    cell_count++;
+                }
+            }
+        }
+        if (cell_count <= 0) continue;
+        bool rectangular = cell_count == (max_c - min_c + 1) * (max_r - min_r + 1);
+        if (rectangular) {
+            add_group_frame(min_c * cell_w + 4, min_r * cell_h + 4,
+                (max_c - min_c + 1) * cell_w - 8, (max_r - min_r + 1) * cell_h - 8,
+                LV_BORDER_SIDE_FULL, true);
+            continue;
+        }
+        for (int cell = 0; cell < cell_count; cell++) {
+            int x = cells[cell][0];
+            int y = cells[cell][1];
+            lv_border_side_t sides = LV_BORDER_SIDE_NONE;
+            bool left = true, right = true, above = true, below = true;
+            for (int other = 0; other < cell_count; other++) {
+                if (cells[other][0] == x - 1 && cells[other][1] == y) left = false;
+                if (cells[other][0] == x + 1 && cells[other][1] == y) right = false;
+                if (cells[other][0] == x && cells[other][1] == y - 1) above = false;
+                if (cells[other][0] == x && cells[other][1] == y + 1) below = false;
+            }
+            if (left) sides |= LV_BORDER_SIDE_LEFT;
+            if (right) sides |= LV_BORDER_SIDE_RIGHT;
+            if (above) sides |= LV_BORDER_SIDE_TOP;
+            if (below) sides |= LV_BORDER_SIDE_BOTTOM;
+            add_group_frame(x * cell_w + 4, y * cell_h + 4, cell_w - 8, cell_h - 8, sides, false);
+        }
+    }
+}
+
 static void show_page(int index)
 {
     /* Schlanker Aufbau + Icons/Farben wie Editor. Keine Slider/Bilder beim Paint. */
@@ -1224,6 +1493,8 @@ static void show_page(int index)
     if (index < 0 || index >= count) index = 0;
     page_index = index;
     cJSON *page = cJSON_GetArrayItem(pages, index);
+    ensure_persisted_page();
+    store_page_id(cJSON_GetStringValue(cJSON_GetObjectItem(page, "id")));
     ESP_LOGI(TAG_UI, "Zeichne Seite %d/%d (einfach)", index + 1, count);
     show_background(page);
     ui_wdt_kick();
@@ -1272,14 +1543,31 @@ static void show_page(int index)
             lv_obj_set_style_bg_color(button, lv_color_hex(item == index ? accent_tab() : accent_tab_bg()), 0);
             lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
             lv_obj_set_style_text_color(button, lv_color_hex(item == index ? 0x102033 : text_fg()), 0);
-            lv_obj_t *caption = lv_label_create(button);
+            lv_obj_t *row = lv_obj_create(button);
+            lv_obj_set_size(row, TAB_W - 16, LV_SIZE_CONTENT);
+            style_flat(row);
+            lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_all(row, 0, 0);
+            lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_column(row, 4, 0);
+            lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_center(row);
+            const char *tab_icon = cJSON_GetStringValue(cJSON_GetObjectItem(candidate, "icon"));
+            int caption_w = TAB_W - 16;
+            if (tab_icon && tab_icon[0]) {
+                lv_obj_t *symbol = lv_label_create(row);
+                paint_icon_label(symbol, tab_icon, false, false, item == index ? 0x102033 : text_fg());
+                lv_obj_clear_flag(symbol, LV_OBJ_FLAG_CLICKABLE);
+                caption_w -= 32;
+            }
+            lv_obj_t *caption = lv_label_create(row);
             const char *title = cJSON_GetStringValue(cJSON_GetObjectItem(candidate, "title"));
             label_set_folded(caption, title ? title : "");
             lv_label_set_long_mode(caption, LV_LABEL_LONG_DOT);
-            lv_obj_set_width(caption, TAB_W - 16);
+            lv_obj_set_width(caption, caption_w);
             lv_obj_set_style_text_font(caption, &lv_font_montserrat_28, 0);
             lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_CENTER, 0);
-            lv_obj_center(caption);
             lv_obj_add_event_cb(button, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) item);
             tab_x += TAB_W;
         }
@@ -1296,6 +1584,7 @@ static void show_page(int index)
     if (rows > 6) rows = 6;
     int cell_w = grid_w / columns;
     int cell_h = grid_h / rows;
+    draw_group_frames(page, cell_w, cell_h);
     cJSON *tile = NULL;
     cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
         if (tile_count >= 24) break;
@@ -1387,8 +1676,14 @@ static void show_page(int index)
         ESP_LOGI(TAG_UI, "Kachel %d %s kind=%s heap=%lu", tile_count + 1, view->tile_id, kind,
                  (unsigned long) (esp_get_free_heap_size() / 1024));
         view->card = lv_obj_create(grid);
-        lv_obj_set_pos(view->card, col * cell_w + 4, row * cell_h + 4);
-        lv_obj_set_size(view->card, cell_w * col_span - 8, cell_h * row_span - 8);
+        int inset_l = 0, inset_r = 0, inset_t = 0, inset_b = 0;
+        group_insets(page, tile, &inset_l, &inset_r, &inset_t, &inset_b);
+        int card_w = cell_w * col_span - 8 - inset_l - inset_r;
+        int card_h = cell_h * row_span - 8 - inset_t - inset_b;
+        if (card_w < 16) card_w = 16;
+        if (card_h < 16) card_h = 16;
+        lv_obj_set_pos(view->card, col * cell_w + 4 + inset_l, row * cell_h + 4 + inset_t);
+        lv_obj_set_size(view->card, card_w, card_h);
         lv_obj_set_style_radius(view->card, 8, 0);
         lv_obj_set_style_bg_color(view->card, lv_color_hex(view->base_bg), 0);
         lv_obj_set_style_bg_opa(view->card, LV_OPA_COVER, 0);
@@ -1452,11 +1747,14 @@ static void show_page(int index)
         if (strcmp(kind, "image") == 0) {
             const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageFile"));
             if (!file || !file[0]) file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "mediaFile"));
+            view->image_backdrop = cJSON_IsTrue(cJSON_GetObjectItem(tile, "imageBackground"));
             lv_obj_set_style_pad_all(view->card, 0, 0);
+            if (view->image_backdrop) lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
             view->image_img = lv_img_create(view->card);
             (void) file;
-            lv_obj_set_size(view->image_img, cell_w * col_span - 8, cell_h * row_span - 8);
+            lv_obj_set_size(view->image_img, card_w, card_h);
             lv_obj_center(view->image_img);
+            if (view->image_backdrop) lv_obj_move_background(view->card);
             tile_count++;
             continue;
         }
@@ -1521,6 +1819,27 @@ static void show_page(int index)
         const char *action_kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "actionKind"));
         bool action_dim = action_kind && strcmp(action_kind, "dim") == 0 && strcmp(view->control, "setpoint") != 0;
         bool plain_value = strcmp(kind, "value") == 0 && !view->has_action && !dimmer && !battery;
+        bool ghost = false;
+        if (strcmp(kind, "value") == 0) {
+            cJSON *other = NULL;
+            cJSON_ArrayForEach(other, cJSON_GetObjectItem(page, "tiles")) {
+                if (other == tile) continue;
+                const char *other_kind = cJSON_GetStringValue(cJSON_GetObjectItem(other, "kind"));
+                if (!other_kind || strcmp(other_kind, "image") != 0) continue;
+                if (!cJSON_IsTrue(cJSON_GetObjectItem(other, "imageBackground"))) continue;
+                if (tile_rects_overlap(tile, other)) {
+                    ghost = true;
+                    break;
+                }
+            }
+        }
+        if (ghost) {
+            view->has_action = false;
+            plain_value = true;
+            dimmer = false;
+            battery = false;
+            lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
+        }
         if (slider) view->dim_show_switch = false;
         if (dim_switch) view->dim_show_switch = true;
         const char *tap = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "dimTap"));
@@ -1543,12 +1862,37 @@ static void show_page(int index)
         /* Titelzeile: kleines Icon + Text */
         cJSON *show_title_icon_item = cJSON_GetObjectItem(tile, "showTitleIcon");
         bool show_title_icon = cJSON_IsBool(show_title_icon_item) ? cJSON_IsTrue(show_title_icon_item) : !plain_value;
+        if (ghost) show_title_icon = false;
         const char *title_icon_field = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "titleIcon"));
         const char *title_icon_src = NULL;
         if (plain_value) title_icon_src = (title_icon_field && title_icon_field[0]) ? title_icon_field : NULL;
         else if (title_icon_field && title_icon_field[0]) title_icon_src = title_icon_field;
         else title_icon_src = icon;
-        if (show_title) {
+        if (show_title && plain_value) {
+            if (!cJSON_IsNumber(cJSON_GetObjectItem(tile, "titlePx"))) view->title_px = 28;
+            const lv_font_t *title_font = font_for(view->title_px, view->title_bold, view->title_italic);
+            int title_h = lv_font_get_line_height(title_font);
+            view->title_row = lv_obj_create(view->card);
+            lv_obj_set_size(view->title_row, LV_PCT(100), title_h);
+            style_flat(view->title_row);
+            lv_obj_set_style_bg_opa(view->title_row, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_all(view->title_row, 0, 0);
+            lv_obj_set_flex_flow(view->title_row, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(view->title_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_column(view->title_row, 4, 0);
+            lv_obj_clear_flag(view->title_row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_align(view->title_row, LV_ALIGN_TOP_LEFT, 0, 0);
+            if (show_title_icon && title_icon_src && title_icon_src[0]) {
+                make_icon_slot(view->title_row, view, title_icon_src, &view->title_icon);
+                snprintf(view->title_icon_name, sizeof(view->title_icon_name), "%s", title_icon_src);
+            }
+            lv_obj_t *name = lv_label_create(view->title_row);
+            label_set_folded(name, view->title[0] ? view->title : "-");
+            view->title_label = name;
+            lv_obj_set_style_text_font(name, title_font, 0);
+            lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+            lv_obj_clear_flag(name, LV_OBJ_FLAG_CLICKABLE);
+        } else if (show_title) {
             lv_obj_t *title_row_icon = NULL;
             lv_align_t title_pos = LV_ALIGN_TOP_LEFT;
             lv_coord_t title_x = 0;
@@ -1566,26 +1910,14 @@ static void show_page(int index)
             }
             lv_obj_t *name = lv_label_create(view->card);
             label_set_folded(name, view->title[0] ? view->title : "-");
-            if (plain_value && !cJSON_IsNumber(cJSON_GetObjectItem(tile, "titlePx"))) view->title_px = 28;
-            if (plain_value) {
-                view->title_label = name;
-                lv_obj_set_style_text_font(name, font_for(view->title_px, view->title_bold, view->title_italic), 0);
-                lv_obj_set_width(name, cell_w * col_span - 28);
-                lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-                if (strcmp(title_align, "center") == 0) lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
-                else if (strcmp(title_align, "right") == 0) lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_RIGHT, 0);
-                else lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_LEFT, 0);
-                lv_obj_align(name, LV_ALIGN_TOP_LEFT, 0, 0);
-            } else {
-                lv_obj_set_style_text_font(name, font_for(view->title_px, view->title_bold, view->title_italic), 0);
-                lv_obj_align(name, title_pos, title_x, 2);
-            }
+            lv_obj_set_style_text_font(name, font_for(view->title_px, view->title_bold, view->title_italic), 0);
+            lv_obj_align(name, title_pos, title_x, 2);
         }
 
         if (strcmp(kind, "chart") == 0) {
             lv_obj_set_style_pad_all(view->card, 4, 0);
-            int chart_w = cell_w * col_span - 16;
-            int chart_h = cell_h * row_span - 16 - (show_title ? 28 : 0);
+            int chart_w = card_w - 8;
+            int chart_h = card_h - 8 - (show_title ? 28 : 0);
             if (chart_w < 8) chart_w = 8;
             if (chart_h < 8) chart_h = 8;
             view->chart_w = chart_w;
@@ -1662,8 +1994,8 @@ static void show_page(int index)
         if (strcmp(kind, "gauge") == 0) {
             view->gauge_min = json_int(tile, "valueMin", 0);
             view->gauge_max = json_int(tile, "valueMax", 100);
-            int side = cell_w * col_span;
-            int avail_h = cell_h * row_span - (show_title ? 36 : 12);
+            int side = card_w;
+            int avail_h = card_h - (show_title ? 24 : 8);
             if (avail_h < side) side = avail_h;
             if (side < 48) side = 48;
             view->arc = lv_arc_create(view->card);
@@ -1775,13 +2107,32 @@ static void show_page(int index)
             } else {
                 snprintf(view->icon_place, sizeof(view->icon_place), "%s", (icon && icon[0]) ? "before" : "none");
             }
+            if (ghost) snprintf(view->icon_place, sizeof(view->icon_place), "%s", "none");
             if (!view->own_text) lv_obj_set_style_text_color(view->label, lv_color_hex(0xF4F7FB), 0);
-            if (icon && icon[0] && strcmp(view->icon_place, "none") != 0) {
-                view->icon_label = lv_label_create(view->card);
-                lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_CLICKABLE);
-            }
+            view->value_box = lv_obj_create(view->card);
+            style_flat(view->value_box);
+            lv_obj_set_style_bg_opa(view->value_box, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_all(view->value_box, 0, 0);
+            lv_obj_clear_flag(view->value_box, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_flex_flow(view->value_box, LV_FLEX_FLOW_COLUMN);
+            lv_obj_set_flex_align(view->value_box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_row(view->value_box, 2, 0);
+            lv_obj_t *line = lv_obj_create(view->value_box);
+            style_flat(line);
+            lv_obj_set_size(line, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_obj_set_style_bg_opa(line, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_all(line, 0, 0);
+            lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_flex_flow(line, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(line, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_column(line, 6, 0);
+            bool before = strcmp(view->icon_place, "before") == 0;
+            bool after = strcmp(view->icon_place, "after") == 0;
+            if (icon && icon[0] && before) make_icon_slot(line, view, icon, &view->icon_label);
+            lv_obj_set_parent(view->label, line);
+            if (icon && icon[0] && after) make_icon_slot(line, view, icon, &view->icon_label);
             if (view->show_age) {
-                view->age_label = lv_label_create(view->card);
+                view->age_label = lv_label_create(view->value_box);
                 lv_label_set_text(view->age_label, "");
                 lv_obj_clear_flag(view->age_label, LV_OBJ_FLAG_CLICKABLE);
             }
@@ -1985,7 +2336,7 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_t *home_symbol = lv_label_create(home_button);
     paint_icon_label(home_symbol, "home", false, false, 0xF4F7FB);
     lv_obj_center(home_symbol);
-    lv_obj_add_event_cb(home_button, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) 0);
+    lv_obj_add_event_cb(home_button, home_event, LV_EVENT_CLICKED, NULL);
     page_bar = lv_obj_create(screen);
     lv_obj_set_layout(page_bar, 0);
     lv_obj_set_size(page_bar, HOMEDISPLAY_LCD_H_RES - HEADER_LEFT - HEADER_RIGHT, TAB_H);
@@ -2223,7 +2574,8 @@ void homedisplay_ui_apply_layout(const char *json)
     last_setup_detail[0] = '\0';
     /* Boot-Screen erst nach dem Zeichnen ausblenden – sonst sieht man RGB-Müll (grün). */
     show_page_may_yield = true;
-    show_page(0);
+    ensure_persisted_page();
+    show_page(page_by_id(persisted_page_id));
     /* show_page() hält beim Rückkehren immer die Sperre – die Yield-Stelle wartet darauf,
      * statt sie ungeschützt aufzugeben. */
     hide_boot_screen();
@@ -2376,7 +2728,18 @@ static void apply_state_body(cJSON *root)
                 bool incoming_on = has_number && value_is_on(&tiles[index], number);
                 bool held_on = value_is_on(&tiles[index], tiles[index].held_value);
                 bool level = tiles[index].track || tiles[index].power;
-                bool matched = has_number && (level ? number == tiles[index].held_value : incoming_on == held_on);
+                bool matched = false;
+                if (has_number && level) {
+                    int span = tiles[index].value_max - tiles[index].value_min;
+                    if (span < 1) span = 1;
+                    int tolerance = span / 50;
+                    if (tolerance < 1) tolerance = 1;
+                    int delta = number - tiles[index].held_value;
+                    if (delta < 0) delta = -delta;
+                    matched = delta <= tolerance;
+                } else if (has_number) {
+                    matched = incoming_on == held_on;
+                }
                 if (esp_timer_get_time() > tiles[index].held_until || matched) {
                     tiles[index].holding = false;
                 } else {
@@ -2418,9 +2781,11 @@ static void apply_state_body(cJSON *root)
                 if (percent > 100) percent = 100;
                 lv_arc_set_value(tiles[index].arc, percent);
             }
-            if (tiles[index].value_row) layout_value_row(&tiles[index]);
             apply_status_color(&tiles[index], color);
-            if (!has_number) continue;
+            if (!has_number) {
+                if (tiles[index].value_row) layout_value_row(&tiles[index]);
+                continue;
+            }
             tiles[index].applying = true;
             tiles[index].value = number;
             bool on = value_is_on(&tiles[index], number);
@@ -2432,6 +2797,7 @@ static void apply_state_body(cJSON *root)
                 if (tiles[index].power) set_power_checked(&tiles[index], on);
             }
             refresh_icons(&tiles[index], on);
+            if (tiles[index].value_row) layout_value_row(&tiles[index]);
             if (control_is_dimmer(tiles[index].control)) {
                 paint_dim_label(&tiles[index]);
             } else if (tiles[index].has_action && tiles[index].label && tiles[index].show_state_text) {
@@ -2455,33 +2821,42 @@ static void apply_state_body(cJSON *root)
     }
 }
 
-void homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
+bool homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
 {
-    if (!tile_id || !tile_id[0] || !file || !file[0]) return;
-    if (!storage_image_ready_limit(file, 400 * 1024)) return;
+    if (!tile_id || !tile_id[0] || !file || !file[0]) return false;
+    if (!storage_image_ready_limit(file, 400 * 1024)) return false;
     int width = 0;
     int height = 0;
-    jpeg_sof_size(file, &width, &height);
+    if (!jpeg_sof_size(file, &width, &height)) {
+        ESP_LOGW(TAG_UI, "Kamera-Bild verworfen (kein Baseline-JPEG): %s", file);
+        return false;
+    }
+    if ((long) width * (long) height * 2L > 800L * 1024L) {
+        ESP_LOGW(TAG_UI, "Kamera-Bild verworfen (zu groß %dx%d): %s", width, height, file);
+        return false;
+    }
     char path[96];
     snprintf(path, sizeof(path), "S:/%s", file);
-    if (width > 0 && height > 0) {
-        ESP_LOGI(TAG_UI, "Kamera-Bild %s: %dx%d", file, width, height);
-    }
-    if (!ui_client_lock()) return;
+    ESP_LOGI(TAG_UI, "Kamera-Bild %s: %dx%d", file, width, height);
+    if (!ui_client_lock()) return false;
+    bool shown = false;
     for (int index = 0; index < tile_count; index++) {
         if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].camera_img) {
-            if (width > 0 && height > 0) {
-                lv_obj_set_size(tiles[index].camera_img, width, height);
+            const void *previous = lv_img_get_src(tiles[index].camera_img);
+            char old_src[96];
+            old_src[0] = '\0';
+            if (previous && lv_img_src_get_type(previous) == LV_IMG_SRC_FILE) {
+                snprintf(old_src, sizeof(old_src), "%s", (const char *) previous);
             }
-            lv_obj_t *card = lv_obj_get_parent(tiles[index].camera_img);
-            int y_ofs = (card && lv_obj_get_child_cnt(card) > 1) ? -4 : 0;
-            lv_obj_align(tiles[index].camera_img, LV_ALIGN_BOTTOM_MID, 0, y_ofs);
             lv_img_set_src(tiles[index].camera_img, path);
             lv_obj_move_background(tiles[index].camera_img);
+            if (old_src[0] && strcmp(old_src, path) != 0) lv_img_cache_invalidate_src(old_src);
+            shown = true;
             break;
         }
     }
     lvgl_port_unlock();
+    return shown;
 }
 
 void homedisplay_ui_refresh_image(const char *tile_id, const char *file)
