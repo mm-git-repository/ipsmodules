@@ -804,6 +804,7 @@ const state = {
   layout: null,
   page: "start",
   selected: null,
+  tileClipboard: null,
   styleSource: null,
   dirty: false,
   pickedVariable: null,
@@ -2549,6 +2550,32 @@ function selectedTile() {
   return page ? page.tiles.find((tile) => tile.tileId === state.selected) || null : null;
 }
 
+let tileCopySerial = 0;
+
+/* Legt eine Kopie auf die aktuelle Seite, in die erste freie Zelle. */
+function placeTileCopy(source) {
+  const page = currentPage();
+  if (!source || !page) return false;
+  const copy = JSON.parse(JSON.stringify(source));
+  tileCopySerial += 1;
+  copy.tileId = `t${Date.now().toString(36)}${tileCopySerial.toString(36)}`;
+  if (copy.actionId) copy.actionId = `a-${copy.tileId}`;
+  const cell = freeCell(copy.colSpan || 1, copy.rowSpan || 1);
+  if (!cell) {
+    setStatus("Auf dieser Seite ist keine Zelle frei.");
+    return false;
+  }
+  copy.col = cell.col;
+  copy.row = cell.row;
+  page.tiles.push(copy);
+  state.selected = copy.tileId;
+  markDirty();
+  renderGrid();
+  renderProperties();
+  setStatus("Kachel eingefügt.");
+  return true;
+}
+
 function tileById(id) {
   if (!state.layout) return null;
   for (const page of state.layout.pages) {
@@ -3478,8 +3505,10 @@ if (displayProfileSelect) {
     }
   });
 }
-bindClick("p-delete", deleteSelected);
-bindClick("p-close", () => $("tile-dialog")?.close());
+bindClick("p-save", () => {
+  applyProperties();
+  $("tile-dialog")?.close();
+});
 $("tile-dialog")?.addEventListener("close", () => {
   if (selectedTile()?.kind === "scene") applyProperties();
 });
@@ -4100,27 +4129,8 @@ $("edit-details").addEventListener("click", () => {
   const tile = selectedTile();
   if (tile) openTileDialog(tile);
 });
-$("edit-delete").addEventListener("click", deleteSelected);
 $("edit-duplicate")?.addEventListener("click", () => {
-  const tile = selectedTile();
-  const page = currentPage();
-  if (!tile || !page) return;
-  const copy = JSON.parse(JSON.stringify(tile));
-  const stamp = Date.now().toString(36);
-  copy.tileId = `t${stamp}`;
-  if (copy.actionId) copy.actionId = `a-${copy.tileId}`;
-  const cell = freeCell(copy.colSpan || 1, copy.rowSpan || 1);
-  if (!cell) {
-    setStatus("Auf dieser Seite ist keine Zelle frei.");
-    return;
-  }
-  copy.col = cell.col;
-  copy.row = cell.row;
-  page.tiles.push(copy);
-  state.selected = copy.tileId;
-  markDirty();
-  renderGrid();
-  renderProperties();
+  placeTileCopy(selectedTile());
 });
 $("edit-style")?.addEventListener("click", () => {
   const tile = selectedTile();
@@ -4211,7 +4221,9 @@ $("import-file").addEventListener("change", async () => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.target.matches("input, textarea, select") || document.querySelector("dialog[open]")) return;
+  const el = event.target;
+  const typing = el && typeof el.matches === "function" && (el.matches("input, textarea, select") || el.isContentEditable);
+  if (typing || document.querySelector("dialog[open]")) return;
   if (event.key === "Delete" && state.selected) deleteSelected();
   if (event.key === "Enter" && state.selected) {
     const tile = selectedTile();
@@ -4220,6 +4232,21 @@ document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.key.toLowerCase() === "s") {
     event.preventDefault();
     store(false);
+  }
+  if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "c" && !event.repeat) {
+    const tile = selectedTile();
+    if (!tile) return;
+    event.preventDefault();
+    state.tileClipboard = JSON.parse(JSON.stringify(tile));
+    setStatus("Kachel kopiert. Strg+V fügt sie ein.");
+  }
+  if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "v" && !event.repeat) {
+    if (!state.tileClipboard) {
+      setStatus("Keine Kachel kopiert.");
+      return;
+    }
+    event.preventDefault();
+    placeTileCopy(state.tileClipboard);
   }
 });
 

@@ -71,6 +71,8 @@ typedef struct {
     lv_obj_t *image_img;
     bool image_backdrop;
     lv_obj_t *chart_line;
+    lv_obj_t *chart_note;
+    int chart_logged;
     lv_point_t *chart_points;
     int chart_w;
     int chart_h;
@@ -302,7 +304,8 @@ static lv_obj_t *analog_min;
 static lv_point_t analog_hour_pts[2];
 static lv_point_t analog_min_pts[2];
 static lv_point_t analog_tick_pts[12][2];
-static char last_state_json[8192];
+/* Voller letzter Stand inkl. Verlaufsdaten (oft über 8 KB). Wechsel nur unter der LVGL-Sperre. */
+static char *last_state_json;
 static volatile bool refresh_now;
 static volatile bool backlight_on = true;
 static int day_brightness = 70;
@@ -2067,6 +2070,14 @@ static void show_page(int index)
                 lv_obj_set_size(view->chart_line, chart_w, chart_h);
                 lv_obj_align(view->chart_line, LV_ALIGN_BOTTOM_MID, 0, 0);
                 lv_obj_add_flag(view->chart_line, LV_OBJ_FLAG_HIDDEN);
+                view->chart_logged = -1;
+                view->chart_note = lv_label_create(view->card);
+                lv_label_set_text(view->chart_note, "Verlauf wird geladen");
+                lv_obj_set_style_text_font(view->chart_note, &lv_font_montserrat_16, 0);
+                lv_obj_set_style_text_color(view->chart_note, lv_color_hex(text_fg()), 0);
+                lv_obj_set_style_text_opa(view->chart_note, LV_OPA_70, 0);
+                lv_obj_align(view->chart_note, LV_ALIGN_CENTER, 0, show_title ? 14 : 0);
+                lv_obj_clear_flag(view->chart_note, LV_OBJ_FLAG_CLICKABLE);
             }
             view->label = lv_label_create(view->card);
             lv_label_set_text(view->label, "-");
@@ -2300,7 +2311,7 @@ static void show_page(int index)
     if (home_button) lv_obj_move_foreground(home_button);
     if (info_label) lv_obj_move_foreground(info_label);
     if (boot_layer) lv_obj_add_flag(boot_layer, LV_OBJ_FLAG_HIDDEN);
-    if (last_state_json[0]) {
+    if (last_state_json && last_state_json[0]) {
         cJSON *saved = cJSON_Parse(last_state_json);
         if (saved) {
             apply_state_body(saved);
@@ -2765,17 +2776,27 @@ void homedisplay_ui_apply_state(const char *json)
         cJSON_Delete(root);
         return;
     }
+    char *copy = NULL;
     if (json && json[0]) {
-        snprintf(last_state_json, sizeof(last_state_json), "%s", json);
+        size_t length = strlen(json) + 1;
+        copy = heap_caps_malloc(length, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (copy) memcpy(copy, json, length);
     }
     cJSON *now = cJSON_GetObjectItem(root, "now");
     if (now) homedisplay_ui_set_time((int64_t) now->valuedouble);
     if (!ui_client_lock()) {
+        if (copy) heap_caps_free(copy);
         cJSON_Delete(root);
         return;
     }
+    char *previous = NULL;
+    if (copy) {
+        previous = last_state_json;
+        last_state_json = copy;
+    }
     apply_state_body(root);
     lvgl_port_unlock();
+    if (previous) heap_caps_free(previous);
     cJSON_Delete(root);
 }
 
@@ -2783,12 +2804,25 @@ static void paint_chart(tile_view_t *view, cJSON *tile)
 {
     if (!view || !view->chart_line || !view->chart_points) return;
     cJSON *series = cJSON_GetObjectItem(tile, "series");
-    if (!cJSON_IsArray(series)) return;
-    int total = cJSON_GetArraySize(series);
+    int total = cJSON_IsArray(series) ? cJSON_GetArraySize(series) : 0;
+    if (total != view->chart_logged) {
+        const char *note = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "chartNote"));
+        ESP_LOGI(TAG_UI, "Diagramm %s: %d Punkte%s%s", view->tile_id, total, note ? ", Grund " : "", note ? note : "");
+        view->chart_logged = total;
+    }
     if (total < 2) {
         lv_obj_add_flag(view->chart_line, LV_OBJ_FLAG_HIDDEN);
+        if (view->chart_note) {
+            const char *note = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "chartNote"));
+            const char *text = "Keine Verlaufsdaten";
+            if (note && strcmp(note, "notLogged") == 0) text = "Variable wird nicht geloggt";
+            else if (note && strcmp(note, "noArchive") == 0) text = "Kein Archiv gefunden";
+            lv_label_set_text(view->chart_note, text);
+            lv_obj_clear_flag(view->chart_note, LV_OBJ_FLAG_HIDDEN);
+        }
         return;
     }
+    if (view->chart_note) lv_obj_add_flag(view->chart_note, LV_OBJ_FLAG_HIDDEN);
     int count = total > CHART_POINT_MAX ? CHART_POINT_MAX : total;
     double values[CHART_POINT_MAX];
     double data_min = 0.0;

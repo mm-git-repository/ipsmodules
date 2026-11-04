@@ -627,7 +627,8 @@ static esp_err_t camera_download(const char *path, size_t *out_length)
     if (!camera_client) {
         esp_http_client_config_t config;
         configure_http_client(&config, url);
-        config.timeout_ms = 8000;
+        /* Der Server holt das Bild erst bei der Kamera ab; die Kopfzeilen kommen entsprechend spät. */
+        config.timeout_ms = 20000;
         config.keep_alive_enable = true;
         camera_client = esp_http_client_init(&config);
         if (!camera_client) return ESP_ERR_NO_MEM;

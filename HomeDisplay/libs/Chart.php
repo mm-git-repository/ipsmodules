@@ -5,7 +5,8 @@ declare(strict_types=1);
 /** Verlaufsdaten aus dem IPS-Archiv für Diagramm-Kacheln. */
 final class HomeDisplayChart
 {
-    private const ARCHIVE_MODULE = '{EF43BF2F-932F-421C-9794-D0CC2C47F6A3}';
+    /** Archive Control von IP-Symcon. */
+    private const ARCHIVE_MODULE = '{43192F0B-135B-4CE7-A0A7-1475603F3060}';
 
     public const PERIODS = ['1h', '6h', '24h', '7d'];
 
@@ -133,6 +134,15 @@ final class HomeDisplayChart
         }
         $list = IPS_GetInstanceListByModuleID(self::ARCHIVE_MODULE);
         $id = count($list) > 0 ? (int) $list[0] : 0;
+        if ($id === 0 && function_exists('IPS_GetInstanceList') && function_exists('IPS_GetInstance')) {
+            foreach (IPS_GetInstanceList() as $candidate) {
+                $name = (string) (IPS_GetInstance($candidate)['ModuleInfo']['ModuleName'] ?? '');
+                if (strcasecmp($name, 'Archive Control') === 0 || strcasecmp($name, 'Archiv') === 0) {
+                    $id = (int) $candidate;
+                    break;
+                }
+            }
+        }
 
         return $id;
     }
