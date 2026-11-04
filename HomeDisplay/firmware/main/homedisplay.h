@@ -7,7 +7,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_touch.h"
 
-#define HOMEDISPLAY_FIRMWARE_VERSION "0.6.32"
+#define HOMEDISPLAY_FIRMWARE_VERSION "0.6.33"
 #define HOMEDISPLAY_LCD_H_RES 1024
 #define HOMEDISPLAY_LCD_V_RES 600
 
@@ -28,7 +28,10 @@ void homedisplay_ui_apply_layout(const char *json);
 bool homedisplay_ui_layout_ready(void);
 void homedisplay_ui_apply_config(const char *json);
 void homedisplay_ui_apply_state(const char *json);
-bool homedisplay_ui_refresh_camera(const char *tile_id, const char *file);
+/* Kamerakachel der gezeigten Seite. has_frame meldet, ob schon ein Bild im Speicher liegt. */
+bool homedisplay_ui_camera_wanted(const char *tile_id, bool *has_frame);
+/* Dekodiert ein JPEG im Speicher und zeigt es ohne Datei auf der Kachel. */
+bool homedisplay_ui_show_camera_jpeg(const char *tile_id, const uint8_t *jpeg, size_t length);
 void homedisplay_ui_refresh_image(const char *tile_id, const char *file);
 void homedisplay_ui_set_time(int64_t unix_time);
 void homedisplay_ui_set_action(homedisplay_action_fn callback);

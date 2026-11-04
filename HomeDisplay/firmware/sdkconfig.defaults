@@ -25,6 +25,8 @@ CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_USE_FONT_COMPRESSED=y
 CONFIG_LV_USE_PNG=y
 CONFIG_LV_USE_SJPG=y
+# Ein Bild im Cache: Kachelbilder werden nicht bei jedem Neuzeichnen neu dekodiert.
+CONFIG_LV_IMG_CACHE_DEF_SIZE=1
 # PSRAM statt 32-KB-LVGL-Pool fuer lv_mem_alloc: JPEG/PNG-Decoder brauchen
 # fuer ein volles Kamerabild (Breite*Hoehe*3 Byte) weit mehr als 32 KB.
 CONFIG_LV_MEM_CUSTOM=y

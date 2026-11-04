@@ -1,4 +1,6 @@
 #include "homedisplay.h"
+#include "camjpeg.h"
+#include "esp_heap_caps.h"
 #include "fonts.h"
 
 #include "cJSON.h"
@@ -65,6 +67,7 @@ typedef struct {
     lv_obj_t *battery_shell;
     lv_obj_t *battery_fill;
     lv_obj_t *camera_img;
+    int camera_dy;
     lv_obj_t *image_img;
     bool image_backdrop;
     lv_obj_t *chart_line;
@@ -254,6 +257,19 @@ static lv_obj_t *system_label;
 static cJSON *layout_root;
 static tile_view_t tiles[TILE_MAX];
 static int tile_count;
+
+/* Kamerabilder liegen im Speicher, nicht im Flash. Zwei RGB565-Flächen je Kachel:
+ * eine wird gezeigt, die andere wird dekodiert. Das letzte Bild bleibt beim Seitenwechsel erhalten. */
+#define CAMERA_SLOTS 3
+#define CAMERA_MAX_PX (1024 * 600)
+typedef struct {
+    char tile_id[40];
+    uint16_t *buf[2];
+    size_t cap_px[2];
+    lv_img_dsc_t dsc[2];
+    int shown;
+} camera_slot_t;
+static camera_slot_t camera_slots[CAMERA_SLOTS];
 static int page_index;
 static char persisted_page_id[24];
 static bool persisted_page_loaded;
@@ -1319,6 +1335,8 @@ static void place_cover_image(lv_obj_t *img, const char *file, int box_w, int bo
     if (!img || !raster_fits_display(file, 2u * 1024u * 1024u, &width, &height)) return;
     char path[96];
     snprintf(path, sizeof(path), "S:/%s", file);
+    /* Gleicher Dateiname, neuer Inhalt: Der Cache hielte sonst das alte Bild. */
+    lv_img_cache_invalidate_src(path);
     lv_img_set_src(img, path);
     if (width > 0 && height > 0 && box_w > 0 && box_h > 0) {
         int zoom_w = (box_w * 256) / width;
@@ -1331,6 +1349,71 @@ static void place_cover_image(lv_obj_t *img, const char *file, int box_w, int bo
     }
     if (box_w > 0 && box_h > 0) lv_obj_set_size(img, box_w, box_h);
     lv_obj_center(img);
+}
+
+static camera_slot_t *camera_slot_find(const char *tile_id)
+{
+    if (!tile_id || !tile_id[0]) return NULL;
+    for (int index = 0; index < CAMERA_SLOTS; index++) {
+        if (camera_slots[index].tile_id[0] && strcmp(camera_slots[index].tile_id, tile_id) == 0) return &camera_slots[index];
+    }
+    return NULL;
+}
+
+static bool camera_tile_present(const char *tile_id)
+{
+    for (int index = 0; index < tile_count; index++) {
+        if (tiles[index].camera_img && strcmp(tiles[index].tile_id, tile_id) == 0) return true;
+    }
+    return false;
+}
+
+static void camera_slot_release(camera_slot_t *slot)
+{
+    for (int side = 0; side < 2; side++) {
+        if (slot->buf[side]) heap_caps_free(slot->buf[side]);
+    }
+    memset(slot, 0, sizeof(*slot));
+    slot->shown = -1;
+}
+
+/* Nur der Client-Task legt Plätze an oder gibt sie frei. Ein Platz einer Kachel, die nicht auf der Seite liegt, darf weichen. */
+static camera_slot_t *camera_slot_get(const char *tile_id)
+{
+    camera_slot_t *found = camera_slot_find(tile_id);
+    if (found) return found;
+    camera_slot_t *spare = NULL;
+    camera_slot_t *evict = NULL;
+    for (int index = 0; index < CAMERA_SLOTS; index++) {
+        camera_slot_t *slot = &camera_slots[index];
+        if (!slot->tile_id[0]) {
+            if (!spare) spare = slot;
+        } else if (!evict && !camera_tile_present(slot->tile_id)) {
+            evict = slot;
+        }
+    }
+    camera_slot_t *slot = spare ? spare : evict;
+    if (!slot) return NULL;
+    camera_slot_release(slot);
+    snprintf(slot->tile_id, sizeof(slot->tile_id), "%s", tile_id);
+    return slot;
+}
+
+static void camera_show_frame(tile_view_t *view, lv_img_dsc_t *dsc)
+{
+    lv_img_cache_invalidate_src(dsc);
+    lv_img_set_src(view->camera_img, dsc);
+    lv_obj_set_size(view->camera_img, dsc->header.w, dsc->header.h);
+    lv_obj_align(view->camera_img, LV_ALIGN_BOTTOM_MID, 0, view->camera_dy);
+}
+
+/* Beim Aufbau der Seite sofort das letzte Bild zeigen, bevor das nächste geladen ist. */
+static void camera_attach(tile_view_t *view)
+{
+    if (!view || !view->camera_img) return;
+    camera_slot_t *slot = camera_slot_find(view->tile_id);
+    if (!slot || slot->shown < 0 || !slot->buf[slot->shown]) return;
+    camera_show_frame(view, &slot->dsc[slot->shown]);
 }
 
 static void show_background(cJSON *page)
@@ -1826,8 +1909,10 @@ static void show_page(int index)
             if (img_h < 16) img_h = 16;
             view->camera_img = lv_img_create(view->card);
             (void) file;
+            view->camera_dy = show_title ? -4 : 0;
             lv_obj_set_size(view->camera_img, img_w, img_h);
-            lv_obj_align(view->camera_img, LV_ALIGN_BOTTOM_MID, 0, show_title ? -4 : 0);
+            lv_obj_align(view->camera_img, LV_ALIGN_BOTTOM_MID, 0, view->camera_dy);
+            camera_attach(view);
             if (name) lv_obj_move_foreground(name);
             tile_count++;
             continue;
@@ -2871,33 +2956,85 @@ static void apply_state_body(cJSON *root)
     }
 }
 
-bool homedisplay_ui_refresh_camera(const char *tile_id, const char *file)
+bool homedisplay_ui_camera_wanted(const char *tile_id, bool *has_frame)
 {
-    if (!tile_id || !tile_id[0] || !file || !file[0]) return false;
+    if (has_frame) *has_frame = false;
+    if (!tile_id || !tile_id[0]) return false;
+    if (!ui_client_lock()) return false;
+    bool present = camera_tile_present(tile_id);
+    if (present && has_frame) {
+        camera_slot_t *slot = camera_slot_find(tile_id);
+        *has_frame = slot && slot->shown >= 0 && slot->buf[slot->shown];
+    }
+    lvgl_port_unlock();
+    return present;
+}
+
+/* Läuft im Client-Task. Dekodiert außerhalb der LVGL-Sperre und tauscht nur den Zeiger unter der Sperre. */
+bool homedisplay_ui_show_camera_jpeg(const char *tile_id, const uint8_t *jpeg, size_t length)
+{
+    if (!tile_id || !tile_id[0] || !jpeg || length < 4) return false;
     int width = 0;
     int height = 0;
-    if (!raster_fits_display(file, 900u * 1024u, &width, &height)) return false;
-    char path[96];
-    snprintf(path, sizeof(path), "S:/%s", file);
-    ESP_LOGI(TAG_UI, "Kamera-Bild %s: %dx%d", file, width, height);
+    int scale = 0;
+    int result = homedisplay_jpeg_probe(jpeg, length, CAMERA_MAX_PX, &width, &height, &scale);
+    if (result != 0) {
+        ESP_LOGW(TAG_UI, "Kamera-Bild verworfen (JPEG-Fehler %d, nur Baseline-JPEG)", result);
+        return false;
+    }
+
     if (!ui_client_lock()) return false;
+    camera_slot_t *slot = camera_tile_present(tile_id) ? camera_slot_get(tile_id) : NULL;
+    int target = 0;
+    uint16_t *dst = NULL;
+    if (slot) {
+        target = slot->shown == 0 ? 1 : 0;
+        size_t need = (size_t) width * (size_t) height;
+        if (slot->cap_px[target] < need) {
+            uint16_t *grown = heap_caps_malloc(need * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (grown) {
+                if (slot->buf[target]) heap_caps_free(slot->buf[target]);
+                slot->buf[target] = grown;
+                slot->cap_px[target] = need;
+            }
+        }
+        if (slot->cap_px[target] >= need) dst = slot->buf[target];
+    }
+    lvgl_port_unlock();
+    if (!slot) return false;
+    if (!dst) {
+        ESP_LOGW(TAG_UI, "Kamera-Bild verworfen (kein Speicher für %dx%d)", width, height);
+        return false;
+    }
+
+    int64_t started = esp_timer_get_time();
+    result = homedisplay_jpeg_decode(jpeg, length, scale, dst, width, height);
+    if (result != 0) {
+        ESP_LOGW(TAG_UI, "Kamera-Bild verworfen (Dekodierfehler %d)", result);
+        return false;
+    }
+    int decode_ms = (int) ((esp_timer_get_time() - started) / 1000);
+
+    if (!ui_client_lock()) return false;
+    lv_img_dsc_t *dsc = &slot->dsc[target];
+    memset(dsc, 0, sizeof(*dsc));
+    dsc->header.always_zero = 0;
+    dsc->header.cf = LV_IMG_CF_TRUE_COLOR;
+    dsc->header.w = (uint32_t) width;
+    dsc->header.h = (uint32_t) height;
+    dsc->data_size = (uint32_t) width * (uint32_t) height * sizeof(uint16_t);
+    dsc->data = (const uint8_t *) dst;
+    slot->shown = target;
     bool shown = false;
     for (int index = 0; index < tile_count; index++) {
-        if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].camera_img) {
-            const void *previous = lv_img_get_src(tiles[index].camera_img);
-            char old_src[96];
-            old_src[0] = '\0';
-            if (previous && lv_img_src_get_type(previous) == LV_IMG_SRC_FILE) {
-                snprintf(old_src, sizeof(old_src), "%s", (const char *) previous);
-            }
-            lv_img_set_src(tiles[index].camera_img, path);
-            lv_obj_move_background(tiles[index].camera_img);
-            if (old_src[0] && strcmp(old_src, path) != 0) lv_img_cache_invalidate_src(old_src);
+        if (tiles[index].camera_img && strcmp(tiles[index].tile_id, tile_id) == 0) {
+            camera_show_frame(&tiles[index], dsc);
             shown = true;
             break;
         }
     }
     lvgl_port_unlock();
+    ESP_LOGI(TAG_UI, "Kamera-Bild %s: %dx%d, %d KB, Dekodieren %d ms", tile_id, width, height, (int) (length / 1024), decode_ms);
     return shown;
 }
 

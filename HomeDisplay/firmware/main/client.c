@@ -19,6 +19,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
+#include <dirent.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -602,83 +603,123 @@ static bool layout_tile_is_live(cJSON *layout, const char *tile_id)
     return false;
 }
 
-static bool camera_fetching;
+/* Kamerabilder gehen ohne Flash direkt in den Speicher und werden dort dekodiert. */
+#define CAMERA_BUFFER_SIZE (900 * 1024)
+static uint8_t *camera_buffer;
+static esp_http_client_handle_t camera_client;
+static char camera_client_base[160];
 
-static void camera_slot_name(const char *file, char which, char *out, size_t length)
+static void camera_client_reset(void)
 {
-    const char *base = file ? file : "cam";
-    const char *slash = strrchr(base, '/');
-    if (slash) base = slash + 1;
-    const char *dot = strrchr(base, '.');
-    char stem[48];
-    const char *ext = ".jpg";
-    if (dot && dot != base) {
-        size_t count = (size_t) (dot - base);
-        if (count >= sizeof(stem)) count = sizeof(stem) - 1;
-        memcpy(stem, base, count);
-        stem[count] = '\0';
-        ext = dot;
+    if (!camera_client) return;
+    esp_http_client_close(camera_client);
+    esp_http_client_cleanup(camera_client);
+    camera_client = NULL;
+}
+
+/* Lädt ein Bild in camera_buffer. Die Verbindung bleibt für das nächste Bild offen. */
+static esp_err_t camera_download(const char *path, size_t *out_length)
+{
+    *out_length = 0;
+    char url[260];
+    snprintf(url, sizeof(url), "%s%s", base_url, path);
+    if (camera_client && strcmp(camera_client_base, base_url) != 0) camera_client_reset();
+    if (!camera_client) {
+        esp_http_client_config_t config;
+        configure_http_client(&config, url);
+        config.timeout_ms = 8000;
+        config.keep_alive_enable = true;
+        camera_client = esp_http_client_init(&config);
+        if (!camera_client) return ESP_ERR_NO_MEM;
+        char header[64];
+        snprintf(header, sizeof(header), "Bearer %s", token);
+        esp_http_client_set_header(camera_client, "Authorization", header);
+        snprintf(camera_client_base, sizeof(camera_client_base), "%s", base_url);
     } else {
-        snprintf(stem, sizeof(stem), "%s", base);
+        esp_http_client_set_url(camera_client, url);
     }
-    snprintf(out, length, "%s-%c%s", stem, which, ext);
-}
-
-static cam_stamp_entry_t camera_files[CAM_STAMP_MAX];
-
-static char camera_next_slot(const char *tile_id)
-{
-    for (int index = 0; index < CAM_STAMP_MAX; index++) {
-        if (camera_files[index].id[0] && strcmp(camera_files[index].id, tile_id) == 0) {
-            return camera_files[index].stamp == 'b' ? 'a' : 'b';
+    esp_task_wdt_reset();
+    esp_err_t error = esp_http_client_open(camera_client, 0);
+    if (error != ESP_OK) return error;
+    esp_http_client_fetch_headers(camera_client);
+    int status = esp_http_client_get_status_code(camera_client);
+    if (status != 200) {
+        ESP_LOGW(TAG, "Kamera HTTP %d auf %s", status, path);
+        return ESP_FAIL;
+    }
+    size_t total = 0;
+    int64_t started = esp_timer_get_time();
+    int64_t deadline = started + 10000000LL;
+    while (!esp_http_client_is_complete_data_received(camera_client)) {
+        esp_task_wdt_reset();
+        int64_t now = esp_timer_get_time();
+        if (now > deadline || now > started + 30000000LL) {
+            ESP_LOGW(TAG, "Kamera-Timeout %s nach %u Byte", path, (unsigned) total);
+            return ESP_ERR_TIMEOUT;
         }
-    }
-    return 'a';
-}
-
-static void camera_mark_shown(const char *tile_id, char which)
-{
-    for (int index = 0; index < CAM_STAMP_MAX; index++) {
-        if (camera_files[index].id[0] && strcmp(camera_files[index].id, tile_id) == 0) {
-            camera_files[index].stamp = which;
-            return;
+        /* Ein Tipp wartet nicht auf den Rest des Bildes. */
+        if (actions && uxQueueMessagesWaiting(actions) > 0) return ESP_ERR_INVALID_STATE;
+        if (total >= CAMERA_BUFFER_SIZE) {
+            ESP_LOGW(TAG, "Kamera-Bild zu groß (%u Byte)", (unsigned) total);
+            return ESP_ERR_INVALID_SIZE;
         }
-    }
-    for (int index = 0; index < CAM_STAMP_MAX; index++) {
-        if (!camera_files[index].id[0]) {
-            snprintf(camera_files[index].id, sizeof(camera_files[index].id), "%s", tile_id);
-            camera_files[index].stamp = which;
-            return;
+        size_t room = CAMERA_BUFFER_SIZE - total;
+        int read = esp_http_client_read(camera_client, (char *) camera_buffer + total, room > 8192 ? 8192 : (int) room);
+        if (read < 0) return ESP_FAIL;
+        if (read == 0) {
+            if (esp_http_client_is_complete_data_received(camera_client)) break;
+            int64_t length = esp_http_client_get_content_length(camera_client);
+            if (length > 0 && (int64_t) total < length) return ESP_FAIL;
+            break;
         }
+        total += (size_t) read;
+        deadline = esp_timer_get_time() + 10000000LL;
     }
+    if (total < 4) return ESP_FAIL;
+    *out_length = total;
+    return ESP_OK;
 }
 
 static void fetch_one_camera(const char *tile_id, const char *file, bool quiet)
 {
     if (!tile_id || !tile_id[0] || !file || !file[0]) return;
-    if (camera_fetching) return;
-    camera_fetching = true;
-    char which = camera_next_slot(tile_id);
-    char name[72];
-    camera_slot_name(file, which, name, sizeof(name));
-    char target[96];
-    snprintf(target, sizeof(target), "/storage/%s", name);
-    char path[80];
-    snprintf(path, sizeof(path), "/v1/camera/%s", tile_id);
-    if (!quiet) {
+    bool has_frame = false;
+    if (!homedisplay_ui_camera_wanted(tile_id, &has_frame)) return;
+    if (!camera_buffer) {
+        camera_buffer = heap_caps_malloc(CAMERA_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!camera_buffer) {
+            ESP_LOGW(TAG, "Kamera: kein Speicher für den Empfangspuffer");
+            return;
+        }
+    }
+    if (!quiet && !has_frame) {
         char status[96];
         snprintf(status, sizeof(status), "Lade Kamera\n%s", tile_id);
         homedisplay_ui_status(status);
     }
-    ESP_LOGI(TAG, "Kamera laden %s", tile_id);
-    (void) quiet;
-    if (download_to_file(path, target, 20000, 900 * 1024) == ESP_OK) {
-        ESP_LOGI(TAG, "Kamera geladen %s", tile_id);
-        if (homedisplay_ui_refresh_camera(tile_id, name)) camera_mark_shown(tile_id, which);
-    } else {
-        ESP_LOGW(TAG, "Kamera %s konnte nicht geladen werden", tile_id);
+    char path[80];
+    snprintf(path, sizeof(path), "/v1/camera/%s", tile_id);
+    int64_t started = esp_timer_get_time();
+    bool reused = camera_client != NULL;
+    size_t length = 0;
+    esp_err_t error = camera_download(path, &length);
+    if (error == ESP_ERR_INVALID_STATE) {
+        camera_client_reset();
+        return;
     }
-    camera_fetching = false;
+    if (error != ESP_OK && reused) {
+        /* Der Server hat die offene Verbindung geschlossen: einmal frisch verbinden. */
+        camera_client_reset();
+        error = camera_download(path, &length);
+    }
+    if (error != ESP_OK) {
+        camera_client_reset();
+        ESP_LOGW(TAG, "Kamera %s konnte nicht geladen werden (%s)", tile_id, esp_err_to_name(error));
+        return;
+    }
+    int load_ms = (int) ((esp_timer_get_time() - started) / 1000);
+    ESP_LOGI(TAG, "Kamera geladen %s: %u Byte in %d ms%s", tile_id, (unsigned) length, load_ms, reused ? " (offene Verbindung)" : "");
+    homedisplay_ui_show_camera_jpeg(tile_id, camera_buffer, length);
 }
 
 static cJSON *read_layout_cache(void)
@@ -747,7 +788,10 @@ static void sync_cameras_from_state(const char *state_json)
         int stamp = stamp_item->valueint;
         if (!tile_id || stamp <= 0) continue;
         if (layout && layout_tile_is_live(layout, tile_id)) continue;
-        if (cam_stamp_unchanged(tile_id, stamp)) continue;
+        /* Nur Kacheln der gezeigten Seite. Der Stempel bleibt sonst offen, damit der Seitenwechsel nachlädt. */
+        bool has_frame = false;
+        if (!homedisplay_ui_camera_wanted(tile_id, &has_frame)) continue;
+        if (cam_stamp_unchanged(tile_id, stamp) && has_frame) continue;
         const char *file = layout ? camera_file_for_tile(layout, tile_id) : NULL;
         if (file) fetch_one_camera(tile_id, file, false);
     }
@@ -801,7 +845,7 @@ static void fetch_live_cameras(void)
         next_live_scan_us = now + 1000000;
         return;
     }
-    int soonest_ms = 1000;
+    int soonest_ms = 500;
     bool any = false;
     cJSON *page = NULL;
     cJSON_ArrayForEach(page, cJSON_GetObjectItem(layout, "pages")) {
@@ -810,7 +854,15 @@ static void fetch_live_cameras(void)
             const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
             if (!kind || strcmp(kind, "camera") != 0) continue;
             const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId"));
-            if (!id || !layout_tile_is_live(layout, id)) continue;
+            if (!id) continue;
+            if (!layout_tile_is_live(layout, id)) {
+                /* Nach einem Seitenwechsel ohne Bild: sofort laden, höchstens einmal je Sekunde. */
+                bool has_frame = false;
+                if (homedisplay_ui_camera_wanted(id, &has_frame) && !has_frame && live_tile_due(id, 1)) {
+                    fetch_one_camera(id, cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile")), true);
+                }
+                continue;
+            }
             int fps = tile_live_fps(tile);
             any = true;
             int period_ms = 1000 / fps;
@@ -820,9 +872,9 @@ static void fetch_live_cameras(void)
         }
     }
     cJSON_Delete(layout);
-    if (!any) soonest_ms = 1000;
+    if (!any) soonest_ms = 500;
     if (soonest_ms < 200) soonest_ms = 200;
-    next_live_scan_us = esp_timer_get_time() + (int64_t) soonest_ms * 1000;
+    next_live_scan_us = now + (int64_t) soonest_ms * 1000;
 }
 
 static cam_stamp_entry_t media_stamps[CAM_STAMP_MAX];
@@ -1153,10 +1205,33 @@ static void confirm_boot(void)
     remember("rollback", "");
 }
 
+/* Frühere Versionen legten Kamerabilder (-a/-b) im Flash ab. Sie werden nicht mehr gebraucht. */
+static void cleanup_camera_files(void)
+{
+    DIR *dir = opendir("/storage");
+    if (!dir) return;
+    struct dirent *entry;
+    int removed = 0;
+    while ((entry = readdir(dir)) != NULL) {
+        const char *name = entry->d_name;
+        const char *dot = strrchr(name, '.');
+        size_t length = strlen(name);
+        bool slot_file = dot && dot - name >= 2 && (dot[-2] == '-') && (dot[-1] == 'a' || dot[-1] == 'b');
+        bool part_file = length > 5 && strcmp(name + length - 5, ".part") == 0;
+        if (!slot_file && !part_file) continue;
+        char path[300];
+        snprintf(path, sizeof(path), "/storage/%s", name);
+        if (remove(path) == 0) removed++;
+    }
+    closedir(dir);
+    if (removed > 0) ESP_LOGI(TAG, "%d alte Kamera-Dateien entfernt", removed);
+}
+
 static void client_task(void *argument)
 {
     (void) argument;
     ESP_LOGI(TAG, "Client gestartet");
+    cleanup_camera_files();
     started_at = esp_timer_get_time();
     esp_task_wdt_add(NULL);
     const esp_partition_t *running = esp_ota_get_running_partition();
