@@ -2201,12 +2201,15 @@ class HomeDisplay extends IPSModuleStrict
         }
     }
 
-    /** @param array<string, mixed> $tile */
-    private function cameraJpegForTile(array $tile, bool $allowBuild): ?string
+    /**
+     * @param array<string, mixed> $tile
+     * @param string $shownCrc CRC32 (hex) des Bildes, das die Anzeige schon zeigt. Dieses Bild gilt nicht als frisch.
+     */
+    private function cameraJpegForTile(array $tile, bool $allowBuild, string $shownCrc = ''): ?string
     {
         $paths = HomeDisplayCatalogStore::cameraCachePaths($this->InstanceID, (string) ($tile['tileId'] ?? ''));
         $meta = $this->cameraCacheMeta($tile);
-        $cached = $this->readFreshCameraCache($paths, $meta);
+        $cached = $this->readFreshCameraCache($paths, $meta, $shownCrc);
         if ($cached !== null) {
             return $cached;
         }
@@ -2229,7 +2232,7 @@ class HomeDisplay extends IPSModuleStrict
             fclose($lock);
             return $cached;
         }
-        $cached = $this->readFreshCameraCache($paths, $meta);
+        $cached = $this->readFreshCameraCache($paths, $meta, $shownCrc);
         if ($cached !== null) {
             flock($lock, LOCK_UN);
             fclose($lock);
@@ -2271,7 +2274,7 @@ class HomeDisplay extends IPSModuleStrict
     }
 
     /** @param array{jpeg: string, meta: string} $paths @param array<string, mixed> $meta */
-    private function readFreshCameraCache(array $paths, array $meta): ?string
+    private function readFreshCameraCache(array $paths, array $meta, string $shownCrc = ''): ?string
     {
         if (!is_file($paths['jpeg']) || !is_file($paths['meta'])) {
             return null;
@@ -2292,7 +2295,13 @@ class HomeDisplay extends IPSModuleStrict
             return null;
         }
         $binary = file_get_contents($paths['jpeg']);
-        return is_string($binary) && $binary !== '' ? $binary : null;
+        if (!is_string($binary) || $binary === '') {
+            return null;
+        }
+        if ($shownCrc !== '' && hash_equals($shownCrc, sprintf('%08x', crc32($binary)))) {
+            return null;
+        }
+        return $binary;
     }
 
     private function cameraBinaryForTile(array $tile): array
@@ -2446,7 +2455,9 @@ class HomeDisplay extends IPSModuleStrict
     {
         $tile = $this->findLayoutTile($device['id'], $tileId);
         if ($tile !== null && (string) ($tile['kind'] ?? '') === 'camera') {
-            $binary = $this->cameraJpegForTile($tile, true);
+            $shown = strtolower(trim((string) ($_SERVER['HTTP_X_HOMEDISPLAY_FRAME'] ?? '')));
+            $shown = preg_match('/^[0-9a-f]{8}$/', $shown) === 1 ? $shown : '';
+            $binary = $this->cameraJpegForTile($tile, true, $shown);
             if ($binary !== null && $binary !== '') {
                 header('Content-Type: image/jpeg');
                 header('Cache-Control: no-store');

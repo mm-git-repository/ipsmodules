@@ -17,7 +17,9 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "esp_rom_crc.h"
 
 #include <dirent.h>
 #include <stdio.h>
@@ -604,9 +606,73 @@ static bool layout_tile_is_live(cJSON *layout, const char *tile_id)
 }
 
 /* Kamerabilder gehen ohne Flash direkt in den Speicher und werden dort dekodiert. */
-#define CAMERA_BUFFER_SIZE (900 * 1024)
+#define CAMERA_BUFFER_SIZE (640 * 1024)
+/* Zwei Empfangspuffer: Während ein Bild dekodiert wird, lädt der Client schon das nächste. */
+static uint8_t *camera_rx[2];
+static int camera_rx_next;
 static uint8_t *camera_buffer;
 static esp_http_client_handle_t camera_client;
+
+typedef struct {
+    char tile_id[40];
+    const uint8_t *data;
+    size_t length;
+} camera_job_t;
+static QueueHandle_t camera_jobs;
+static SemaphoreHandle_t camera_idle;
+static char camera_last_tile[40];
+static uint32_t camera_last_crc;
+
+static void camera_decode_task(void *argument)
+{
+    (void) argument;
+    camera_job_t job;
+    while (true) {
+        if (xQueueReceive(camera_jobs, &job, portMAX_DELAY) != pdTRUE) continue;
+        homedisplay_ui_show_camera_jpeg(job.tile_id, job.data, job.length);
+        xSemaphoreGive(camera_idle);
+    }
+}
+
+static bool camera_pipeline_failed;
+
+static bool camera_pipeline_ready(void)
+{
+    if (camera_jobs) return true;
+    if (camera_pipeline_failed) return false;
+    for (int side = 0; side < 2; side++) {
+        if (!camera_rx[side]) camera_rx[side] = heap_caps_malloc(CAMERA_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!camera_rx[side]) {
+            ESP_LOGW(TAG, "Kamera: kein PSRAM für die Empfangspuffer (frei %u, größter Block %u Byte)",
+                     (unsigned) heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                     (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+            camera_pipeline_failed = true;
+            return false;
+        }
+    }
+    if (!camera_idle) camera_idle = xSemaphoreCreateBinary();
+    QueueHandle_t jobs = xQueueCreate(1, sizeof(camera_job_t));
+    if (!camera_idle || !jobs) {
+        if (jobs) vQueueDelete(jobs);
+        camera_pipeline_failed = true;
+        return false;
+    }
+    xSemaphoreGive(camera_idle);
+    camera_jobs = jobs;
+    /* Der Server rechnet mit PHP crc32(); der Prüfwert muss cbf43926 sein. */
+    ESP_LOGI(TAG, "Kamera: CRC-Prüfwert %08lx", (unsigned long) esp_rom_crc32_le(0, (const uint8_t *) "123456789", 9));
+    /* Unter dem Client-Task, damit Netz und Tipps Vorrang haben. Der Stapel darf im PSRAM liegen. */
+    BaseType_t ok = xTaskCreate(camera_decode_task, "camdecode", 6144, NULL, 3, NULL);
+    if (ok != pdPASS) ok = xTaskCreateWithCaps(camera_decode_task, "camdecode", 6144, NULL, 3, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ok != pdPASS) {
+        ESP_LOGW(TAG, "Kamera: Decoder-Task nicht gestartet (intern frei %u Byte)", (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        camera_jobs = NULL;
+        vQueueDelete(jobs);
+        camera_pipeline_failed = true;
+        return false;
+    }
+    return true;
+}
 static char camera_client_base[160];
 
 static void camera_client_reset(void)
@@ -618,7 +684,7 @@ static void camera_client_reset(void)
 }
 
 /* Lädt ein Bild in camera_buffer. Die Verbindung bleibt für das nächste Bild offen. */
-static esp_err_t camera_download(const char *path, size_t *out_length)
+static esp_err_t camera_download(const char *path, const char *shown_crc, size_t *out_length)
 {
     *out_length = 0;
     char url[260];
@@ -639,13 +705,17 @@ static esp_err_t camera_download(const char *path, size_t *out_length)
     } else {
         esp_http_client_set_url(camera_client, url);
     }
+    /* Der Server liefert dann nicht noch einmal dasselbe Bild, sondern holt ein neues. */
+    if (shown_crc && shown_crc[0]) esp_http_client_set_header(camera_client, "X-HomeDisplay-Frame", shown_crc);
+    else esp_http_client_delete_header(camera_client, "X-HomeDisplay-Frame");
     esp_task_wdt_reset();
     esp_err_t error = esp_http_client_open(camera_client, 0);
     if (error != ESP_OK) return error;
     esp_http_client_fetch_headers(camera_client);
     int status = esp_http_client_get_status_code(camera_client);
     if (status != 200) {
-        ESP_LOGW(TAG, "Kamera HTTP %d auf %s", status, path);
+        /* -1: Die offene Verbindung war schon zu; der Aufrufer verbindet neu. */
+        if (status > 0) ESP_LOGW(TAG, "Kamera HTTP %d auf %s", status, path);
         return ESP_FAIL;
     }
     size_t total = 0;
@@ -681,18 +751,17 @@ static esp_err_t camera_download(const char *path, size_t *out_length)
     return ESP_OK;
 }
 
-static void fetch_one_camera(const char *tile_id, const char *file, bool quiet)
+/* Liefert false nur, wenn der Server dasselbe Bild noch einmal geschickt hat. */
+static bool fetch_one_camera(const char *tile_id, const char *file, bool quiet)
 {
-    if (!tile_id || !tile_id[0] || !file || !file[0]) return;
+    if (!tile_id || !tile_id[0] || !file || !file[0]) return true;
     bool has_frame = false;
-    if (!homedisplay_ui_camera_wanted(tile_id, &has_frame)) return;
-    if (!camera_buffer) {
-        camera_buffer = heap_caps_malloc(CAMERA_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!camera_buffer) {
-            ESP_LOGW(TAG, "Kamera: kein Speicher für den Empfangspuffer");
-            return;
-        }
+    if (!homedisplay_ui_camera_wanted(tile_id, &has_frame)) return true;
+    if (!camera_pipeline_ready()) {
+        ESP_LOGW(TAG, "Kamera: kein Speicher für die Empfangspuffer");
+        return true;
     }
+    camera_buffer = camera_rx[camera_rx_next];
     if (!quiet && !has_frame) {
         char status[96];
         snprintf(status, sizeof(status), "Lade Kamera\n%s", tile_id);
@@ -700,27 +769,46 @@ static void fetch_one_camera(const char *tile_id, const char *file, bool quiet)
     }
     char path[80];
     snprintf(path, sizeof(path), "/v1/camera/%s", tile_id);
+    char shown_crc[12] = "";
+    if (has_frame && strcmp(camera_last_tile, tile_id) == 0) snprintf(shown_crc, sizeof(shown_crc), "%08lx", (unsigned long) camera_last_crc);
     int64_t started = esp_timer_get_time();
     bool reused = camera_client != NULL;
     size_t length = 0;
-    esp_err_t error = camera_download(path, &length);
+    esp_err_t error = camera_download(path, shown_crc, &length);
     if (error == ESP_ERR_INVALID_STATE) {
         camera_client_reset();
-        return;
+        return true;
     }
     if (error != ESP_OK && reused) {
         /* Der Server hat die offene Verbindung geschlossen: einmal frisch verbinden. */
         camera_client_reset();
-        error = camera_download(path, &length);
+        error = camera_download(path, shown_crc, &length);
     }
     if (error != ESP_OK) {
         camera_client_reset();
         ESP_LOGW(TAG, "Kamera %s konnte nicht geladen werden (%s)", tile_id, esp_err_to_name(error));
-        return;
+        return true;
     }
     int load_ms = (int) ((esp_timer_get_time() - started) / 1000);
-    ESP_LOGI(TAG, "Kamera geladen %s: %u Byte in %d ms%s", tile_id, (unsigned) length, load_ms, reused ? " (offene Verbindung)" : "");
-    homedisplay_ui_show_camera_jpeg(tile_id, camera_buffer, length);
+    uint32_t crc = esp_rom_crc32_le(0, camera_buffer, length);
+    bool same = has_frame && crc == camera_last_crc && strcmp(camera_last_tile, tile_id) == 0;
+    ESP_LOGI(TAG, "Kamera geladen %s: %u Byte in %d ms%s%s", tile_id, (unsigned) length, load_ms,
+             reused ? " (offene Verbindung)" : "", same ? ", unverändert" : "");
+    if (same) return false;
+    /* Wartet nur, bis das vorige Bild dekodiert ist; dieser Puffer ist dann frei. */
+    if (xSemaphoreTake(camera_idle, pdMS_TO_TICKS(3000)) != pdTRUE) return true;
+    camera_job_t job;
+    snprintf(job.tile_id, sizeof(job.tile_id), "%s", tile_id);
+    job.data = camera_buffer;
+    job.length = length;
+    if (xQueueSend(camera_jobs, &job, 0) != pdTRUE) {
+        xSemaphoreGive(camera_idle);
+        return true;
+    }
+    camera_last_crc = crc;
+    snprintf(camera_last_tile, sizeof(camera_last_tile), "%s", tile_id);
+    camera_rx_next ^= 1;
+    return true;
 }
 
 static cJSON *read_layout_cache(void)
@@ -811,25 +899,37 @@ static int tile_live_fps(cJSON *tile)
     return fps;
 }
 
+static struct {
+    char id[40];
+    int64_t next_us;
+} live_slots[CAM_STAMP_MAX];
+
+/* Gleiches Bild erhalten: bald erneut fragen statt eine ganze Periode zu warten. */
+static void live_tile_retry(const char *tile_id, int delay_ms)
+{
+    for (int index = 0; index < CAM_STAMP_MAX; index++) {
+        if (live_slots[index].id[0] && strcmp(live_slots[index].id, tile_id) == 0) {
+            live_slots[index].next_us = esp_timer_get_time() + (int64_t) delay_ms * 1000;
+            return;
+        }
+    }
+}
+
 static bool live_tile_due(const char *tile_id, int fps)
 {
-    static struct {
-        char id[40];
-        int64_t next_us;
-    } slots[CAM_STAMP_MAX];
     int64_t now = esp_timer_get_time();
     int64_t period = 1000000 / (fps > 0 ? fps : 1);
     for (int index = 0; index < CAM_STAMP_MAX; index++) {
-        if (slots[index].id[0] && strcmp(slots[index].id, tile_id) == 0) {
-            if (now < slots[index].next_us) return false;
-            slots[index].next_us = now + period;
+        if (live_slots[index].id[0] && strcmp(live_slots[index].id, tile_id) == 0) {
+            if (now < live_slots[index].next_us) return false;
+            live_slots[index].next_us = now + period;
             return true;
         }
     }
     for (int index = 0; index < CAM_STAMP_MAX; index++) {
-        if (!slots[index].id[0]) {
-            snprintf(slots[index].id, sizeof(slots[index].id), "%s", tile_id);
-            slots[index].next_us = now + period;
+        if (!live_slots[index].id[0]) {
+            snprintf(live_slots[index].id, sizeof(live_slots[index].id), "%s", tile_id);
+            live_slots[index].next_us = now + period;
             return true;
         }
     }
@@ -869,7 +969,9 @@ static void fetch_live_cameras(void)
             int period_ms = 1000 / fps;
             if (period_ms < soonest_ms) soonest_ms = period_ms;
             if (!live_tile_due(id, fps)) continue;
-            fetch_one_camera(id, cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile")), true);
+            if (!fetch_one_camera(id, cJSON_GetStringValue(cJSON_GetObjectItem(tile, "cameraFile")), true)) {
+                live_tile_retry(id, 250);
+            }
         }
     }
     cJSON_Delete(layout);

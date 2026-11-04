@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.c" "board.c" "ch422g.c" "net.c" "client.c" "ui.c" "camjpeg.c" "ota.c" "serial_menu.c"
+    SRCS "main.c" "board.c" "ch422g.c" "net.c" "client.c" "ui.c" "camjpeg.c" "camtjpgd.c" "ota.c" "serial_menu.c"
         "fonts/montserrat_bold_16.c" "fonts/montserrat_bold_20.c" "fonts/montserrat_bold_24.c" "fonts/montserrat_bold_28.c" "fonts/montserrat_bold_32.c" "fonts/montserrat_bold_36.c" "fonts/montserrat_bold_40.c" "fonts/montserrat_bold_48.c"
         "fonts/montserrat_italic_16.c" "fonts/montserrat_italic_20.c" "fonts/montserrat_italic_24.c" "fonts/montserrat_italic_28.c" "fonts/montserrat_italic_32.c" "fonts/montserrat_italic_36.c" "fonts/montserrat_italic_40.c" "fonts/montserrat_italic_48.c"
         "fonts/montserrat_bolditalic_16.c" "fonts/montserrat_bolditalic_20.c" "fonts/montserrat_bolditalic_24.c" "fonts/montserrat_bolditalic_28.c" "fonts/montserrat_bolditalic_32.c" "fonts/montserrat_bolditalic_36.c" "fonts/montserrat_bolditalic_40.c" "fonts/montserrat_bolditalic_48.c"
@@ -9,3 +9,5 @@ idf_component_register(
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
+# Kamerabild: Dekodieren liegt im Takt des Livebilds.
+set_source_files_properties("camtjpgd.c" "camjpeg.c" PROPERTIES COMPILE_OPTIONS "-O2")

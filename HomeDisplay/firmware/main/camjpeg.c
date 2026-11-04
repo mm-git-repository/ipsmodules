@@ -1,16 +1,23 @@
 #include "camjpeg.h"
 
-#include "lvgl.h"
-
-#if LV_USE_SJPG
-
-#include "extra/libs/sjpg/tjpgd.h"
+#include "camtjpgd.h"
+#include "esp_heap_caps.h"
 
 #include <string.h>
 
-#define JPEG_WORK_BYTES 4096
+/* Huffman-Tabellen (JD_FASTDECODE 2) und Eingabepuffer brauchen gut 13 KB. Nur ein Task dekodiert.
+ * Interner Speicher ist schneller, ist aber knapp; sonst PSRAM. */
+#define JPEG_WORK_BYTES 20480
 
-static uint8_t jpeg_work[JPEG_WORK_BYTES] __attribute__((aligned(4)));
+static uint8_t *jpeg_work;
+
+static bool jpeg_work_ready(void)
+{
+    if (jpeg_work) return true;
+    jpeg_work = heap_caps_aligned_alloc(4, JPEG_WORK_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!jpeg_work) jpeg_work = heap_caps_aligned_alloc(4, JPEG_WORK_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return jpeg_work != NULL;
+}
 
 typedef struct {
     const uint8_t *data;
@@ -31,22 +38,18 @@ static size_t jpeg_in(JDEC *jd, uint8_t *buffer, size_t count)
     return count;
 }
 
-/* TJpgDec liefert RGB888 je Block. LVGL läuft mit 16 Bit ohne Byte-Tausch. */
+/* Der Decoder liefert RGB565 je Block. LVGL läuft mit 16 Bit ohne Byte-Tausch. */
 static int jpeg_out(JDEC *jd, void *bitmap, JRECT *rect)
 {
     jpeg_ctx_t *ctx = (jpeg_ctx_t *) jd->device;
-    const uint8_t *p = (const uint8_t *) bitmap;
-    int row_width = (int) rect->right - (int) rect->left + 1;
-    for (int y = rect->top; y <= (int) rect->bottom; y++) {
-        if (y >= ctx->height) {
-            p += row_width * 3;
-            continue;
-        }
-        uint16_t *row = ctx->dst + (size_t) y * (size_t) ctx->width;
-        for (int x = rect->left; x <= (int) rect->right; x++, p += 3) {
-            if (x >= ctx->width) continue;
-            row[x] = (uint16_t) (((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | (p[2] >> 3));
-        }
+    const uint16_t *p = (const uint16_t *) bitmap;
+    int block_w = (int) rect->right - (int) rect->left + 1;
+    if (rect->left >= ctx->width) return 1;
+    int copy_w = block_w;
+    if ((int) rect->left + copy_w > ctx->width) copy_w = ctx->width - (int) rect->left;
+    for (int y = rect->top; y <= (int) rect->bottom; y++, p += block_w) {
+        if (y >= ctx->height) break;
+        memcpy(ctx->dst + (size_t) y * (size_t) ctx->width + rect->left, p, (size_t) copy_w * sizeof(uint16_t));
     }
     return 1;
 }
@@ -59,9 +62,10 @@ static int scaled(int size, int scale)
 int homedisplay_jpeg_probe(const uint8_t *data, size_t length, size_t max_px, int *width, int *height, int *scale)
 {
     if (!data || length < 4 || !width || !height || !scale) return JDR_PAR;
+    if (!jpeg_work_ready()) return JDR_MEM1;
     jpeg_ctx_t ctx = {.data = data, .length = length};
     JDEC jd;
-    JRESULT result = jd_prepare(&jd, jpeg_in, jpeg_work, JPEG_WORK_BYTES, &ctx);
+    JRESULT result = camjd_prepare(&jd, jpeg_in, jpeg_work, JPEG_WORK_BYTES, &ctx);
     if (result != JDR_OK) return (int) result;
     int s = 0;
     while (s < 3 && (size_t) scaled(jd.width, s) * (size_t) scaled(jd.height, s) > max_px) s++;
@@ -75,36 +79,11 @@ int homedisplay_jpeg_probe(const uint8_t *data, size_t length, size_t max_px, in
 int homedisplay_jpeg_decode(const uint8_t *data, size_t length, int scale, uint16_t *dst, int width, int height)
 {
     if (!data || !dst || width < 1 || height < 1 || scale < 0 || scale > 3) return JDR_PAR;
+    if (!jpeg_work_ready()) return JDR_MEM1;
     jpeg_ctx_t ctx = {.data = data, .length = length, .dst = dst, .width = width, .height = height};
     JDEC jd;
-    JRESULT result = jd_prepare(&jd, jpeg_in, jpeg_work, JPEG_WORK_BYTES, &ctx);
+    JRESULT result = camjd_prepare(&jd, jpeg_in, jpeg_work, JPEG_WORK_BYTES, &ctx);
     if (result != JDR_OK) return (int) result;
-    result = jd_decomp(&jd, jpeg_out, (uint8_t) scale);
+    result = camjd_decomp(&jd, jpeg_out, (uint8_t) scale);
     return (int) result;
 }
-
-#else
-
-int homedisplay_jpeg_probe(const uint8_t *data, size_t length, size_t max_px, int *width, int *height, int *scale)
-{
-    (void) data;
-    (void) length;
-    (void) max_px;
-    (void) width;
-    (void) height;
-    (void) scale;
-    return 8;
-}
-
-int homedisplay_jpeg_decode(const uint8_t *data, size_t length, int scale, uint16_t *dst, int width, int height)
-{
-    (void) data;
-    (void) length;
-    (void) scale;
-    (void) dst;
-    (void) width;
-    (void) height;
-    return 8;
-}
-
-#endif
