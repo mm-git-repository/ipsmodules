@@ -506,6 +506,31 @@
         <label>Akzent <input id="theme-accent" type="color" value="#ffb547"></label>
         <label class="check"><input id="color-mono" type="checkbox"> Schwarz/Weiß</label>
       </div>
+      <h4>Helligkeit und Ruheanzeige</h4>
+      <p class="hint">Gilt für diese Ansicht. Die Beleuchtung kann nur an oder aus: 0 schaltet sie aus, jeder Wert darüber schaltet sie an. Nachts gilt der Nachtwert, wenn „Nachts dimmen“ an ist.</p>
+      <div class="general-grid">
+        <label class="check"><input id="l-night-dim" type="checkbox" checked> Nachts dimmen</label>
+        <label>Tag (0–100) <input id="l-day-brightness" type="number" min="0" max="100" value="70"></label>
+        <label>Nacht (0–100) <input id="l-night-brightness" type="number" min="0" max="100" value="15"></label>
+        <label>Nacht ab Stunde <input id="l-night-from" type="number" min="0" max="23" value="22"></label>
+        <label>Nacht bis Stunde <input id="l-night-to" type="number" min="0" max="23" value="6"></label>
+        <label>Ruheanzeige
+          <select id="l-idle-mode">
+            <option value="0">Uhrseite</option>
+            <option value="1">Letzte Seite</option>
+            <option value="2">Bildschirm aus</option>
+          </select>
+        </label>
+        <label>Uhrstil
+          <select id="l-idle-clock">
+            <option value="digital">Digital</option>
+            <option value="analog">Analog</option>
+            <option value="word">Wortuhr (Deutsch)</option>
+            <option value="swabian">Wortuhr (Schwäbisch)</option>
+          </select>
+        </label>
+        <label>Uhr nach (Sekunden) <input id="l-idle-timeout" type="number" min="5" max="3600" value="60"></label>
+      </div>
       <span id="display-profile-meta" class="hint"></span>
       <h4>Seiten</h4>
       <div id="l-pages"></div>
@@ -545,25 +570,13 @@
   <dialog id="settings-dialog">
     <form method="dialog">
       <h3>Einstellungen</h3>
-      <p class="hint">Nur die Werte, die es einmal für alle Anzeigen gibt: Dienstadresse und diese Seite. Kopplung, Ansicht, Helligkeit und Abruf stehen in der jeweiligen Instanz „Hausanzeige“.</p>
+      <p class="hint">Nur die Werte, die es einmal für alle Anzeigen gibt: Dienstadresse und diese Seite. Kopplung und Ansicht stehen in der jeweiligen Instanz „Hausanzeige“. Helligkeit und Ruheanzeige stehen in der Ansicht.</p>
       <label>Dienstadresse (leer = automatisch, nur Hostname oder IP) <input id="s-host" placeholder="192.168.1.10" pattern="[A-Za-z0-9.-]*"></label>
       <dl class="facts">
         <dt>Dienst</dt><dd id="s-service-url">–</dd>
         <dt>Läuft über</dt><dd id="s-service-instance">–</dd>
         <dt>Verwaltungsseite</dt><dd id="s-admin-url">–</dd>
       </dl>
-      <h4>Helligkeit</h4>
-      <p class="hint">Die Beleuchtung kann nur an oder aus. 0 schaltet sie aus, jeder Wert darüber schaltet sie an. Nachts gilt der Nachtwert, wenn „Nachts dimmen“ an ist.</p>
-      <label>Anzeige <select id="s-bright-panel"></select></label>
-      <label class="switch"><input id="s-night-dim" type="checkbox"> Nachts dimmen</label>
-      <div class="row">
-        <label>Tag (0–100) <input id="s-day-brightness" type="number" min="0" max="100" value="70"></label>
-        <label>Nacht (0–100) <input id="s-night-brightness" type="number" min="0" max="100" value="15"></label>
-      </div>
-      <div class="row">
-        <label>Nacht ab Stunde <input id="s-night-from" type="number" min="0" max="23" value="22"></label>
-        <label>Nacht bis Stunde <input id="s-night-to" type="number" min="0" max="23" value="6"></label>
-      </div>
       <h4>Anzeigen</h4>
       <table id="s-panels" class="panels">
         <thead><tr><th>Anzeige</th><th>Kopplung</th><th>Status</th><th>Ansicht</th></tr></thead>

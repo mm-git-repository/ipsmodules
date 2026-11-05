@@ -561,6 +561,7 @@ static void fetch_one_image(const char *id, const char *file, const char *tile_i
         images_missing++;
         return;
     }
+    ESP_LOGI(TAG, "Bild %s geladen als %s", id, file);
     if (image_retrying) {
         /* Ansicht steht bereits: nur die betroffene Kachel bzw. den Hintergrund nachziehen. */
         if (tile_id && tile_id[0]) homedisplay_ui_refresh_image(tile_id, file);
@@ -924,12 +925,19 @@ static cJSON *read_layout_cache(void)
     if (!layout_file) return NULL;
     fseek(layout_file, 0, SEEK_END);
     long size = ftell(layout_file);
-    if (size <= 0 || size > 16000) {
+    /* Gleiche Grenze wie der Antwortpuffer: größere Layouts mit vielen Seiten ließen Kamera und Medien sonst stumm ausfallen. */
+    if (size <= 0 || size > 49152) {
+        static bool warned;
+        if (!warned) {
+            ESP_LOGW(TAG, "Layout-Zwischenspeicher nicht lesbar (%ld Byte)", size);
+            warned = true;
+        }
         fclose(layout_file);
         return NULL;
     }
     fseek(layout_file, 0, SEEK_SET);
-    char *layout_text = malloc((size_t) size + 1);
+    char *layout_text = heap_caps_malloc((size_t) size + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!layout_text) layout_text = malloc((size_t) size + 1);
     if (!layout_text) {
         fclose(layout_file);
         return NULL;

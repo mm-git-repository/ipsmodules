@@ -665,13 +665,53 @@ class HomeDisplay extends IPSModuleStrict
         HomeDisplayCatalogStore::save($catalog);
     }
 
+    /**
+     * Bisherige Instanzwerte, damit der Editor sie in die Ansicht übernehmen kann.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function behaviorByLayout(): array
+    {
+        $carried = [];
+        $ids = @IPS_GetInstanceListByModuleID(self::MODULE_ID);
+        if (!is_array($ids)) {
+            return $carried;
+        }
+        foreach ($ids as $id) {
+            $layoutId = (string) IPS_GetProperty((int) $id, 'LayoutId');
+            if ($layoutId === '' || isset($carried[$layoutId])) {
+                continue;
+            }
+            $style = (string) IPS_GetProperty((int) $id, 'IdleClockStyle');
+            $carried[$layoutId] = [
+                'nightDim' => (bool) IPS_GetProperty((int) $id, 'NightDim'),
+                'dayBrightness' => (int) IPS_GetProperty((int) $id, 'DayBrightness'),
+                'nightBrightness' => (int) IPS_GetProperty((int) $id, 'NightBrightness'),
+                'nightFrom' => (int) IPS_GetProperty((int) $id, 'NightFrom'),
+                'nightTo' => (int) IPS_GetProperty((int) $id, 'NightTo'),
+                'idleMode' => (int) IPS_GetProperty((int) $id, 'IdleMode'),
+                'idleClockStyle' => in_array($style, ['digital', 'analog', 'word', 'swabian'], true) ? $style : 'digital',
+                'idleTimeoutSec' => max(5, min(3600, (int) IPS_GetProperty((int) $id, 'IdleTimeoutSec') ?: 60)),
+            ];
+        }
+        return $carried;
+    }
+
     /** @return array<string, mixed> */
     private function catalogSummary(): array
     {
         $catalog = HomeDisplayCatalogStore::load();
+        $carried = $this->behaviorByLayout();
         return [
-            'layouts' => array_values(array_map(static function ($item) {
-                return is_array($item) ? $item : [];
+            'layouts' => array_values(array_map(static function ($item) use ($carried) {
+                if (!is_array($item)) {
+                    return [];
+                }
+                $id = (string) ($item['id'] ?? '');
+                if ($id !== '' && !array_key_exists('dayBrightness', $item) && isset($carried[$id])) {
+                    $item = array_merge($item, $carried[$id]);
+                }
+                return $item;
             }, $catalog['layouts'])),
             'configs' => array_values(array_map(static function ($item) {
                 return is_array($item) ? $item : [];
@@ -900,23 +940,23 @@ class HomeDisplay extends IPSModuleStrict
         return $this->configDocument($device['id']);
     }
 
-    /** Helligkeit, Ruheanzeige und Intervalle stammen nur aus der Anzeige-Instanz. @return array<string, mixed> */
+    /** Helligkeit und Ruheanzeige kommen aus der Ansicht, sonst aus den bisherigen Instanzwerten. @return array<string, mixed> */
     private function configDocument(int $instanceId): array
     {
+        $behavior = $this->displayBehavior($instanceId);
         $document = [
             'contract' => self::CONTRACT,
             'id' => 'anzeige-' . $instanceId,
             'version' => 1,
-            'idleMode' => (int) IPS_GetProperty($instanceId, 'IdleMode'),
-            'idleClockStyle' => in_array((string) @IPS_GetProperty($instanceId, 'IdleClockStyle'), ['digital', 'analog'], true)
-                ? (string) IPS_GetProperty($instanceId, 'IdleClockStyle') : 'digital',
-            'idleTimeoutSec' => max(5, min(3600, (int) @IPS_GetProperty($instanceId, 'IdleTimeoutSec') ?: 60)),
+            'idleMode' => $behavior['idleMode'],
+            'idleClockStyle' => $behavior['idleClockStyle'],
+            'idleTimeoutSec' => $behavior['idleTimeoutSec'],
             'manifestIntervalSec' => 60,
-            'nightDim' => (bool) IPS_GetProperty($instanceId, 'NightDim'),
-            'dayBrightness' => (int) IPS_GetProperty($instanceId, 'DayBrightness'),
-            'nightBrightness' => (int) IPS_GetProperty($instanceId, 'NightBrightness'),
-            'nightFrom' => (int) IPS_GetProperty($instanceId, 'NightFrom'),
-            'nightTo' => (int) IPS_GetProperty($instanceId, 'NightTo'),
+            'nightDim' => $behavior['nightDim'],
+            'dayBrightness' => $behavior['dayBrightness'],
+            'nightBrightness' => $behavior['nightBrightness'],
+            'nightFrom' => $behavior['nightFrom'],
+            'nightTo' => $behavior['nightTo'],
             'stateIntervalSec' => max(2, (int) IPS_GetProperty($instanceId, 'StateIntervalSec')),
             'idleStateIntervalSec' => max(5, (int) IPS_GetProperty($instanceId, 'IdleStateIntervalSec')),
             'cameraLiveFps' => $this->fastestLiveFps(),
@@ -939,6 +979,33 @@ class HomeDisplay extends IPSModuleStrict
         $document['epdServerFrame'] = $firebeetle && $this->ReadPropertyBoolean('EpdServerFrame')
             && function_exists('imagecreatetruecolor');
         return $document;
+    }
+
+    /**
+     * Werte der Ansicht. Fehlen sie dort noch, gelten die bisher an der Instanz gespeicherten.
+     *
+     * @return array{nightDim: bool, dayBrightness: int, nightBrightness: int, nightFrom: int, nightTo: int, idleMode: int, idleClockStyle: string, idleTimeoutSec: int}
+     */
+    private function displayBehavior(int $instanceId): array
+    {
+        $layout = $this->activeLayout($instanceId);
+        if (is_array($layout)) {
+            $fromLayout = HomeDisplayPanelSchema::displayBehavior($layout);
+            if ($fromLayout !== null) {
+                return $fromLayout;
+            }
+        }
+        $style = (string) @IPS_GetProperty($instanceId, 'IdleClockStyle');
+        return [
+            'nightDim' => (bool) @IPS_GetProperty($instanceId, 'NightDim'),
+            'dayBrightness' => (int) @IPS_GetProperty($instanceId, 'DayBrightness'),
+            'nightBrightness' => (int) @IPS_GetProperty($instanceId, 'NightBrightness'),
+            'nightFrom' => (int) @IPS_GetProperty($instanceId, 'NightFrom'),
+            'nightTo' => (int) @IPS_GetProperty($instanceId, 'NightTo'),
+            'idleMode' => (int) @IPS_GetProperty($instanceId, 'IdleMode'),
+            'idleClockStyle' => in_array($style, ['digital', 'analog', 'word', 'swabian'], true) ? $style : 'digital',
+            'idleTimeoutSec' => max(5, min(3600, (int) @IPS_GetProperty($instanceId, 'IdleTimeoutSec') ?: 60)),
+        ];
     }
 
     /** @param array{id: int, token: string} $device @return array<string, mixed> */
@@ -1750,16 +1817,21 @@ class HomeDisplay extends IPSModuleStrict
     }
 
     /**
-     * Verstecktes Hilfsskript unter der Instanz. Jeder Aufruf läuft parallel, RequestAction darin blockiert die anderen Lampen nicht.
+     * Eigenes Hilfsskript je Lampe. Dasselbe Skript nimmt keinen zweiten Start an, solange die vorige Lampe noch schaltet.
      */
-    private function sceneRunnerId(): int
+    private function sceneRunnerId(int $slot): int
     {
-        $ident = 'SceneRunner';
+        $ident = 'SceneRun' . $slot;
+        $legacy = $slot === 0 ? 'SceneRunner' : '';
         $scriptId = 0;
         foreach (IPS_GetChildrenIDs($this->InstanceID) as $child) {
             $object = IPS_GetObject($child);
-            if ((string) ($object['ObjectIdent'] ?? '') === $ident) {
+            $objectIdent = (string) ($object['ObjectIdent'] ?? '');
+            if ($objectIdent === $ident || ($legacy !== '' && $objectIdent === $legacy)) {
                 $scriptId = (int) $child;
+                if ($objectIdent !== $ident) {
+                    IPS_SetIdent($scriptId, $ident);
+                }
                 break;
             }
         }
@@ -1776,10 +1848,27 @@ try {
     if ($variableId <= 0 || ($value === null && $encoded !== 'null')) {
         return;
     }
-    RequestAction($variableId, $value);
+    $actionId = (int) ($_IPS['actionId'] ?? 0);
+    $started = $actionId > 0 && IPS_ScriptExists($actionId) && IPS_RunScriptEx($actionId, [
+        'VARIABLE' => $variableId,
+        'VALUE' => $value,
+        'SENDER' => 'RequestAction',
+    ]);
+    if (!$started) {
+        RequestAction($variableId, $value);
+    }
     $colorId = (int) ($_IPS['colorVariableId'] ?? 0);
+    $colorActionId = (int) ($_IPS['colorActionId'] ?? 0);
     if ($colorId > 0) {
-        RequestAction($colorId, (int) ($_IPS['colorValue'] ?? 0));
+        $colorValue = (int) ($_IPS['colorValue'] ?? 0);
+        $colorStarted = $colorActionId > 0 && IPS_ScriptExists($colorActionId) && IPS_RunScriptEx($colorActionId, [
+            'VARIABLE' => $colorId,
+            'VALUE' => $colorValue,
+            'SENDER' => 'RequestAction',
+        ]);
+        if (!$colorStarted) {
+            RequestAction($colorId, $colorValue);
+        }
     }
 } catch (Throwable $error) {
     IPS_LogMessage('HomeDisplay', 'Szene: ' . $error->getMessage());
@@ -1789,7 +1878,7 @@ PHP;
             $scriptId = IPS_CreateScript(0);
             IPS_SetParent($scriptId, $this->InstanceID);
             IPS_SetIdent($scriptId, $ident);
-            IPS_SetName($scriptId, 'Szenenlauf');
+            IPS_SetName($scriptId, 'Szenenlauf ' . ($slot + 1));
             IPS_SetHidden($scriptId, true);
         }
         $current = str_replace("\r\n", "\n", IPS_GetScriptContent($scriptId));
@@ -1797,6 +1886,16 @@ PHP;
             IPS_SetScriptContent($scriptId, $source);
         }
         return $scriptId;
+    }
+
+    /** @param array<string, mixed> $variable */
+    private function sceneActionId(array $variable): int
+    {
+        $actionId = (int) ($variable['VariableCustomAction'] ?? 0);
+        if ($actionId <= 0) {
+            $actionId = (int) ($variable['VariableAction'] ?? 0);
+        }
+        return $actionId;
     }
 
     /** @param array{id: int, token: string} $device @param array<string, mixed> $body @param array<string, mixed>|null $tileOverride Nur für SimulateAction (Editor/Prüfung). */
@@ -1818,17 +1917,28 @@ PHP;
             return ['ok' => true, 'duplicate' => true];
         }
         if (isset($decision['steps']) && is_array($decision['steps'])) {
-            // Jede Lampe in einem eigenen Skript: RequestAction würde sonst auf die vorige Lampe warten.
-            $runner = $this->sceneRunnerId();
-            foreach ($decision['steps'] as $step) {
+            // Skripte zuerst anlegen, danach alle Lampen starten. Ein gemeinsames Skript würde den nächsten Start zurückhalten.
+            $launches = [];
+            foreach (array_values($decision['steps']) as $slot => $step) {
+                $variableId = (int) $step['variableId'];
                 $params = [
-                    'variableId' => (int) $step['variableId'],
+                    'variableId' => $variableId,
                     'valueJson' => json_encode($step['value']),
                     'delayMs' => (int) ($step['delayMs'] ?? 0),
+                    'actionId' => $this->sceneActionId(IPS_GetVariable($variableId)),
                     'colorVariableId' => (int) ($step['colorVariableId'] ?? 0),
                     'colorValue' => (int) ($step['colorValue'] ?? 0),
+                    'colorActionId' => 0,
                 ];
-                IPS_RunScriptEx($runner, $params);
+                if ($params['colorVariableId'] > 0 && IPS_VariableExists($params['colorVariableId'])) {
+                    $params['colorActionId'] = $this->sceneActionId(IPS_GetVariable($params['colorVariableId']));
+                }
+                $launches[] = [$this->sceneRunnerId($slot), $params, $variableId];
+            }
+            foreach ($launches as [$runner, $params, $variableId]) {
+                if (!IPS_RunScriptEx($runner, $params)) {
+                    IPS_LogMessage('HomeDisplay', 'Szene: Lampe ' . $variableId . ' wurde nicht gestartet');
+                }
             }
         } else {
             RequestAction($decision['variableId'], $decision['value']);

@@ -28,7 +28,8 @@ const ICONS = [
   ["coolOff", "Kühlen aus", 0xF14E3], ["fireOff", "Feuer aus", 0xF1722], ["motionOff", "Bewegung aus", 0xF1435],
   ["smokeOff", "Rauchmelder aus", 0xF1809], ["windowOpen", "Fenster offen", 0xF05B1],
   ["blindsOpen", "Jalousie offen", 0xF1011], ["blindsClosed", "Jalousie zu", 0xF00AC],
-  ["bathtub", "Badewanne", 0xF1818], ["armchair", "Sessel", 0xF156E]
+  ["bathtub", "Badewanne", 0xF1818], ["armchair", "Sessel", 0xF156E],
+  ["floorLamp", "Stehlampe", 0xF08DD], ["book", "Buch", 0xF00BA], ["power", "Ein/Aus", 0xF0425]
 ];
 /* Auswahllisten zeigen die Symbole nach dem deutschen Namen sortiert. */
 const ICONS_SORTED = [...ICONS].sort((a, b) => a[1].localeCompare(b[1], "de"));
@@ -1152,11 +1153,13 @@ function selectLayout(layout, keepPage) {
 }
 
 function newLayout(name) {
-  selectLayout({
+  const layout = {
     id: "", name: name || "Neue Ansicht", version: 0, published: false,
     displayProfile: defaultProfileId(),
     showTabs: true, pages: [{ id: "start", title: "Start", columns: DEFAULT_GRID_COLUMNS, rows: DEFAULT_GRID_ROWS, tiles: [] }]
-  });
+  };
+  writeDisplayBehavior(layout, readDisplayBehavior({}));
+  selectLayout(layout);
   markDirty();
 }
 
@@ -3492,6 +3495,66 @@ function pageField(label, control) {
   return wrap;
 }
 
+function readDisplayBehavior(layout) {
+  const source = layout || {};
+  const hour = (value, fallback) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.min(23, Math.max(0, Math.round(number))) : fallback;
+  };
+  const brightness = (value, fallback) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.min(100, Math.max(0, Math.round(number))) : fallback;
+  };
+  const timeout = Number(source.idleTimeoutSec);
+  const idle = Number(source.idleMode);
+  return {
+    nightDim: source.nightDim !== false,
+    dayBrightness: brightness(source.dayBrightness, 70),
+    nightBrightness: brightness(source.nightBrightness, 15),
+    nightFrom: hour(source.nightFrom, 22),
+    nightTo: hour(source.nightTo, 6),
+    idleMode: idle === 1 || idle === 2 ? idle : 0,
+    idleClockStyle: ["analog", "word", "swabian"].includes(source.idleClockStyle) ? source.idleClockStyle : "digital",
+    idleTimeoutSec: Number.isFinite(timeout) ? Math.min(3600, Math.max(5, Math.round(timeout))) : 60
+  };
+}
+
+function writeDisplayBehavior(layout, behavior) {
+  if (!layout || !behavior) return;
+  layout.nightDim = behavior.nightDim;
+  layout.dayBrightness = behavior.dayBrightness;
+  layout.nightBrightness = behavior.nightBrightness;
+  layout.nightFrom = behavior.nightFrom;
+  layout.nightTo = behavior.nightTo;
+  layout.idleMode = behavior.idleMode;
+  layout.idleClockStyle = behavior.idleClockStyle;
+  layout.idleTimeoutSec = behavior.idleTimeoutSec;
+}
+
+function fillDisplayBehavior(behavior) {
+  if ($("l-night-dim")) $("l-night-dim").checked = behavior.nightDim;
+  if ($("l-day-brightness")) $("l-day-brightness").value = behavior.dayBrightness;
+  if ($("l-night-brightness")) $("l-night-brightness").value = behavior.nightBrightness;
+  if ($("l-night-from")) $("l-night-from").value = behavior.nightFrom;
+  if ($("l-night-to")) $("l-night-to").value = behavior.nightTo;
+  if ($("l-idle-mode")) $("l-idle-mode").value = String(behavior.idleMode);
+  if ($("l-idle-clock")) $("l-idle-clock").value = behavior.idleClockStyle;
+  if ($("l-idle-timeout")) $("l-idle-timeout").value = behavior.idleTimeoutSec;
+}
+
+function collectDisplayBehavior() {
+  return readDisplayBehavior({
+    nightDim: Boolean($("l-night-dim")?.checked),
+    dayBrightness: $("l-day-brightness")?.value,
+    nightBrightness: $("l-night-brightness")?.value,
+    nightFrom: $("l-night-from")?.value,
+    nightTo: $("l-night-to")?.value,
+    idleMode: Number($("l-idle-mode")?.value),
+    idleClockStyle: $("l-idle-clock")?.value,
+    idleTimeoutSec: $("l-idle-timeout")?.value
+  });
+}
+
 function openPagesDialog(addPage) {
   if (!state.layout) return;
   const dialog = $("pages-dialog");
@@ -3500,8 +3563,10 @@ function openPagesDialog(addPage) {
     displayProfile: state.layout.displayProfile,
     colorMode: state.layout.colorMode,
     theme: { ...state.layout.theme },
+    behavior: readDisplayBehavior(state.layout),
     dirty: state.dirty
   };
+  fillDisplayBehavior(pagesDialog.general.behavior);
   if (addPage && pagesDialog.draft.length < MAX_PAGES) pagesDialog.draft.push(newPage(state.layout, pagesDialog.draft));
   renderPagesDialog();
   dialog.returnValue = "";
@@ -3639,6 +3704,8 @@ function restorePagesGeneral() {
   state.layout.displayProfile = saved.displayProfile;
   state.layout.colorMode = saved.colorMode;
   state.layout.theme = applyTheme(saved.theme);
+  writeDisplayBehavior(state.layout, saved.behavior);
+  fillDisplayBehavior(saved.behavior || readDisplayBehavior(state.layout));
   fillProfileSelect($("display-profile"), saved.displayProfile);
   $("color-mono").checked = saved.colorMode === "mono";
   document.getElementById("editor-screen")?.classList.toggle("mono", saved.colorMode === "mono");
@@ -3673,6 +3740,7 @@ $("pages-dialog").addEventListener("close", () => {
       if (tile.kind === "nav" && !pages.some((item) => item.id === tile.targetPage)) tile.targetPage = pages[0].id;
     }
   }
+  writeDisplayBehavior(state.layout, collectDisplayBehavior());
   state.layout.pages = pages;
   if (!pages.some((page) => page.id === state.page)) state.page = pages[0].id;
   if (state.selected && !currentPage().tiles.some((tile) => tile.tileId === state.selected)) state.selected = null;
@@ -4347,33 +4415,6 @@ function renderSettings(settings) {
   if (!(settings.panels || []).length) {
     body.innerHTML = '<tr><td colspan="4" class="hint">Noch keine Anzeige-Instanz angelegt.</td></tr>';
   }
-  const pick = $("s-bright-panel");
-  if (pick) {
-    pick.innerHTML = "";
-    for (const panel of settings.panels || []) {
-      const option = document.createElement("option");
-      option.value = String(panel.id);
-      option.textContent = panel.name;
-      pick.appendChild(option);
-    }
-    const current = (settings.panels || []).find((panel) => panel.serves) || (settings.panels || [])[0];
-    if (current) {
-      pick.value = String(current.id);
-      applyBrightnessForm(current);
-    }
-    pick.onchange = () => {
-      const chosen = (settings.panels || []).find((panel) => String(panel.id) === pick.value);
-      if (chosen) applyBrightnessForm(chosen);
-    };
-  }
-}
-
-function applyBrightnessForm(panel) {
-  if ($("s-night-dim")) $("s-night-dim").checked = panel.nightDim !== false;
-  if ($("s-day-brightness")) $("s-day-brightness").value = panel.dayBrightness ?? 70;
-  if ($("s-night-brightness")) $("s-night-brightness").value = panel.nightBrightness ?? 15;
-  if ($("s-night-from")) $("s-night-from").value = panel.nightFrom ?? 22;
-  if ($("s-night-to")) $("s-night-to").value = panel.nightTo ?? 6;
 }
 
 async function openSettings() {
@@ -4390,16 +4431,6 @@ async function openSettings() {
     if (dialog.returnValue !== "ok") return;
     try {
       const result = await call("saveSettings", { serviceHost: $("s-host").value.trim() });
-      if ($("s-bright-panel") && $("s-bright-panel").value) {
-        await call("saveBrightness", {
-          panel: Number($("s-bright-panel").value),
-          nightDim: Boolean($("s-night-dim")?.checked),
-          dayBrightness: Number($("s-day-brightness")?.value),
-          nightBrightness: Number($("s-night-brightness")?.value),
-          nightFrom: Number($("s-night-from")?.value),
-          nightTo: Number($("s-night-to")?.value)
-        });
-      }
       setStatus(result.serviceUrl ? `Einstellungen gespeichert. Dienst: ${result.serviceUrl}` : "Einstellungen gespeichert.");
     } catch (error) {
       setStatus(error.message);

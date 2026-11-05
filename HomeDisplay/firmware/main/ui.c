@@ -314,7 +314,7 @@ static void store_page_id(const char *id)
 }
 static int columns = 2;
 static int idle_mode;
-static char idle_clock_style[12] = "digital";
+static char idle_clock_style[16] = "digital";
 static bool idle_active;
 static lv_obj_t *dim_popup;
 static lv_obj_t *dim_slider;
@@ -340,6 +340,7 @@ static bool online = true;
 static int wifi_rssi;
 static int64_t offline_since;
 static int64_t touched_at;
+static bool force_idle;
 static int64_t clock_base;
 static int64_t clock_set_at;
 static char confirm_tile[40];
@@ -529,6 +530,7 @@ static const icon_cp_t ICON_CP[] = {
     {"coolOff", 0xF14E3}, {"fireOff", 0xF1722}, {"motionOff", 0xF1435},
     {"smokeOff", 0xF1809}, {"windowOpen", 0xF05B1}, {"blindsOpen", 0xF1011},
     {"blindsClosed", 0xF00AC}, {"bathtub", 0xF1818}, {"armchair", 0xF156E},
+    {"floorLamp", 0xF08DD}, {"book", 0xF00BA}, {"power", 0xF0425},
 };
 
 static const char *pua(unsigned cp)
@@ -796,6 +798,15 @@ static const lv_font_t *font_for(int px, bool bold, bool italic)
 static void note_touch(void)
 {
     touched_at = esp_timer_get_time();
+    touch_counter++;
+    force_idle = false;
+}
+
+/* Tippen auf die Uhrzeit rechts oben schaltet die Ruheanzeige sofort ein. */
+static void show_idle_now(lv_event_t *event)
+{
+    (void) event;
+    force_idle = true;
     touch_counter++;
 }
 
@@ -1346,6 +1357,7 @@ static bool storage_image_ready_limit(const char *file, size_t max_bytes)
     snprintf(path, sizeof(path), "/storage/%s", file);
     struct stat info;
     if (stat(path, &info) != 0 || info.st_size <= 0) {
+        ESP_LOGW(TAG_UI, "Bild fehlt im Speicher: %s", file);
         return false;
     }
     if (max_bytes > 0 && (size_t) info.st_size > max_bytes) {
@@ -2549,12 +2561,208 @@ static bool night_now(void)
 
 static void apply_backlight(void)
 {
-    bool idle_off = idle_mode == 2 && homedisplay_ui_busy() == false && esp_timer_get_time() - touched_at > idle_timeout_us;
+    bool idle_off = idle_mode == 2 && homedisplay_ui_busy() == false
+        && (force_idle || esp_timer_get_time() - touched_at > idle_timeout_us);
     int level = (night_dim && night_now()) ? night_brightness : day_brightness;
     bool on = !idle_off && level > 0;
     if (on && !backlight_on) refresh_now = true;
     backlight_on = on;
     homedisplay_board_backlight(on);
+}
+
+/* ---------- Wortuhr ----------
+ * 11 Spalten, 10 Zeilen. Die Wörter stehen wie bei einer QLOCKTWO im Buchstabenraster,
+ * die Minuten über fünf zeigen vier Punkte in den Ecken. */
+#define WC_COLS 11
+#define WC_ROWS 10
+#define WC_CELL_W 80
+#define WC_CELL_H 54
+#define WC_LIT 0xFFFFFF
+#define WC_DIM 0x303030
+
+typedef struct {
+    uint8_t row;
+    uint8_t col;
+    uint8_t len;
+} wc_word_t;
+
+typedef struct {
+    const char *rows[WC_ROWS];
+    wc_word_t es, is, five, ten, twenty, quarter, three_quarter, after, before, half, oclock, ein;
+    wc_word_t hour[13];
+    bool three_quarter_at_45;
+    bool ein_uhr;
+} wc_layout_t;
+
+static const wc_layout_t WC_GERMAN = {
+    .rows = { "ESKISTAFÜNF", "ZEHNZWANZIG", "DREIVIERTEL", "TGNACHVORJM", "HALBQZWÖLFP",
+              "ZWEINSIEBEN", "KDREIRHFÜNF", "ELFNEUNVIER", "WACHTZEHNRS", "BSECHSFMUHR" },
+    .es = {0, 0, 2}, .is = {0, 3, 3}, .five = {0, 7, 4}, .ten = {1, 0, 4}, .twenty = {1, 4, 7},
+    .quarter = {2, 4, 7}, .three_quarter = {2, 0, 11}, .after = {3, 2, 4}, .before = {3, 6, 3},
+    .half = {4, 0, 4}, .oclock = {9, 8, 3}, .ein = {5, 2, 3},
+    .hour = { [1] = {5, 2, 4}, [2] = {5, 0, 4}, [3] = {6, 1, 4}, [4] = {7, 7, 4}, [5] = {6, 7, 4}, [6] = {9, 1, 5},
+              [7] = {5, 5, 6}, [8] = {8, 1, 4}, [9] = {7, 3, 4}, [10] = {8, 5, 4}, [11] = {7, 0, 3}, [12] = {4, 5, 5} },
+    .three_quarter_at_45 = false,
+    .ein_uhr = true,
+};
+
+/* Schwäbisch: "S isch fünf noch halber drei", Dreiviertel statt Viertel vor. */
+static const wc_layout_t WC_SWABIAN = {
+    .rows = { "ESKISCHFÜNF", "ZEHNZWANZIG", "DREIVIERTEL", "NOCHVORMNEI", "HALBERTZWOI",
+              "ZWÖLFEKFÜNF", "SECHSGSIEBE", "ZEHNEFACHTM", "OINSWDREIJP", "VIERELFEUHR" },
+    .es = {0, 0, 2}, .is = {0, 3, 4}, .five = {0, 7, 4}, .ten = {1, 0, 4}, .twenty = {1, 4, 7},
+    .quarter = {2, 4, 7}, .three_quarter = {2, 0, 11}, .after = {3, 0, 4}, .before = {3, 4, 3},
+    .half = {4, 0, 6}, .oclock = {9, 8, 3},
+    .hour = { [1] = {8, 0, 4}, [2] = {4, 7, 4}, [3] = {8, 5, 4}, [4] = {9, 0, 4}, [5] = {5, 7, 4}, [6] = {6, 0, 5},
+              [7] = {6, 6, 5}, [8] = {7, 6, 4}, [9] = {3, 8, 3}, [10] = {7, 0, 5}, [11] = {9, 4, 4}, [12] = {5, 0, 6} },
+    .three_quarter_at_45 = true,
+    .ein_uhr = false,
+};
+
+enum {
+    WC_FIVE = 1, WC_TEN = 2, WC_TWENTY = 4, WC_QUARTER = 8, WC_AFTER = 16, WC_BEFORE = 32, WC_HALF = 64,
+};
+
+/* Fünferblock 0 bis 11: ab Block 5 (fünf vor halb) zählt die nächste Stunde. */
+static const uint8_t WC_MINUTES[12] = {
+    0,
+    WC_FIVE | WC_AFTER,
+    WC_TEN | WC_AFTER,
+    WC_QUARTER | WC_AFTER,
+    WC_TWENTY | WC_AFTER,
+    WC_FIVE | WC_BEFORE | WC_HALF,
+    WC_HALF,
+    WC_FIVE | WC_AFTER | WC_HALF,
+    WC_TWENTY | WC_BEFORE,
+    WC_QUARTER | WC_BEFORE,
+    WC_TEN | WC_BEFORE,
+    WC_FIVE | WC_BEFORE,
+};
+
+static lv_obj_t *word_clock;
+static lv_obj_t *wc_cells[WC_ROWS][WC_COLS];
+static lv_obj_t *wc_dots[4];
+static const wc_layout_t *wc_layout_shown;
+static uint16_t wc_lit[WC_ROWS];
+static int wc_dots_lit = -1;
+
+static void wc_build(void)
+{
+    if (!clock_layer) return;
+    const lv_font_t *font = &montserrat_bold_40;
+    int line = lv_font_get_line_height(font);
+    int left = (HOMEDISPLAY_LCD_H_RES - WC_COLS * WC_CELL_W) / 2;
+    int top = (HOMEDISPLAY_LCD_V_RES - WC_ROWS * WC_CELL_H) / 2;
+    word_clock = lv_obj_create(clock_layer);
+    lv_obj_set_size(word_clock, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES);
+    lv_obj_set_pos(word_clock, 0, 0);
+    style_flat(word_clock);
+    lv_obj_set_style_pad_all(word_clock, 0, 0);
+    lv_obj_set_style_radius(word_clock, 0, 0);
+    lv_obj_set_style_bg_color(word_clock, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(word_clock, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(word_clock, LV_OBJ_FLAG_SCROLLABLE);
+    for (int row = 0; row < WC_ROWS; row++) {
+        for (int col = 0; col < WC_COLS; col++) {
+            lv_obj_t *cell = lv_label_create(word_clock);
+            lv_obj_set_width(cell, WC_CELL_W);
+            lv_label_set_long_mode(cell, LV_LABEL_LONG_CLIP);
+            lv_obj_set_style_text_align(cell, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_set_style_text_font(cell, font, 0);
+            lv_obj_set_style_text_color(cell, lv_color_hex(WC_DIM), 0);
+            lv_obj_set_pos(cell, left + col * WC_CELL_W, top + row * WC_CELL_H + (WC_CELL_H - line) / 2);
+            lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+            wc_cells[row][col] = cell;
+        }
+    }
+    /* Ecken im Uhrzeigersinn: links oben, rechts oben, rechts unten, links unten. */
+    const int dot = 16;
+    const int edge = 22;
+    const int xs[4] = {edge, HOMEDISPLAY_LCD_H_RES - edge - dot, HOMEDISPLAY_LCD_H_RES - edge - dot, edge};
+    const int ys[4] = {edge, edge, HOMEDISPLAY_LCD_V_RES - edge - dot, HOMEDISPLAY_LCD_V_RES - edge - dot};
+    for (int index = 0; index < 4; index++) {
+        lv_obj_t *point = lv_obj_create(word_clock);
+        lv_obj_set_size(point, dot, dot);
+        lv_obj_set_pos(point, xs[index], ys[index]);
+        style_flat(point);
+        lv_obj_set_style_radius(point, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(point, lv_color_hex(WC_DIM), 0);
+        lv_obj_set_style_bg_opa(point, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(point, LV_OBJ_FLAG_CLICKABLE);
+        wc_dots[index] = point;
+    }
+    lv_obj_add_event_cb(word_clock, dismiss_idle, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_flag(word_clock, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Schreibt die Buchstaben des gewählten Rasters in die Zellen; Ü und Ö sind zwei Byte lang. */
+static void wc_set_letters(const wc_layout_t *layout)
+{
+    for (int row = 0; row < WC_ROWS; row++) {
+        const char *text = layout->rows[row];
+        for (int col = 0; col < WC_COLS; col++) {
+            char letter[4] = {0};
+            int bytes = ((unsigned char) *text >= 0xC0) ? 2 : 1;
+            if (!*text) break;
+            memcpy(letter, text, (size_t) bytes);
+            text += bytes;
+            lv_label_set_text(wc_cells[row][col], letter);
+            lv_obj_set_style_text_color(wc_cells[row][col], lv_color_hex(WC_DIM), 0);
+        }
+        wc_lit[row] = 0;
+    }
+}
+
+static void wc_add(uint16_t *mask, wc_word_t word)
+{
+    for (int index = 0; index < word.len; index++) mask[word.row] |= (uint16_t) (1u << (word.col + index));
+}
+
+static void update_word_clock(int hour, int minute, bool swabian)
+{
+    if (!word_clock) wc_build();
+    if (!word_clock) return;
+    const wc_layout_t *layout = swabian ? &WC_SWABIAN : &WC_GERMAN;
+    if (wc_layout_shown != layout) {
+        wc_set_letters(layout);
+        wc_layout_shown = layout;
+    }
+    int block = minute / 5;
+    int dots = minute % 5;
+    int shown_hour = (hour % 12 + (block >= 5 ? 1 : 0)) % 12;
+    if (shown_hour == 0) shown_hour = 12;
+    uint8_t flags = WC_MINUTES[block];
+    /* Dreiviertel ersetzt "Viertel vor": nur das eine durchgehende Wort leuchtet. */
+    bool three_quarter = layout->three_quarter_at_45 && block == 9;
+    if (three_quarter) flags = 0;
+    uint16_t mask[WC_ROWS] = {0};
+    wc_add(mask, layout->es);
+    wc_add(mask, layout->is);
+    if (flags & WC_FIVE) wc_add(mask, layout->five);
+    if (flags & WC_TEN) wc_add(mask, layout->ten);
+    if (flags & WC_TWENTY) wc_add(mask, layout->twenty);
+    if (flags & WC_QUARTER) wc_add(mask, layout->quarter);
+    if (three_quarter) wc_add(mask, layout->three_quarter);
+    if (flags & WC_AFTER) wc_add(mask, layout->after);
+    if (flags & WC_BEFORE) wc_add(mask, layout->before);
+    if (flags & WC_HALF) wc_add(mask, layout->half);
+    if (block == 0) wc_add(mask, layout->oclock);
+    wc_add(mask, (block == 0 && shown_hour == 1 && layout->ein_uhr) ? layout->ein : layout->hour[shown_hour]);
+    for (int row = 0; row < WC_ROWS; row++) {
+        uint16_t changed = (uint16_t) ((mask[row] ^ wc_lit[row]) & 0x7FF);
+        if (!changed) continue;
+        for (int col = 0; col < WC_COLS; col++) {
+            if (!(changed & (1u << col))) continue;
+            lv_obj_set_style_text_color(wc_cells[row][col], lv_color_hex((mask[row] >> col) & 1 ? WC_LIT : WC_DIM), 0);
+        }
+        wc_lit[row] = mask[row];
+    }
+    if (dots != wc_dots_lit) {
+        for (int index = 0; index < 4; index++) {
+            lv_obj_set_style_bg_color(wc_dots[index], lv_color_hex(index < dots ? WC_LIT : WC_DIM), 0);
+        }
+        wc_dots_lit = dots;
+    }
 }
 
 static void clock_tick(lv_timer_t *timer)
@@ -2594,17 +2802,25 @@ static void clock_tick(lv_timer_t *timer)
         apply_backlight();
         return;
     }
-    bool idle = esp_timer_get_time() - touched_at > idle_timeout_us;
+    bool idle = force_idle || esp_timer_get_time() - touched_at > idle_timeout_us;
     if (idle && idle_mode == 0) {
         int minute = (seconds / 60) % 60;
         if (!idle_active) set_idle_visible(true);
         bool analog = strcmp(idle_clock_style, "analog") == 0;
+        bool swabian = strcmp(idle_clock_style, "swabian") == 0;
+        bool word = swabian || strcmp(idle_clock_style, "word") == 0;
         if (analog_clock) {
             if (analog) lv_obj_clear_flag(analog_clock, LV_OBJ_FLAG_HIDDEN);
             else lv_obj_add_flag(analog_clock, LV_OBJ_FLAG_HIDDEN);
         }
+        if (word) {
+            update_word_clock(hour, minute, swabian);
+            if (word_clock) lv_obj_clear_flag(word_clock, LV_OBJ_FLAG_HIDDEN);
+        } else if (word_clock) {
+            lv_obj_add_flag(word_clock, LV_OBJ_FLAG_HIDDEN);
+        }
         if (clock_label) {
-            if (analog) lv_obj_add_flag(clock_label, LV_OBJ_FLAG_HIDDEN);
+            if (analog || word) lv_obj_add_flag(clock_label, LV_OBJ_FLAG_HIDDEN);
             else {
                 lv_obj_clear_flag(clock_label, LV_OBJ_FLAG_HIDDEN);
                 char line[16];
@@ -2688,6 +2904,10 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_set_style_text_font(info_label, &lv_font_montserrat_36, 0);
     lv_label_set_text(info_label, "--:--");
     lv_obj_align(info_label, LV_ALIGN_TOP_RIGHT, -12, (HEADER_H - 36) / 2);
+    lv_obj_add_flag(info_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(info_label, show_idle_now, LV_EVENT_CLICKED, NULL);
+    /* Die Schrift allein trifft der Finger schlecht, darum eine größere Fläche darum. */
+    lv_obj_set_ext_click_area(info_label, 24);
     home_button = lv_btn_create(screen);
     lv_obj_set_size(home_button, TAB_H, TAB_H);
     lv_obj_set_pos(home_button, 8, (HEADER_H - TAB_H) / 2);

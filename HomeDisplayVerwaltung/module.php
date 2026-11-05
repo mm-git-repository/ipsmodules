@@ -281,11 +281,6 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
                 'status' => $this->variableText($id, 'PanelStatus'),
                 'serves' => $id === $instance,
                 'displayProfile' => (string) $this->panelProperty($id, 'DisplayProfile', 'waveshare-5b-1024x600'),
-                'nightDim' => (bool) $this->panelProperty($id, 'NightDim', true),
-                'dayBrightness' => (int) $this->panelProperty($id, 'DayBrightness', 70),
-                'nightBrightness' => (int) $this->panelProperty($id, 'NightBrightness', 15),
-                'nightFrom' => (int) $this->panelProperty($id, 'NightFrom', 22),
-                'nightTo' => (int) $this->panelProperty($id, 'NightTo', 6),
             ];
         }
         return [
@@ -404,25 +399,6 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
         $method = (string) ($body['method'] ?? '');
         if ($method === 'settings') {
             try {
-                return ['ok' => true, 'result' => $this->settings()];
-            } catch (Throwable $e) {
-                return ['ok' => false, 'error' => $e->getMessage()];
-            }
-        }
-        if ($method === 'saveBrightness') {
-            $id = 0;
-            try {
-                $id = $this->panelOrFail((int) ($body['panel'] ?? 0));
-                $day = max(0, min(100, (int) ($body['dayBrightness'] ?? 70)));
-                $night = max(0, min(100, (int) ($body['nightBrightness'] ?? 15)));
-                $from = max(0, min(23, (int) ($body['nightFrom'] ?? 22)));
-                $to = max(0, min(23, (int) ($body['nightTo'] ?? 6)));
-                IPS_SetProperty($id, 'NightDim', !empty($body['nightDim']));
-                IPS_SetProperty($id, 'DayBrightness', $day);
-                IPS_SetProperty($id, 'NightBrightness', $night);
-                IPS_SetProperty($id, 'NightFrom', $from);
-                IPS_SetProperty($id, 'NightTo', $to);
-                IPS_ApplyChanges($id);
                 return ['ok' => true, 'result' => $this->settings()];
             } catch (Throwable $e) {
                 return ['ok' => false, 'error' => $e->getMessage()];

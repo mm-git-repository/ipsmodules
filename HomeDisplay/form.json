@@ -98,66 +98,7 @@
         },
         {
             "type": "Label",
-            "caption": "Helligkeit, Ruheanzeige und Abruf gelten nur für diese Anzeige."
-        },
-        {
-            "type": "Select",
-            "name": "IdleMode",
-            "caption": "Ruheanzeige",
-            "options": [
-                {"caption": "Uhrseite", "value": 0},
-                {"caption": "Letzte Seite", "value": 1},
-                {"caption": "Bildschirm aus", "value": 2}
-            ]
-        },
-        {
-            "type": "Select",
-            "name": "IdleClockStyle",
-            "caption": "Uhrstil (Ruheanzeige)",
-            "options": [
-                {"caption": "Digital", "value": "digital"},
-                {"caption": "Analog", "value": "analog"}
-            ]
-        },
-        {
-            "type": "NumberSpinner",
-            "name": "IdleTimeoutSec",
-            "caption": "Uhr nach (Sekunden)",
-            "minimum": 5,
-            "maximum": 3600
-        },
-        {
-            "type": "CheckBox",
-            "name": "NightDim",
-            "caption": "Nachts dimmen"
-        },
-        {
-            "type": "NumberSpinner",
-            "name": "DayBrightness",
-            "caption": "Helligkeit Tag (0–100)",
-            "minimum": 0,
-            "maximum": 100
-        },
-        {
-            "type": "NumberSpinner",
-            "name": "NightBrightness",
-            "caption": "Helligkeit Nacht (0–100)",
-            "minimum": 0,
-            "maximum": 100
-        },
-        {
-            "type": "NumberSpinner",
-            "name": "NightFrom",
-            "caption": "Nacht ab Stunde",
-            "minimum": 0,
-            "maximum": 23
-        },
-        {
-            "type": "NumberSpinner",
-            "name": "NightTo",
-            "caption": "Nacht bis Stunde (exkl.)",
-            "minimum": 0,
-            "maximum": 23
+            "caption": "Helligkeit und Ruheanzeige stehen in der Ansicht. Abruf und Programmaktualisierung gelten nur für diese Anzeige."
         },
         {
             "type": "NumberSpinner",

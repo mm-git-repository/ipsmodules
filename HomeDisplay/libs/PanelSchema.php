@@ -26,7 +26,7 @@ final class HomeDisplayPanelSchema
     public const MAX_PAGES = 8;
 
     public const ICONS = [
-        'bathtub', 'armchair',
+        'bathtub', 'armchair', 'floorLamp', 'book', 'power',
         'energy', 'temperature', 'light', 'shutter', 'pump', 'valve', 'alarm', 'home', 'clock', 'info',
         'lightOn', 'lightOff', 'humidity', 'sun', 'moon', 'water', 'heat', 'cool', 'fan', 'door', 'lock', 'plug', 'batteryIcon', 'wifi', 'car',
         'motion', 'window', 'garage', 'smoke', 'thermostat', 'solar', 'camera', 'tv', 'speaker', 'washing', 'bed', 'bell', 'leaf', 'fire', 'kitchen', 'pool', 'hall', 'kids',
@@ -121,6 +121,51 @@ final class HomeDisplayPanelSchema
         return $weights;
     }
 
+    /**
+     * Helligkeit und Ruheanzeige der Ansicht. Null, solange die Ansicht diese Werte noch nicht trägt.
+     *
+     * @param array<string, mixed> $layout
+     * @return array{nightDim: bool, dayBrightness: int, nightBrightness: int, nightFrom: int, nightTo: int, idleMode: int, idleClockStyle: string, idleTimeoutSec: int}|null
+     */
+    public static function displayBehavior(array $layout): ?array
+    {
+        if (!array_key_exists('dayBrightness', $layout)) {
+            return null;
+        }
+        $day = (int) $layout['dayBrightness'];
+        $night = (int) ($layout['nightBrightness'] ?? 15);
+        if ($day < 0 || $day > 100 || $night < 0 || $night > 100) {
+            throw new InvalidArgumentException('Helligkeit liegt zwischen 0 und 100.');
+        }
+        $from = (int) ($layout['nightFrom'] ?? 22);
+        $to = (int) ($layout['nightTo'] ?? 6);
+        if ($from < 0 || $from > 23 || $to < 0 || $to > 23) {
+            throw new InvalidArgumentException('Stunde liegt zwischen 0 und 23.');
+        }
+        $idle = (int) ($layout['idleMode'] ?? 0);
+        if ($idle < 0 || $idle > 2) {
+            throw new InvalidArgumentException('Unbekannte Ruheanzeige.');
+        }
+        $style = (string) ($layout['idleClockStyle'] ?? 'digital');
+        if (!in_array($style, ['digital', 'analog', 'word', 'swabian'], true)) {
+            throw new InvalidArgumentException('Unbekannter Uhrstil.');
+        }
+        $timeout = (int) ($layout['idleTimeoutSec'] ?? 60);
+        if ($timeout < 5 || $timeout > 3600) {
+            throw new InvalidArgumentException('Die Ruheanzeige startet nach 5 bis 3600 Sekunden.');
+        }
+        return [
+            'nightDim' => ($layout['nightDim'] ?? true) !== false,
+            'dayBrightness' => $day,
+            'nightBrightness' => $night,
+            'nightFrom' => $from,
+            'nightTo' => $to,
+            'idleMode' => $idle,
+            'idleClockStyle' => $style,
+            'idleTimeoutSec' => $timeout,
+        ];
+    }
+
     /** @param array<string, mixed> $layout */
     public static function validateLayout(array $layout, bool $publish): void
     {
@@ -133,6 +178,7 @@ final class HomeDisplayPanelSchema
         $maxColumns = (int) $profile['maxColumns'];
         $maxRows = (int) $profile['maxRows'];
         self::theme($layout);
+        self::displayBehavior($layout);
         $pages = $layout['pages'] ?? null;
         if (!is_array($pages) || $pages === []) {
             throw new InvalidArgumentException('Ansicht ohne Seite.');
@@ -912,6 +958,14 @@ final class HomeDisplayPanelSchema
             'name' => $name,
             'displayProfile' => $profileId,
             'showTabs' => false,
+            'nightDim' => true,
+            'dayBrightness' => 70,
+            'nightBrightness' => 15,
+            'nightFrom' => 22,
+            'nightTo' => 6,
+            'idleMode' => 0,
+            'idleClockStyle' => 'digital',
+            'idleTimeoutSec' => 60,
             'pages' => $pages,
         ];
     }
