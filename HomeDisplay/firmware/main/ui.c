@@ -815,15 +815,23 @@ static void note_touch(void)
     force_idle = false;
 }
 
-/* Tippen auf die Uhrzeit rechts oben schaltet die Ruheanzeige sofort ein. */
+static void reveal_idle_soon(lv_timer_t *timer)
+{
+    (void) timer;
+    reveal_idle();
+}
+
+/* Tippen auf die Uhrzeit rechts oben schaltet die Ruheanzeige sofort ein.
+ * Erst nach dem aktuellen Tipp: dieselbe Berührung würde die Uhr sonst im selben Ablauf wieder schließen. */
 static void show_idle_now(lv_event_t *event)
 {
     (void) event;
     force_idle = true;
-    idle_guard_until = esp_timer_get_time() + 700000;
+    idle_guard_until = esp_timer_get_time() + 800000;
     touch_counter++;
-    ESP_LOGI(TAG_UI, "Uhrzeit berührt, Ruheanzeige");
-    reveal_idle();
+    ESP_LOGI(TAG_UI, "Uhrzeit berührt, Ruheanzeige Modus %d Stil %s", idle_mode, idle_clock_style);
+    lv_timer_t *timer = lv_timer_create(reveal_idle_soon, 50, NULL);
+    lv_timer_set_repeat_count(timer, 1);
 }
 
 static bool control_is_dimmer(const char *control)
@@ -1091,6 +1099,7 @@ static void home_event(lv_event_t *event)
 static void gesture_event(lv_event_t *event)
 {
     (void) event;
+    if (force_idle) return;
     note_touch();
     if (locked || !layout_root) return;
     if (dim_popup && !lv_obj_has_flag(dim_popup, LV_OBJ_FLAG_HIDDEN)) return;
@@ -1429,7 +1438,7 @@ static bool raster_fits_display(const char *file, size_t max_bytes, int *width, 
 
 /* PNG einmal voll dekodieren und mit ganzzahligem Schritt verkleinern, so dass die Kachel gefüllt bleibt. */
 static uint16_t *decode_png_cover(const uint8_t *data, size_t length, int box_w, int box_h,
-                                  int *full_w, int *full_h, int *width, int *height, int *step_out)
+                                  int *full_w, int *full_h, int *width, int *height)
 {
     unsigned char *rgb = NULL;
     unsigned w = 0;
@@ -1462,7 +1471,6 @@ static uint16_t *decode_png_cover(const uint8_t *data, size_t length, int box_w,
     *full_h = (int) h;
     *width = out_w;
     *height = out_h;
-    *step_out = step;
     return px;
 }
 
@@ -1500,11 +1508,10 @@ static bool show_jpeg_cover(tile_view_t *view, const char *file, int box_w, int 
     int full_h = 0;
     int width = 0;
     int height = 0;
-    int shrink = 1;
     uint16_t *decoded = NULL;
     if (is_png) {
         ui_wdt_kick();
-        decoded = decode_png_cover(data, got, box_w, box_h, &full_w, &full_h, &width, &height, &shrink);
+        decoded = decode_png_cover(data, got, box_w, box_h, &full_w, &full_h, &width, &height);
         heap_caps_free(data);
         ui_wdt_kick();
         if (!decoded) {
@@ -1527,7 +1534,6 @@ static bool show_jpeg_cover(tile_view_t *view, const char *file, int box_w, int 
         while (scale < 3 && (size_t) (((full_w - 1) >> scale) + 1) * (size_t) (((full_h - 1) >> scale) + 1) > CAMERA_MAX_PX * 2) scale++;
         width = ((full_w - 1) >> scale) + 1;
         height = ((full_h - 1) >> scale) + 1;
-        shrink = 1 << scale;
         decoded = heap_caps_malloc((size_t) width * (size_t) height * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!decoded) {
             heap_caps_free(data);
@@ -1546,9 +1552,24 @@ static bool show_jpeg_cover(tile_view_t *view, const char *file, int box_w, int 
     }
     if (box_w < 1) box_w = width;
     if (box_h < 1) box_h = height;
-    /* Mittig auf die Kachel zuschneiden. */
-    int out_w = width < box_w ? width : box_w;
-    int out_h = height < box_h ? height : box_h;
+    /* Ausschnitt im Seitenverhältnis der Kachel, dann auf genau diese Größe ziehen. */
+    int crop_w;
+    int crop_h;
+    if ((long) width * box_h > (long) height * box_w) {
+        crop_h = height;
+        crop_w = (int) ((long) height * box_w / box_h);
+    } else {
+        crop_w = width;
+        crop_h = (int) ((long) width * box_h / box_w);
+    }
+    if (crop_w < 1) crop_w = 1;
+    if (crop_h < 1) crop_h = 1;
+    if (crop_w > width) crop_w = width;
+    if (crop_h > height) crop_h = height;
+    int crop_x = (width - crop_w) / 2;
+    int crop_y = (height - crop_h) / 2;
+    int out_w = box_w;
+    int out_h = box_h;
     size_t need = (size_t) out_w * (size_t) out_h;
     if (view->image_px_cap < need) {
         uint16_t *grown = heap_caps_malloc(need * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -1561,12 +1582,16 @@ static bool show_jpeg_cover(tile_view_t *view, const char *file, int box_w, int 
         view->image_px = grown;
         view->image_px_cap = need;
     }
-    int left = (width - out_w) / 2;
-    int top = (height - out_h) / 2;
     for (int row = 0; row < out_h; row++) {
-        memcpy(view->image_px + (size_t) row * (size_t) out_w,
-               decoded + (size_t) (row + top) * (size_t) width + (size_t) left,
-               (size_t) out_w * sizeof(uint16_t));
+        int sy = crop_y + (int) ((long) row * crop_h / out_h);
+        if (sy >= height) sy = height - 1;
+        const uint16_t *src = decoded + (size_t) sy * (size_t) width;
+        uint16_t *dst = view->image_px + (size_t) row * (size_t) out_w;
+        for (int col = 0; col < out_w; col++) {
+            int sx = crop_x + (int) ((long) col * crop_w / out_w);
+            if (sx >= width) sx = width - 1;
+            dst[col] = src[sx];
+        }
     }
     heap_caps_free(decoded);
     lv_img_dsc_t *dsc = &view->image_dsc;
@@ -1582,7 +1607,7 @@ static bool show_jpeg_cover(tile_view_t *view, const char *file, int box_w, int 
     lv_img_set_zoom(view->image_img, LV_IMG_ZOOM_NONE);
     lv_obj_set_size(view->image_img, out_w, out_h);
     lv_obj_center(view->image_img);
-    ESP_LOGI(TAG_UI, "Bild %s gezeigt: %dx%d aus %dx%d (1/%d)", file, out_w, out_h, full_w, full_h, shrink);
+    ESP_LOGI(TAG_UI, "Bild %s auf Kachel %dx%d skaliert (Quelle %dx%d)", file, out_w, out_h, full_w, full_h);
     return true;
 }
 
@@ -2717,14 +2742,17 @@ static void show_page(int index)
         if (view->title_row) lv_obj_move_foreground(view->title_row);
         tile_count++;
     }
-    lv_obj_add_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
-    idle_active = false;
+    if (!force_idle) {
+        lv_obj_add_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
+        idle_active = false;
+    }
     lv_obj_clear_flag(grid, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(grid);
     if (page_bar && !lv_obj_has_flag(page_bar, LV_OBJ_FLAG_HIDDEN)) lv_obj_move_foreground(page_bar);
     if (home_button) lv_obj_move_foreground(home_button);
     if (info_label) lv_obj_move_foreground(info_label);
     if (clock_hit) lv_obj_move_foreground(clock_hit);
+    if (force_idle && idle_active && idle_mode != 2) set_idle_visible(true);
     if (boot_layer) lv_obj_add_flag(boot_layer, LV_OBJ_FLAG_HIDDEN);
     if (last_state_json && last_state_json[0]) {
         cJSON *saved = cJSON_Parse(last_state_json);
@@ -2762,12 +2790,12 @@ static void apply_backlight(void)
 }
 
 /* ---------- Wortuhr ----------
- * 11 Spalten, 10 Zeilen. Die Wörter stehen wie bei einer QLOCKTWO im Buchstabenraster,
- * die Minuten über fünf zeigen vier Punkte in den Ecken. */
+ * 11 Spalten, 10 Zeilen. Die Wörter stehen wie bei einer QLOCKTWO im Buchstabenraster. */
 #define WC_COLS 11
 #define WC_ROWS 10
-#define WC_CELL_W 80
-#define WC_CELL_H 54
+/* 11×84 und 10×50 ergeben 924×500. Auf 1024×600 bleibt rundherum genau 50 Pixel. */
+#define WC_CELL_W 84
+#define WC_CELL_H 50
 #define WC_LIT 0xFFFFFF
 #define WC_DIM 0x303030
 
@@ -2832,18 +2860,35 @@ static const uint8_t WC_MINUTES[12] = {
 
 static lv_obj_t *word_clock;
 static lv_obj_t *wc_cells[WC_ROWS][WC_COLS];
-static lv_obj_t *wc_dots[4];
 static const wc_layout_t *wc_layout_shown;
 static uint16_t wc_lit[WC_ROWS];
-static int wc_dots_lit = -1;
+static int wc_origin_x;
+static int wc_origin_y;
+static int wc_cell_w;
+static int wc_cell_h;
+
+static void wc_place_letter(int row, int col, const char *letter)
+{
+    const lv_font_t *font = &montserrat_bold_40;
+    lv_point_t size = {0, 0};
+    lv_txt_get_size(&size, letter, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_obj_t *cell = wc_cells[row][col];
+    lv_label_set_text(cell, letter);
+    lv_obj_set_pos(cell,
+                   wc_origin_x + col * wc_cell_w + (wc_cell_w - size.x) / 2,
+                   wc_origin_y + row * wc_cell_h + (wc_cell_h - size.y) / 2);
+}
 
 static void wc_build(void)
 {
     if (!clock_layer) return;
     const lv_font_t *font = &montserrat_bold_40;
-    int line = lv_font_get_line_height(font);
-    int left = (HOMEDISPLAY_LCD_H_RES - WC_COLS * WC_CELL_W) / 2;
-    int top = (HOMEDISPLAY_LCD_V_RES - WC_ROWS * WC_CELL_H) / 2;
+    wc_cell_w = WC_CELL_W;
+    wc_cell_h = WC_CELL_H;
+    int used_w = wc_cell_w * WC_COLS;
+    int used_h = wc_cell_h * WC_ROWS;
+    wc_origin_x = (HOMEDISPLAY_LCD_H_RES - used_w) / 2;
+    wc_origin_y = (HOMEDISPLAY_LCD_V_RES - used_h) / 2;
     word_clock = lv_obj_create(clock_layer);
     lv_obj_set_size(word_clock, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES);
     lv_obj_set_pos(word_clock, 0, 0);
@@ -2856,31 +2901,11 @@ static void wc_build(void)
     for (int row = 0; row < WC_ROWS; row++) {
         for (int col = 0; col < WC_COLS; col++) {
             lv_obj_t *cell = lv_label_create(word_clock);
-            lv_obj_set_width(cell, WC_CELL_W);
-            lv_label_set_long_mode(cell, LV_LABEL_LONG_CLIP);
-            lv_obj_set_style_text_align(cell, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_style_text_font(cell, font, 0);
             lv_obj_set_style_text_color(cell, lv_color_hex(WC_DIM), 0);
-            lv_obj_set_pos(cell, left + col * WC_CELL_W, top + row * WC_CELL_H + (WC_CELL_H - line) / 2);
             lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);
             wc_cells[row][col] = cell;
         }
-    }
-    /* Ecken im Uhrzeigersinn: links oben, rechts oben, rechts unten, links unten. */
-    const int dot = 16;
-    const int edge = 22;
-    const int xs[4] = {edge, HOMEDISPLAY_LCD_H_RES - edge - dot, HOMEDISPLAY_LCD_H_RES - edge - dot, edge};
-    const int ys[4] = {edge, edge, HOMEDISPLAY_LCD_V_RES - edge - dot, HOMEDISPLAY_LCD_V_RES - edge - dot};
-    for (int index = 0; index < 4; index++) {
-        lv_obj_t *point = lv_obj_create(word_clock);
-        lv_obj_set_size(point, dot, dot);
-        lv_obj_set_pos(point, xs[index], ys[index]);
-        style_flat(point);
-        lv_obj_set_style_radius(point, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(point, lv_color_hex(WC_DIM), 0);
-        lv_obj_set_style_bg_opa(point, LV_OPA_COVER, 0);
-        lv_obj_clear_flag(point, LV_OBJ_FLAG_CLICKABLE);
-        wc_dots[index] = point;
     }
     lv_obj_add_event_cb(word_clock, dismiss_idle, LV_EVENT_PRESSED, NULL);
     lv_obj_add_flag(word_clock, LV_OBJ_FLAG_HIDDEN);
@@ -2897,7 +2922,7 @@ static void wc_set_letters(const wc_layout_t *layout)
             if (!*text) break;
             memcpy(letter, text, (size_t) bytes);
             text += bytes;
-            lv_label_set_text(wc_cells[row][col], letter);
+            wc_place_letter(row, col, letter);
             lv_obj_set_style_text_color(wc_cells[row][col], lv_color_hex(WC_DIM), 0);
         }
         wc_lit[row] = 0;
@@ -2919,7 +2944,6 @@ static void update_word_clock(int hour, int minute, bool swabian)
         wc_layout_shown = layout;
     }
     int block = minute / 5;
-    int dots = minute % 5;
     int shown_hour = (hour % 12 + (block >= 5 ? 1 : 0)) % 12;
     if (shown_hour == 0) shown_hour = 12;
     uint8_t flags = WC_MINUTES[block];
@@ -2948,22 +2972,17 @@ static void update_word_clock(int hour, int minute, bool swabian)
         }
         wc_lit[row] = mask[row];
     }
-    if (dots != wc_dots_lit) {
-        for (int index = 0; index < 4; index++) {
-            lv_obj_set_style_bg_color(wc_dots[index], lv_color_hex(index < dots ? WC_LIT : WC_DIM), 0);
-        }
-        wc_dots_lit = dots;
-    }
 }
 
 static void reveal_idle(void)
 {
     if (boot_screen_active || locked || !layout_root) return;
+    /* Bildschirm aus nur, wenn das so eingestellt ist. Ein Tipp auf die Uhrzeit zeigt sonst immer die Uhr,
+     * auch bei „Letzte Seite“, denn dort gäbe es sonst keine sichtbare Ruheanzeige. */
     if (idle_mode == 2) {
         apply_backlight();
         return;
     }
-    if (idle_mode != 0) return;
     int64_t now = clock_base + (esp_timer_get_time() - clock_set_at) / 1000000 + DISPLAY_TZ_OFFSET_S;
     if (now < 0) now = 0;
     int seconds = (int) (now % 86400);
@@ -3033,7 +3052,7 @@ static void clock_tick(lv_timer_t *timer)
         return;
     }
     bool idle = force_idle || esp_timer_get_time() - touched_at > idle_timeout_us;
-    if (idle && idle_mode == 0) {
+    if (idle && (idle_mode == 0 || idle_mode == 2 || force_idle)) {
         reveal_idle();
     } else if (idle_active) {
         set_idle_visible(false);
