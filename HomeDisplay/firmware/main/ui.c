@@ -2796,6 +2796,9 @@ static void apply_backlight(void)
 /* 11×84 und 10×50 ergeben 924×500. Auf 1024×600 bleibt rundherum genau 50 Pixel. */
 #define WC_CELL_W 84
 #define WC_CELL_H 50
+/* Feine Korrektur des sichtbaren Blocks: nach links und nach oben. */
+#define WC_NUDGE_X 16
+#define WC_NUDGE_Y 16
 #define WC_LIT 0xFFFFFF
 #define WC_DIM 0x303030
 
@@ -2866,17 +2869,40 @@ static int wc_origin_x;
 static int wc_origin_y;
 static int wc_cell_w;
 static int wc_cell_h;
+static int wc_shift_x;
+static int wc_shift_y;
+
+/* Sichtbare Zeichenfläche relativ zur Beschriftung, wie LVGL den Buchstaben zeichnet. */
+static bool wc_ink(const char *letter, int *x, int *y, int *w, int *h)
+{
+    const lv_font_t *font = &montserrat_bold_40;
+    uint32_t unicode = (uint8_t) letter[0];
+    if ((unicode & 0xE0) == 0xC0 && letter[1]) {
+        unicode = ((unicode & 0x1F) << 6) | ((uint8_t) letter[1] & 0x3F);
+    }
+    lv_font_glyph_dsc_t glyph;
+    if (!lv_font_get_glyph_dsc(font, &glyph, unicode, 0) || glyph.box_w == 0 || glyph.box_h == 0) return false;
+    *x = glyph.ofs_x;
+    *y = (font->line_height - font->base_line) - glyph.box_h - glyph.ofs_y;
+    *w = glyph.box_w;
+    *h = glyph.box_h;
+    return true;
+}
 
 static void wc_place_letter(int row, int col, const char *letter)
 {
-    const lv_font_t *font = &montserrat_bold_40;
-    lv_point_t size = {0, 0};
-    lv_txt_get_size(&size, letter, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     lv_obj_t *cell = wc_cells[row][col];
     lv_label_set_text(cell, letter);
+    int ink_x = 0;
+    int ink_y = 0;
+    int ink_w = 0;
+    int ink_h = 0;
+    if (!wc_ink(letter, &ink_x, &ink_y, &ink_w, &ink_h)) return;
+    int cell_x = wc_origin_x + col * wc_cell_w;
+    int cell_y = wc_origin_y + row * wc_cell_h;
     lv_obj_set_pos(cell,
-                   wc_origin_x + col * wc_cell_w + (wc_cell_w - size.x) / 2,
-                   wc_origin_y + row * wc_cell_h + (wc_cell_h - size.y) / 2);
+                   cell_x + (wc_cell_w - ink_w) / 2 - ink_x + wc_shift_x,
+                   cell_y + (wc_cell_h - ink_h) / 2 - ink_y + wc_shift_y);
 }
 
 static void wc_build(void)
@@ -2914,18 +2940,51 @@ static void wc_build(void)
 /* Schreibt die Buchstaben des gewählten Rasters in die Zellen; Ü und Ö sind zwei Byte lang. */
 static void wc_set_letters(const wc_layout_t *layout)
 {
+    char letters[WC_ROWS][WC_COLS][4];
+    memset(letters, 0, sizeof(letters));
+    wc_shift_x = 0;
+    wc_shift_y = 0;
     for (int row = 0; row < WC_ROWS; row++) {
         const char *text = layout->rows[row];
         for (int col = 0; col < WC_COLS; col++) {
-            char letter[4] = {0};
             int bytes = ((unsigned char) *text >= 0xC0) ? 2 : 1;
             if (!*text) break;
-            memcpy(letter, text, (size_t) bytes);
+            memcpy(letters[row][col], text, (size_t) bytes);
             text += bytes;
-            wc_place_letter(row, col, letter);
+            wc_place_letter(row, col, letters[row][col]);
             lv_obj_set_style_text_color(wc_cells[row][col], lv_color_hex(WC_DIM), 0);
         }
         wc_lit[row] = 0;
+    }
+    /* Der sichtbare Block, nicht die Schriftbox, kommt in die Mitte.
+     * Positionen stehen erst nach dem Layout in den Objekten, darum hier selbst rechnen. */
+    int min_x = HOMEDISPLAY_LCD_H_RES;
+    int min_y = HOMEDISPLAY_LCD_V_RES;
+    int max_x = 0;
+    int max_y = 0;
+    for (int row = 0; row < WC_ROWS; row++) {
+        for (int col = 0; col < WC_COLS; col++) {
+            int ink_x = 0;
+            int ink_y = 0;
+            int ink_w = 0;
+            int ink_h = 0;
+            if (!letters[row][col][0] || !wc_ink(letters[row][col], &ink_x, &ink_y, &ink_w, &ink_h)) continue;
+            int x = wc_origin_x + col * wc_cell_w + (wc_cell_w - ink_w) / 2;
+            int y = wc_origin_y + row * wc_cell_h + (wc_cell_h - ink_h) / 2;
+            if (x < min_x) min_x = x;
+            if (y < min_y) min_y = y;
+            if (x + ink_w > max_x) max_x = x + ink_w;
+            if (y + ink_h > max_y) max_y = y + ink_h;
+        }
+    }
+    wc_shift_x = (HOMEDISPLAY_LCD_H_RES - (max_x - min_x)) / 2 - min_x - WC_NUDGE_X;
+    wc_shift_y = (HOMEDISPLAY_LCD_V_RES - (max_y - min_y)) / 2 - min_y - WC_NUDGE_Y;
+    ESP_LOGI(TAG_UI, "Wortuhr-Block %d..%d / %d..%d, Verschiebung %d,%d", min_x, max_x, min_y, max_y, wc_shift_x, wc_shift_y);
+    if (wc_shift_x == 0 && wc_shift_y == 0) return;
+    for (int row = 0; row < WC_ROWS; row++) {
+        for (int col = 0; col < WC_COLS; col++) {
+            if (letters[row][col][0]) wc_place_letter(row, col, letters[row][col]);
+        }
     }
 }
 
