@@ -469,7 +469,7 @@ final class HomeDisplayPanelSchema
                         $imageId = (string) ($tile['imageId'] ?? '');
                         $public['imageSource'] = 'catalog';
                         $public['imageId'] = $imageId;
-                        $public['imageFile'] = HomeDisplayCatalogStore::imageFileName($imageId);
+                        $public['imageFile'] = HomeDisplayCatalogStore::panelImageFileName($imageId);
                     }
                     if (!empty($tile['imageBackground'])) {
                         $public['imageBackground'] = true;

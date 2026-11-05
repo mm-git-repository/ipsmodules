@@ -2,6 +2,8 @@
 
 #include "camtjpgd.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #include <string.h>
 
@@ -10,6 +12,19 @@
 #define JPEG_WORK_BYTES 20480
 
 static uint8_t *jpeg_work;
+static SemaphoreHandle_t jpeg_lock;
+
+/* Der Arbeitspuffer gehört immer nur einem Aufruf. Kamera (Client) und Bildkachel (Anzeige) teilen ihn. */
+static void jpeg_lock_take(void)
+{
+    if (!jpeg_lock) jpeg_lock = xSemaphoreCreateMutex();
+    if (jpeg_lock) xSemaphoreTake(jpeg_lock, portMAX_DELAY);
+}
+
+static void jpeg_lock_give(void)
+{
+    if (jpeg_lock) xSemaphoreGive(jpeg_lock);
+}
 
 static bool jpeg_work_ready(void)
 {
@@ -62,28 +77,38 @@ static int scaled(int size, int scale)
 int homedisplay_jpeg_probe(const uint8_t *data, size_t length, size_t max_px, int *width, int *height, int *scale)
 {
     if (!data || length < 4 || !width || !height || !scale) return JDR_PAR;
-    if (!jpeg_work_ready()) return JDR_MEM1;
-    jpeg_ctx_t ctx = {.data = data, .length = length};
-    JDEC jd;
-    JRESULT result = camjd_prepare(&jd, jpeg_in, jpeg_work, JPEG_WORK_BYTES, &ctx);
-    if (result != JDR_OK) return (int) result;
-    int s = 0;
-    while (s < 3 && (size_t) scaled(jd.width, s) * (size_t) scaled(jd.height, s) > max_px) s++;
-    *scale = s;
-    *width = scaled(jd.width, s);
-    *height = scaled(jd.height, s);
-    if ((size_t) *width * (size_t) *height > max_px) return JDR_MEM1;
-    return JDR_OK;
+    jpeg_lock_take();
+    int code = JDR_MEM1;
+    if (jpeg_work_ready()) {
+        jpeg_ctx_t ctx = {.data = data, .length = length};
+        JDEC jd;
+        JRESULT result = camjd_prepare(&jd, jpeg_in, jpeg_work, JPEG_WORK_BYTES, &ctx);
+        code = (int) result;
+        if (result == JDR_OK) {
+            int s = 0;
+            while (s < 3 && (size_t) scaled(jd.width, s) * (size_t) scaled(jd.height, s) > max_px) s++;
+            *scale = s;
+            *width = scaled(jd.width, s);
+            *height = scaled(jd.height, s);
+            if ((size_t) *width * (size_t) *height > max_px) code = JDR_MEM1;
+        }
+    }
+    jpeg_lock_give();
+    return code;
 }
 
 int homedisplay_jpeg_decode(const uint8_t *data, size_t length, int scale, uint16_t *dst, int width, int height)
 {
     if (!data || !dst || width < 1 || height < 1 || scale < 0 || scale > 3) return JDR_PAR;
-    if (!jpeg_work_ready()) return JDR_MEM1;
-    jpeg_ctx_t ctx = {.data = data, .length = length, .dst = dst, .width = width, .height = height};
-    JDEC jd;
-    JRESULT result = camjd_prepare(&jd, jpeg_in, jpeg_work, JPEG_WORK_BYTES, &ctx);
-    if (result != JDR_OK) return (int) result;
-    result = camjd_decomp(&jd, jpeg_out, (uint8_t) scale);
-    return (int) result;
+    jpeg_lock_take();
+    int code = JDR_MEM1;
+    if (jpeg_work_ready()) {
+        jpeg_ctx_t ctx = {.data = data, .length = length, .dst = dst, .width = width, .height = height};
+        JDEC jd;
+        JRESULT result = camjd_prepare(&jd, jpeg_in, jpeg_work, JPEG_WORK_BYTES, &ctx);
+        if (result == JDR_OK) result = camjd_decomp(&jd, jpeg_out, (uint8_t) scale);
+        code = (int) result;
+    }
+    jpeg_lock_give();
+    return code;
 }

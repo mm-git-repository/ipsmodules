@@ -199,6 +199,44 @@ final class HomeDisplayCatalogStore
         return $id . '.' . $ext;
     }
 
+    /** Dateiname auf der Anzeige. Mit GD bekommt sie JPEG, weil ihr Speicher für große PNG nicht reicht. */
+    public static function panelImageFileName(string $id): string
+    {
+        if (function_exists('imagejpeg') && function_exists('imagecreatefromstring')) {
+            return $id . '.jpg';
+        }
+        return self::imageFileName($id);
+    }
+
+    /** Baseline-JPEG für die Anzeige; Transparenz wird auf Schwarz gelegt. Leer, wenn GD fehlt. */
+    public static function panelImageJpeg(string $id): string
+    {
+        if (!function_exists('imagejpeg') || !function_exists('imagecreatefromstring')) {
+            return '';
+        }
+        $binary = @file_get_contents(self::imagePath($id));
+        if (!is_string($binary) || $binary === '') {
+            return '';
+        }
+        $source = @imagecreatefromstring($binary);
+        if ($source === false) {
+            return '';
+        }
+        $width = imagesx($source);
+        $height = imagesy($source);
+        $target = imagecreatetruecolor($width, $height);
+        imagefill($target, 0, 0, imagecolorallocate($target, 0, 0, 0));
+        imagealphablending($target, true);
+        imagecopy($target, $source, 0, 0, 0, 0, $width, $height);
+        imageinterlace($target, false);
+        ob_start();
+        $ok = imagejpeg($target, null, 85);
+        $encoded = ob_get_clean();
+        imagedestroy($target);
+        imagedestroy($source);
+        return $ok && is_string($encoded) ? $encoded : '';
+    }
+
     public static function imagePath(string $id): string
     {
         return self::imagesDir() . DIRECTORY_SEPARATOR . self::imageFileName($id);

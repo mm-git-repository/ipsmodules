@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "src/extra/libs/png/lodepng.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -72,6 +73,9 @@ typedef struct {
     int camera_dy;
     lv_obj_t *image_img;
     bool image_backdrop;
+    uint16_t *image_px;
+    size_t image_px_cap;
+    lv_img_dsc_t image_dsc;
     lv_obj_t *chart_line;
     lv_obj_t *chart_note;
     int chart_logged;
@@ -256,6 +260,7 @@ static void apply_status_color(tile_view_t *view, const char *color)
 
 static lv_obj_t *status_label;
 static lv_obj_t *info_label;
+static lv_obj_t *clock_hit;
 static lv_obj_t *boot_layer;
 static lv_obj_t *boot_title;
 static lv_obj_t *boot_detail;
@@ -341,6 +346,8 @@ static int wifi_rssi;
 static int64_t offline_since;
 static int64_t touched_at;
 static bool force_idle;
+/* Derselbe Finger, der die Uhrzeit trifft, darf die Ruheanzeige nicht sofort wieder schließen. */
+static int64_t idle_guard_until;
 static int64_t clock_base;
 static int64_t clock_set_at;
 static char confirm_tile[40];
@@ -795,8 +802,14 @@ static const lv_font_t *font_for(int px, bool bold, bool italic)
     return &lv_font_montserrat_20;
 }
 
+static void reveal_idle(void);
+
 static void note_touch(void)
 {
+    if (esp_timer_get_time() < idle_guard_until) {
+        touch_counter++;
+        return;
+    }
     touched_at = esp_timer_get_time();
     touch_counter++;
     force_idle = false;
@@ -807,7 +820,10 @@ static void show_idle_now(lv_event_t *event)
 {
     (void) event;
     force_idle = true;
+    idle_guard_until = esp_timer_get_time() + 700000;
     touch_counter++;
+    ESP_LOGI(TAG_UI, "Uhrzeit berührt, Ruheanzeige");
+    reveal_idle();
 }
 
 static bool control_is_dimmer(const char *control)
@@ -985,6 +1001,7 @@ static void set_idle_visible(bool idle)
         if (page_bar) lv_obj_add_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
         if (home_button) lv_obj_add_flag(home_button, LV_OBJ_FLAG_HIDDEN);
         if (info_label) lv_obj_add_flag(info_label, LV_OBJ_FLAG_HIDDEN);
+        if (clock_hit) lv_obj_add_flag(clock_hit, LV_OBJ_FLAG_HIDDEN);
         if (grid) lv_obj_add_flag(grid, LV_OBJ_FLAG_HIDDEN);
         if (clock_layer) {
             lv_obj_clear_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
@@ -995,6 +1012,10 @@ static void set_idle_visible(bool idle)
         if (grid) lv_obj_clear_flag(grid, LV_OBJ_FLAG_HIDDEN);
         if (home_button) lv_obj_clear_flag(home_button, LV_OBJ_FLAG_HIDDEN);
         if (info_label) lv_obj_clear_flag(info_label, LV_OBJ_FLAG_HIDDEN);
+        if (clock_hit) {
+            lv_obj_clear_flag(clock_hit, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(clock_hit);
+        }
         if (page_bar && layout_root && !cJSON_IsFalse(cJSON_GetObjectItem(layout_root, "showTabs"))) {
             cJSON *pages = cJSON_GetObjectItem(layout_root, "pages");
             if (cJSON_GetArraySize(pages) > 1) lv_obj_clear_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
@@ -1005,6 +1026,7 @@ static void set_idle_visible(bool idle)
 static void dismiss_idle(lv_event_t *event)
 {
     (void) event;
+    if (esp_timer_get_time() < idle_guard_until) return;
     note_touch();
     if (idle_active) {
         set_idle_visible(false);
@@ -1405,11 +1427,173 @@ static bool raster_fits_display(const char *file, size_t max_bytes, int *width, 
     return true;
 }
 
-static void place_cover_image(lv_obj_t *img, const char *file, int box_w, int box_h)
+/* PNG einmal voll dekodieren und mit ganzzahligem Schritt verkleinern, so dass die Kachel gefüllt bleibt. */
+static uint16_t *decode_png_cover(const uint8_t *data, size_t length, int box_w, int box_h,
+                                  int *full_w, int *full_h, int *width, int *height, int *step_out)
 {
+    unsigned char *rgb = NULL;
+    unsigned w = 0;
+    unsigned h = 0;
+    unsigned error = lodepng_decode24(&rgb, &w, &h, data, length);
+    if (error || !rgb || w == 0 || h == 0) {
+        if (rgb) lv_mem_free(rgb);
+        ESP_LOGW(TAG_UI, "PNG-Fehler %u", error);
+        return NULL;
+    }
+    ui_wdt_kick();
+    if (box_w < 1) box_w = (int) w;
+    if (box_h < 1) box_h = (int) h;
+    int step = 1;
+    while ((int) w / (step + 1) >= box_w && (int) h / (step + 1) >= box_h) step++;
+    int out_w = ((int) w + step - 1) / step;
+    int out_h = ((int) h + step - 1) / step;
+    uint16_t *px = heap_caps_malloc((size_t) out_w * (size_t) out_h * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (px) {
+        for (int y = 0; y < out_h; y++) {
+            const unsigned char *line = rgb + (size_t) (y * step) * w * 3;
+            for (int x = 0; x < out_w; x++) {
+                const unsigned char *p = line + (size_t) (x * step) * 3;
+                px[(size_t) y * out_w + x] = lv_color_make(p[0], p[1], p[2]).full;
+            }
+        }
+    }
+    lv_mem_free(rgb);
+    *full_w = (int) w;
+    *full_h = (int) h;
+    *width = out_w;
+    *height = out_h;
+    *step_out = step;
+    return px;
+}
+
+/* Bildkacheln dekodieren JPEG und PNG einmal selbst nach RGB565 und schneiden auf die Kachel zu.
+ * LVGL würde sonst ein großes Bild bei jedem Neuzeichnen dekodieren und zoomen; das bremst Anzeige und Touch. */
+static bool show_jpeg_cover(tile_view_t *view, const char *file, int box_w, int box_h)
+{
+    char path[96];
+    snprintf(path, sizeof(path), "/storage/%s", file);
+    struct stat info;
+    if (stat(path, &info) != 0 || info.st_size < 8 || (size_t) info.st_size > 2u * 1024u * 1024u) return false;
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return false;
+    unsigned char magic[4] = {0};
+    if (fread(magic, 1, 4, fp) != 4) {
+        fclose(fp);
+        return false;
+    }
+    bool is_jpeg = magic[0] == 0xFF && magic[1] == 0xD8;
+    bool is_png = magic[0] == 0x89 && magic[1] == 'P' && magic[2] == 'N' && magic[3] == 'G';
+    if (!is_jpeg && !is_png) {
+        fclose(fp);
+        return false;
+    }
+    uint8_t *data = heap_caps_malloc((size_t) info.st_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!data) {
+        fclose(fp);
+        ESP_LOGW(TAG_UI, "Bild %s: kein Speicher zum Lesen (%ld Byte)", file, (long) info.st_size);
+        return true;
+    }
+    rewind(fp);
+    size_t got = fread(data, 1, (size_t) info.st_size, fp);
+    fclose(fp);
+    int full_w = 0;
+    int full_h = 0;
     int width = 0;
     int height = 0;
-    if (!img || !raster_fits_display(file, 2u * 1024u * 1024u, &width, &height)) return;
+    int shrink = 1;
+    uint16_t *decoded = NULL;
+    if (is_png) {
+        ui_wdt_kick();
+        decoded = decode_png_cover(data, got, box_w, box_h, &full_w, &full_h, &width, &height, &shrink);
+        heap_caps_free(data);
+        ui_wdt_kick();
+        if (!decoded) {
+            ESP_LOGW(TAG_UI, "Bild %s verworfen (PNG nicht lesbar oder kein Speicher)", file);
+            return true;
+        }
+    } else {
+        int scale = 0;
+        int result = homedisplay_jpeg_probe(data, got, SIZE_MAX, &full_w, &full_h, &scale);
+        if (result != 0) {
+            heap_caps_free(data);
+            ESP_LOGW(TAG_UI, "Bild %s verworfen (JPEG-Fehler %d, nur Baseline-JPEG)", file, result);
+            return true;
+        }
+        int want_w = box_w < 1 ? full_w : box_w;
+        int want_h = box_h < 1 ? full_h : box_h;
+        /* Stärkste Verkleinerung (1/1 bis 1/8), die die Kachel noch ganz füllt. */
+        scale = 0;
+        while (scale < 3 && (((full_w - 1) >> (scale + 1)) + 1) >= want_w && (((full_h - 1) >> (scale + 1)) + 1) >= want_h) scale++;
+        while (scale < 3 && (size_t) (((full_w - 1) >> scale) + 1) * (size_t) (((full_h - 1) >> scale) + 1) > CAMERA_MAX_PX * 2) scale++;
+        width = ((full_w - 1) >> scale) + 1;
+        height = ((full_h - 1) >> scale) + 1;
+        shrink = 1 << scale;
+        decoded = heap_caps_malloc((size_t) width * (size_t) height * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!decoded) {
+            heap_caps_free(data);
+            ESP_LOGW(TAG_UI, "Bild %s verworfen (kein Speicher für %dx%d)", file, width, height);
+            return true;
+        }
+        ui_wdt_kick();
+        result = homedisplay_jpeg_decode(data, got, scale, decoded, width, height);
+        heap_caps_free(data);
+        ui_wdt_kick();
+        if (result != 0) {
+            heap_caps_free(decoded);
+            ESP_LOGW(TAG_UI, "Bild %s verworfen (Dekodierfehler %d)", file, result);
+            return true;
+        }
+    }
+    if (box_w < 1) box_w = width;
+    if (box_h < 1) box_h = height;
+    /* Mittig auf die Kachel zuschneiden. */
+    int out_w = width < box_w ? width : box_w;
+    int out_h = height < box_h ? height : box_h;
+    size_t need = (size_t) out_w * (size_t) out_h;
+    if (view->image_px_cap < need) {
+        uint16_t *grown = heap_caps_malloc(need * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!grown) {
+            heap_caps_free(decoded);
+            ESP_LOGW(TAG_UI, "Bild %s verworfen (kein Speicher für %dx%d)", file, out_w, out_h);
+            return true;
+        }
+        if (view->image_px) heap_caps_free(view->image_px);
+        view->image_px = grown;
+        view->image_px_cap = need;
+    }
+    int left = (width - out_w) / 2;
+    int top = (height - out_h) / 2;
+    for (int row = 0; row < out_h; row++) {
+        memcpy(view->image_px + (size_t) row * (size_t) out_w,
+               decoded + (size_t) (row + top) * (size_t) width + (size_t) left,
+               (size_t) out_w * sizeof(uint16_t));
+    }
+    heap_caps_free(decoded);
+    lv_img_dsc_t *dsc = &view->image_dsc;
+    memset(dsc, 0, sizeof(*dsc));
+    dsc->header.always_zero = 0;
+    dsc->header.cf = LV_IMG_CF_TRUE_COLOR;
+    dsc->header.w = (uint32_t) out_w;
+    dsc->header.h = (uint32_t) out_h;
+    dsc->data_size = (uint32_t) (need * sizeof(uint16_t));
+    dsc->data = (const uint8_t *) view->image_px;
+    lv_img_cache_invalidate_src(dsc);
+    lv_img_set_src(view->image_img, dsc);
+    lv_img_set_zoom(view->image_img, LV_IMG_ZOOM_NONE);
+    lv_obj_set_size(view->image_img, out_w, out_h);
+    lv_obj_center(view->image_img);
+    ESP_LOGI(TAG_UI, "Bild %s gezeigt: %dx%d aus %dx%d (1/%d)", file, out_w, out_h, full_w, full_h, shrink);
+    return true;
+}
+
+static void place_cover_image(tile_view_t *view, const char *file, int box_w, int box_h)
+{
+    if (!view || !view->image_img || !file || !file[0]) return;
+    if (show_jpeg_cover(view, file, box_w, box_h)) return;
+    int width = 0;
+    int height = 0;
+    if (!raster_fits_display(file, 2u * 1024u * 1024u, &width, &height)) return;
+    lv_obj_t *img = view->image_img;
     char path[96];
     snprintf(path, sizeof(path), "S:/%s", file);
     /* Gleicher Dateiname, neuer Inhalt: Der Cache hielte sonst das alte Bild. */
@@ -1755,6 +1939,11 @@ static void show_page(int index)
     }
     bool show_tabs = !cJSON_IsFalse(cJSON_GetObjectItem(layout_root, "showTabs"));
     lv_obj_clean(page_bar);
+    for (int index = 0; index < tile_count; index++) {
+        if (tiles[index].image_px) heap_caps_free(tiles[index].image_px);
+        tiles[index].image_px = NULL;
+        tiles[index].image_px_cap = 0;
+    }
     lv_obj_clean(grid);
     tile_count = 0;
     chart_slot_count = 0;
@@ -1843,6 +2032,7 @@ static void show_page(int index)
     }
     if (home_button) lv_obj_move_foreground(home_button);
     if (info_label) lv_obj_move_foreground(info_label);
+    if (clock_hit) lv_obj_move_foreground(clock_hit);
     /* Raster der Seite; ältere Veröffentlichungen tragen es noch an der Ansicht. */
     cJSON *page_cols = cJSON_GetObjectItem(page, "columns");
     cJSON *page_rows = cJSON_GetObjectItem(page, "rows");
@@ -2025,7 +2215,7 @@ static void show_page(int index)
             view->image_img = lv_img_create(view->card);
             lv_obj_set_size(view->image_img, card_w, card_h);
             lv_obj_center(view->image_img);
-            if (file && file[0]) place_cover_image(view->image_img, file, card_w, card_h);
+            if (file && file[0]) place_cover_image(view, file, card_w, card_h);
             if (view->image_backdrop) lv_obj_move_background(view->card);
             tile_count++;
             continue;
@@ -2534,6 +2724,7 @@ static void show_page(int index)
     if (page_bar && !lv_obj_has_flag(page_bar, LV_OBJ_FLAG_HIDDEN)) lv_obj_move_foreground(page_bar);
     if (home_button) lv_obj_move_foreground(home_button);
     if (info_label) lv_obj_move_foreground(info_label);
+    if (clock_hit) lv_obj_move_foreground(clock_hit);
     if (boot_layer) lv_obj_add_flag(boot_layer, LV_OBJ_FLAG_HIDDEN);
     if (last_state_json && last_state_json[0]) {
         cJSON *saved = cJSON_Parse(last_state_json);
@@ -2765,6 +2956,45 @@ static void update_word_clock(int hour, int minute, bool swabian)
     }
 }
 
+static void reveal_idle(void)
+{
+    if (boot_screen_active || locked || !layout_root) return;
+    if (idle_mode == 2) {
+        apply_backlight();
+        return;
+    }
+    if (idle_mode != 0) return;
+    int64_t now = clock_base + (esp_timer_get_time() - clock_set_at) / 1000000 + DISPLAY_TZ_OFFSET_S;
+    if (now < 0) now = 0;
+    int seconds = (int) (now % 86400);
+    int hour = seconds / 3600;
+    int minute = (seconds / 60) % 60;
+    if (!idle_active) set_idle_visible(true);
+    bool analog = strcmp(idle_clock_style, "analog") == 0;
+    bool swabian = strcmp(idle_clock_style, "swabian") == 0;
+    bool word = swabian || strcmp(idle_clock_style, "word") == 0;
+    if (analog_clock) {
+        if (analog) lv_obj_clear_flag(analog_clock, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(analog_clock, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (word) {
+        update_word_clock(hour, minute, swabian);
+        if (word_clock) lv_obj_clear_flag(word_clock, LV_OBJ_FLAG_HIDDEN);
+    } else if (word_clock) {
+        lv_obj_add_flag(word_clock, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (clock_label) {
+        if (analog || word) lv_obj_add_flag(clock_label, LV_OBJ_FLAG_HIDDEN);
+        else {
+            lv_obj_clear_flag(clock_label, LV_OBJ_FLAG_HIDDEN);
+            char line[16];
+            snprintf(line, sizeof(line), "%02d:%02d", hour, minute);
+            lv_label_set_text(clock_label, line);
+        }
+    }
+    if (analog) update_analog_hands(hour, minute);
+}
+
 static void clock_tick(lv_timer_t *timer)
 {
     (void) timer;
@@ -2804,31 +3034,7 @@ static void clock_tick(lv_timer_t *timer)
     }
     bool idle = force_idle || esp_timer_get_time() - touched_at > idle_timeout_us;
     if (idle && idle_mode == 0) {
-        int minute = (seconds / 60) % 60;
-        if (!idle_active) set_idle_visible(true);
-        bool analog = strcmp(idle_clock_style, "analog") == 0;
-        bool swabian = strcmp(idle_clock_style, "swabian") == 0;
-        bool word = swabian || strcmp(idle_clock_style, "word") == 0;
-        if (analog_clock) {
-            if (analog) lv_obj_clear_flag(analog_clock, LV_OBJ_FLAG_HIDDEN);
-            else lv_obj_add_flag(analog_clock, LV_OBJ_FLAG_HIDDEN);
-        }
-        if (word) {
-            update_word_clock(hour, minute, swabian);
-            if (word_clock) lv_obj_clear_flag(word_clock, LV_OBJ_FLAG_HIDDEN);
-        } else if (word_clock) {
-            lv_obj_add_flag(word_clock, LV_OBJ_FLAG_HIDDEN);
-        }
-        if (clock_label) {
-            if (analog || word) lv_obj_add_flag(clock_label, LV_OBJ_FLAG_HIDDEN);
-            else {
-                lv_obj_clear_flag(clock_label, LV_OBJ_FLAG_HIDDEN);
-                char line[16];
-                snprintf(line, sizeof(line), "%02d:%02d", hour, minute);
-                lv_label_set_text(clock_label, line);
-            }
-        }
-        if (analog) update_analog_hands(hour, minute);
+        reveal_idle();
     } else if (idle_active) {
         set_idle_visible(false);
         refresh_now = true;
@@ -2904,10 +3110,15 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_set_style_text_font(info_label, &lv_font_montserrat_36, 0);
     lv_label_set_text(info_label, "--:--");
     lv_obj_align(info_label, LV_ALIGN_TOP_RIGHT, -12, (HEADER_H - 36) / 2);
-    lv_obj_add_flag(info_label, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(info_label, show_idle_now, LV_EVENT_CLICKED, NULL);
-    /* Die Schrift allein trifft der Finger schlecht, darum eine größere Fläche darum. */
-    lv_obj_set_ext_click_area(info_label, 24);
+    lv_obj_clear_flag(info_label, LV_OBJ_FLAG_CLICKABLE);
+    /* Fläche über der ganzen rechten Kopfzeile, die Schrift allein ist zu schmal. */
+    clock_hit = lv_obj_create(screen);
+    lv_obj_set_pos(clock_hit, HOMEDISPLAY_LCD_H_RES - HEADER_RIGHT, 0);
+    lv_obj_set_size(clock_hit, HEADER_RIGHT, HEADER_H);
+    style_flat(clock_hit);
+    lv_obj_set_style_bg_opa(clock_hit, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_radius(clock_hit, 0, 0);
+    lv_obj_add_event_cb(clock_hit, show_idle_now, LV_EVENT_PRESSED, NULL);
     home_button = lv_btn_create(screen);
     lv_obj_set_size(home_button, TAB_H, TAB_H);
     lv_obj_set_pos(home_button, 8, (HEADER_H - TAB_H) / 2);
@@ -3723,7 +3934,7 @@ void homedisplay_ui_refresh_image(const char *tile_id, const char *file)
         if (strcmp(tiles[index].tile_id, tile_id) == 0 && tiles[index].image_img) {
             int box_w = lv_obj_get_width(tiles[index].image_img);
             int box_h = lv_obj_get_height(tiles[index].image_img);
-            place_cover_image(tiles[index].image_img, file, box_w, box_h);
+            place_cover_image(&tiles[index], file, box_w, box_h);
             break;
         }
     }

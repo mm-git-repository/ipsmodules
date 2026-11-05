@@ -2973,6 +2973,13 @@ PHP;
             $this->json(['error' => 'image']);
             return;
         }
+        $jpeg = HomeDisplayCatalogStore::panelImageJpeg($id);
+        if ($jpeg !== '') {
+            header('Content-Type: image/jpeg');
+            header('Content-Length: ' . (string) strlen($jpeg));
+            echo $jpeg;
+            return;
+        }
         $path = HomeDisplayCatalogStore::imagePath($id);
         header('Content-Type: ' . (str_ends_with($path, '.jpg') ? 'image/jpeg' : 'image/png'));
         header('Content-Length: ' . (string) filesize($path));
