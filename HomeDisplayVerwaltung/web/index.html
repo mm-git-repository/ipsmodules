@@ -28,14 +28,6 @@
         <button type="button" id="edit-details">Details der Kachel …</button>
         <button type="button" id="edit-duplicate" title="Oder Strg+C und Strg+V">Kachel kopieren</button>
         <button type="button" id="edit-style">Stil übertragen</button>
-        <hr>
-        <button type="button" id="resize-1x1">Größe 1×1</button>
-        <button type="button" id="resize-2x1">Größe 2×1</button>
-        <button type="button" id="resize-1x2">Größe 1×2</button>
-        <button type="button" id="resize-2x2">Größe 2×2</button>
-        <button type="button" id="resize-full-width">Volle Breite</button>
-        <hr>
-        <button type="button" id="edit-layout">Eigenschaften der Ansicht …</button>
       </div>
     </div>
     <div class="menu">
@@ -48,9 +40,6 @@
     <div class="menu">
       <button type="button" id="open-settings">Einstellungen</button>
     </div>
-    <div class="menu">
-      <button type="button" id="open-probe">Testclient</button>
-    </div>
     <span id="title" class="title"></span>
   </div>
 
@@ -62,17 +51,8 @@
     <button type="button" id="tb-save" title="Entwurf speichern">Speichern</button>
     <button type="button" id="tb-publish" title="Veröffentlichen">Veröffentlichen</button>
     <span class="sep"></span>
-    <label>Spalten <input id="columns" type="number" min="1" max="4" value="2"></label>
-    <label>Zeilen <input id="rows" type="number" min="1" max="6" value="4"></label>
-    <label>Display-Profil
-      <select id="display-profile"></select>
-    </label>
-    <span id="display-profile-meta" class="hint"></span>
+    <label>Name <input id="layout-name" maxlength="60"></label>
     <label><input id="show-tabs" type="checkbox" checked> Reiterleiste an der Anzeige</label>
-    <label><input id="color-mono" type="checkbox"> Schwarz/Weiß</label>
-    <label>Hintergrund <input id="theme-bg" type="color" value="#102033"></label>
-    <label>Buttons <input id="theme-button" type="color" value="#2a4f7c"></label>
-    <label>Akzent <input id="theme-accent" type="color" value="#ffb547"></label>
   </div>
 
   <div id="workspace">
@@ -149,10 +129,6 @@
         <div class="row hidden">
           <label>Spalte <input id="p-col" type="number" min="1"></label>
           <label>Zeile <input id="p-row" type="number" min="1"></label>
-        </div>
-        <div class="row hidden">
-          <label>Breite <input id="p-colspan" type="number" min="1" max="4" value="1"></label>
-          <label>Höhe <input id="p-rowspan" type="number" min="1" max="6" value="1"></label>
         </div>
         <div class="row">
           <label id="p-own-bg-wrap"><input id="p-own-bg" type="checkbox"> <span id="p-own-bg-label">Eigene Farbe</span> <input id="p-bg-color" type="color" value="#2a4f7c"></label>
@@ -516,18 +492,26 @@
 
   <div id="statusbar"><span id="status">Lade …</span><span id="hint"></span></div>
 
-  <dialog id="layout-dialog">
-    <form method="dialog">
-      <h3>Ansicht</h3>
-      <label>Name <input id="l-name"></label>
-      <label>Display-Profil <select id="l-display-profile"></select></label>
-      <div class="row">
-        <label>Spalten <input id="l-columns" type="number" min="1" max="4"></label>
-        <label>Zeilen <input id="l-rows" type="number" min="1" max="6"></label>
+  <dialog id="pages-dialog">
+    <form method="dialog" class="pages-form">
+      <h3>Seiten verwalten</h3>
+      <h4>Allgemein</h4>
+      <p class="hint">Gilt für alle Seiten dieser Ansicht.</p>
+      <div class="general-grid">
+        <label>Display-Profil
+          <select id="display-profile"></select>
+        </label>
+        <label>Hintergrund <input id="theme-bg" type="color" value="#102033"></label>
+        <label>Buttons <input id="theme-button" type="color" value="#2a4f7c"></label>
+        <label>Akzent <input id="theme-accent" type="color" value="#ffb547"></label>
+        <label class="check"><input id="color-mono" type="checkbox"> Schwarz/Weiß</label>
       </div>
-      <label><input id="l-tabs" type="checkbox"> Reiterleiste an der Anzeige</label>
+      <span id="display-profile-meta" class="hint"></span>
       <h4>Seiten</h4>
       <div id="l-pages"></div>
+      <div class="row">
+        <button type="button" id="pages-add">+ Seite</button>
+      </div>
       <div class="row right">
         <button value="cancel">Abbrechen</button>
         <button value="ok">Übernehmen</button>
@@ -577,39 +561,6 @@
       <div class="row right">
         <button value="cancel">Schließen</button>
         <button value="ok">Speichern</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="probe-dialog">
-    <form method="dialog" class="probe-form">
-      <h3>Testclient</h3>
-      <p class="hint">Live-Vorschau im gewählten Display-Profil. Aktionen werden in IP-Symcon wirklich ausgeführt.</p>
-      <div class="probe-toolbar">
-        <fieldset class="probe-source">
-          <legend>Quelle</legend>
-          <label class="inline"><input type="radio" name="probe-source" value="draft" checked> Entwurf</label>
-          <label class="inline"><input type="radio" name="probe-source" value="device"> Anzeige</label>
-        </fieldset>
-        <label class="probe-panel-pick">Panel <select id="probe-panel"></select></label>
-        <label class="probe-live-pick"><input id="probe-live" type="checkbox" checked> Live</label>
-        <button type="button" id="probe-refresh">Aktualisieren</button>
-        <span id="probe-meta" class="hint probe-meta-inline"></span>
-      </div>
-      <div id="probe-viewport">
-        <div id="probe-stage">
-          <div id="probe-screen">
-            <div id="probe-header">
-              <button type="button" id="probe-home" class="probe-home" aria-label="Ansicht neu laden"></button>
-              <div id="probe-tabs"></div>
-              <div id="probe-clock">--:--</div>
-            </div>
-            <div id="probe-grid"></div>
-          </div>
-        </div>
-      </div>
-      <div class="row right">
-        <button value="close">Schließen</button>
       </div>
     </form>
   </dialog>

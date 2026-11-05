@@ -2045,8 +2045,6 @@ class HomeDisplay extends IPSModuleStrict
     private function cameraBadgePixels(array $tile): array
     {
         $layout = $this->editorProbeLayout($this->InstanceID) ?? $this->activeLayout($this->InstanceID) ?? [];
-        $columns = (int) ($layout['columns'] ?? 3);
-        $rows = (int) ($layout['rows'] ?? 4);
         $screenW = 1024;
         $screenH = 600;
         try {
@@ -2057,7 +2055,39 @@ class HomeDisplay extends IPSModuleStrict
         } catch (Throwable $e) {
             unset($e);
         }
-        return HomeDisplayMedia::cameraBadgePixels($tile, $columns, $rows, $screenW, $screenH);
+        /* Raster der Seite, auf der die Kachel liegt. Ungleiche Anteile werden als Bruchteil der Fläche gerechnet. */
+        $tileId = (string) ($tile['tileId'] ?? '');
+        $grid = null;
+        foreach (($layout['pages'] ?? []) as $page) {
+            if (!is_array($page)) {
+                continue;
+            }
+            foreach (($page['tiles'] ?? []) as $candidate) {
+                if (is_array($candidate) && $tileId !== '' && (string) ($candidate['tileId'] ?? '') === $tileId) {
+                    $grid = HomeDisplayPanelSchema::pageGrid($page, $layout);
+                    break 2;
+                }
+            }
+        }
+        if ($grid === null) {
+            $first = is_array($layout['pages'][0] ?? null) ? $layout['pages'][0] : [];
+            $grid = HomeDisplayPanelSchema::pageGrid($first, $layout);
+        }
+        $col = max(0, (int) ($tile['col'] ?? 0));
+        $row = max(0, (int) ($tile['row'] ?? 0));
+        $colSpan = max(1, (int) ($tile['colSpan'] ?? 1));
+        $rowSpan = max(1, (int) ($tile['rowSpan'] ?? 1));
+        $spanW = array_sum(array_slice($grid['columnWeights'], $col, $colSpan));
+        $spanH = array_sum(array_slice($grid['rowWeights'], $row, $rowSpan));
+        $totalW = max(1, array_sum($grid['columnWeights']));
+        $totalH = max(1, array_sum($grid['rowWeights']));
+        $headerH = $screenH >= 480 ? 68 : 0;
+        $fitW = max(16, (int) round($screenW * max(1, $spanW) / $totalW));
+        $fitH = max(16, (int) round(($screenH - $headerH) * max(1, $spanH) / $totalH));
+        if (($tile['showTitle'] ?? true) === false) {
+            return [max(16, $fitW - 8), max(16, $fitH - 8)];
+        }
+        return [max(16, $fitW - 16), max(16, $fitH - 44)];
     }
 
     /** @param array<string, mixed> $tile */

@@ -27,8 +27,11 @@ const ICONS = [
   ["speakerOff", "Lautsprecher aus", 0xF04C4], ["tvOff", "Fernseher aus", 0xF083B], ["waterOff", "Wasser aus", 0xF058D],
   ["coolOff", "Kühlen aus", 0xF14E3], ["fireOff", "Feuer aus", 0xF1722], ["motionOff", "Bewegung aus", 0xF1435],
   ["smokeOff", "Rauchmelder aus", 0xF1809], ["windowOpen", "Fenster offen", 0xF05B1],
-  ["blindsOpen", "Jalousie offen", 0xF1011], ["blindsClosed", "Jalousie zu", 0xF00AC]
+  ["blindsOpen", "Jalousie offen", 0xF1011], ["blindsClosed", "Jalousie zu", 0xF00AC],
+  ["bathtub", "Badewanne", 0xF1818], ["armchair", "Sessel", 0xF156E]
 ];
+/* Auswahllisten zeigen die Symbole nach dem deutschen Namen sortiert. */
+const ICONS_SORTED = [...ICONS].sort((a, b) => a[1].localeCompare(b[1], "de"));
 const DISPLAY_PROFILES = {
   "waveshare-5b-1024x600": { label: "Waveshare 5B (1024×600)", width: 1024, height: 600, defaultColumns: 3, defaultRows: 4, maxColumns: 4, maxRows: 6 },
   "firebeetle-epd-400x300": { label: "FireBeetle E-Ink 4,2\" (400×300)", width: 400, height: 300, defaultColumns: 3, defaultRows: 4, maxColumns: 3, maxRows: 4 },
@@ -447,25 +450,6 @@ function valueMeansOn(tile, value) {
   return number === valueOnOf(tile);
 }
 
-function nextSwitchValue(tile, current) {
-  const on = valueOnOf(tile);
-  const off = valueOffOf(tile);
-  if (typeof current === "boolean") return current ? off : on;
-  return Number(current) === on ? off : on;
-}
-
-function probeLive(tile) {
-  const tiles = probe.snapshot && probe.snapshot.state && probe.snapshot.state.tiles;
-  if (!tile || !Array.isArray(tiles)) return null;
-  return tiles.find((item) => item.tileId === tile.tileId) || null;
-}
-
-function probeToggleTarget(tile, visualOn) {
-  const current = numericLiveValue(tile, probeLive(tile));
-  if (current != null) return nextSwitchValue(tile, current);
-  return nextSwitchValue(tile, visualOn ? valueOnOf(tile) : valueOffOf(tile));
-}
-
 function liveIsOn(tile, live, demoOn) {
   if (live && typeof live.value === "boolean") return live.value;
   if (live && typeof live.value === "number" && Number.isFinite(live.value)) return valueMeansOn(tile, live.value);
@@ -501,33 +485,6 @@ function dimPercentFromTile(tile, live, fallbackPct) {
   const v = numericLiveValue(tile, live);
   if (v == null) return fallbackPct != null ? fallbackPct : 50;
   return Math.round(Math.min(100, Math.max(0, ((v - min) / span) * 100)));
-}
-
-function valueFromDimPercent(tile, pct) {
-  const bounds = levelBounds(tile);
-  const min = bounds.min;
-  const max = bounds.max;
-  const raw = min + (pct / 100) * (max - min);
-  const decimals = tile.decimals != null ? tile.decimals : 0;
-  if (decimals <= 0) return Math.round(raw);
-  return Math.round(raw * 10 ** decimals) / 10 ** decimals;
-}
-
-function percentForLevel(tile, value) {
-  const bounds = levelBounds(tile);
-  const span = bounds.max - bounds.min || 1;
-  return Math.min(100, Math.max(0, ((Number(value) - bounds.min) / span) * 100));
-}
-
-function dimTapTrackEnabled(tile, control) {
-  const mode = tile.dimTap || tile.dimTapTrack;
-  if (mode === "on" || mode === true) return true;
-  if (mode === "off" || mode === false || mode === "popup") return false;
-  return control === "blinds";
-}
-
-function tileHasInlineProbeControl(tile) {
-  return Boolean(tile.actionId && tile.kind === "value" && PROBE_INLINE_CONTROLS.includes(tileInteractionMode(tile)));
 }
 
 function tileInteractionMode(tile) {
@@ -698,19 +655,10 @@ function paintChartTileContent(element, tile, live, mode) {
   if (!element || !tile || tile.kind !== "chart") return;
   const variable = variableById(tile.variableId);
   const label = tile.title || (variable ? variable.name : "Diagramm");
-  const stateText = live && live.text ? escapeHtml(live.text) : (mode === "probe" ? "—" : escapeHtml(tile.unit ? `12,3 ${tile.unit}` : "—"));
-  const likeDisplay = mode === "probe";
-  const chartHtml = chartHtmlForTile(tile, live, { likeDisplay });
+  const stateText = live && live.text ? escapeHtml(live.text) : escapeHtml(tile.unit ? `12,3 ${tile.unit}` : "—");
+  const chartHtml = chartHtmlForTile(tile, live, { likeDisplay: true });
   const valueText = chartShowValue(tile) ? stateText : "";
-  if (likeDisplay) {
-    element.innerHTML = `<div class="probe-chart">${ohCardMarkup(label, valueText, chartHtml, "", tile)}</div>`;
-    return;
-  }
-  const periodKey = tile.chartPeriod || "24h";
-  const periodLabel = CHART_PERIOD_LABELS[periodKey] || periodKey;
-  const kicker = element.querySelector(".kicker");
-  const kickerHtml = kicker ? kicker.outerHTML : "";
-  element.innerHTML = `${kickerHtml}<div class="tile-scale">${ohCardMarkup(label, valueText, chartHtml, escapeHtml(periodLabel), tile)}</div>`;
+  element.innerHTML = `<div class="display-chart">${ohCardMarkup(label, valueText, chartHtml, "", tile)}</div>`;
 }
 
 function variableArchived(id) {
@@ -841,13 +789,6 @@ function tileNeedsLivePreview(tile) {
 }
 
 /** Prüfen-Dialog: Layout kommt von Inspect (publicLayout ohne Variablen-IDs). */
-function tileNeedsProbeImage(tile) {
-  if (!tile) return false;
-  if (tile.kind === "camera") return true;
-  if (tile.kind === "image" && (tile.imageSource || "catalog") === "media") return true;
-  return false;
-}
-
 const state = {
   catalog: { layouts: [], configs: [] },
   variables: [],
@@ -903,6 +844,77 @@ function pageTitle(id) {
   return found ? found[1] : id;
 }
 
+/* ---------- Raster je Seite ---------- */
+
+const DEFAULT_GRID_COLUMNS = 4;
+const DEFAULT_GRID_ROWS = 5;
+const MAX_PAGES = 8;
+
+/* Spalten, Zeilen und Anteile (1 bis 3) einer Seite; fehlende Werte werden ergänzt. Alte Ansichten tragen das Raster an der Ansicht. */
+function normalizePageGrid(page, layout) {
+  const prof = layout ? layoutProfile(layout) : DISPLAY_PROFILES[defaultProfileId()];
+  const legacyCols = layout && layout.columns ? Number(layout.columns) : DEFAULT_GRID_COLUMNS;
+  const legacyRows = layout && layout.rows ? Number(layout.rows) : DEFAULT_GRID_ROWS;
+  page.columns = Math.min(prof.maxColumns, Math.max(1, Number(page.columns) || legacyCols));
+  page.rows = Math.min(prof.maxRows, Math.max(1, Number(page.rows) || legacyRows));
+  page.columnWeights = normalizeWeights(page.columnWeights, page.columns);
+  page.rowWeights = normalizeWeights(page.rowWeights, page.rows);
+}
+
+function normalizeWeights(list, count) {
+  const out = [];
+  for (let index = 0; index < count; index += 1) {
+    const weight = Array.isArray(list) ? Math.round(Number(list[index])) : NaN;
+    out.push(weight >= 1 && weight <= 3 ? weight : 2);
+  }
+  return out;
+}
+
+function pageGridOf(page) {
+  if (!page) return { columns: DEFAULT_GRID_COLUMNS, rows: DEFAULT_GRID_ROWS, columnWeights: normalizeWeights(null, DEFAULT_GRID_COLUMNS), rowWeights: normalizeWeights(null, DEFAULT_GRID_ROWS) };
+  return {
+    columns: page.columns,
+    rows: page.rows,
+    columnWeights: normalizeWeights(page.columnWeights, page.columns),
+    rowWeights: normalizeWeights(page.rowWeights, page.rows)
+  };
+}
+
+function currentGrid() {
+  return pageGridOf(currentPage());
+}
+
+function gridTemplateOf(weights) {
+  return weights.map((weight) => `minmax(0, ${weight}fr)`).join(" ");
+}
+
+/* Spalte oder Zeile unter einer Position, gemessen an den Anteilen. */
+function trackIndexAt(position, length, weights) {
+  const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+  let edge = 0;
+  for (let index = 0; index < weights.length; index += 1) {
+    edge += weights[index];
+    if (position < (length * edge) / total) return index;
+  }
+  return weights.length - 1;
+}
+
+function newPageId(pages) {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    let id = "s";
+    for (let index = 0; index < 6; index += 1) id += alphabet[Math.floor(Math.random() * alphabet.length)];
+    if (!pages.some((page) => page.id === id)) return id;
+  }
+  return `s${Date.now().toString(36)}`;
+}
+
+function newPage(layout, pages) {
+  const page = { id: newPageId(pages), title: `Seite ${pages.length + 1}`, tiles: [] };
+  normalizePageGrid(page, Object.assign({}, layout, { columns: DEFAULT_GRID_COLUMNS, rows: DEFAULT_GRID_ROWS }));
+  return page;
+}
+
 function defaultProfileId() {
   return "waveshare-5b-1024x600";
 }
@@ -947,11 +959,6 @@ function scaleEditorViewport() {
   );
 }
 
-function probeSourceMode() {
-  const picked = document.querySelector('input[name="probe-source"]:checked');
-  return picked ? picked.value : "draft";
-}
-
 const THEME_DEFAULTS = { background: "#102033", button: "#2a4f7c", accent: "#ffb547" };
 
 function normalizeTheme(theme) {
@@ -984,18 +991,6 @@ function applyTheme(theme) {
   return colors;
 }
 
-function editorLayoutSnapshot() {
-  if (!state.layout) return null;
-  const layout = JSON.parse(JSON.stringify(state.layout));
-  layout.columns = Number($("columns").value) || layout.columns;
-  layout.rows = Number($("rows").value) || layout.rows;
-  layout.showTabs = $("show-tabs").checked;
-  layout.colorMode = $("color-mono")?.checked ? "mono" : "color";
-  layout.theme = readThemeInputs();
-  layout.displayProfile = $("display-profile").value || layout.displayProfile;
-  return layout;
-}
-
 function fillProfileSelect(select, value) {
   select.innerHTML = "";
   for (const [id, meta] of Object.entries(DISPLAY_PROFILES)) {
@@ -1010,16 +1005,8 @@ function fillProfileSelect(select, value) {
 function applyGridAspect() {
   const profile = state.layout ? layoutProfile(state.layout) : DISPLAY_PROFILES[defaultProfileId()];
   document.documentElement.style.setProperty("--display-aspect", `${profile.width} / ${profile.height}`);
-  const maxCol = profile.maxColumns;
-  const maxRow = profile.maxRows;
-  $("columns").max = maxCol;
-  $("rows").max = maxRow;
-  const pColSpan = $("p-colspan");
-  const pRowSpan = $("p-rowspan");
-  if (pColSpan) pColSpan.max = state.layout ? state.layout.columns : maxCol;
-  if (pRowSpan) pRowSpan.max = state.layout ? state.layout.rows : maxRow;
   const meta = $("display-profile-meta");
-  if (meta) meta.textContent = `${profile.label} · ${profile.width}×${profile.height} px`;
+  if (meta) meta.textContent = `${profile.width}×${profile.height} px · Raster je Seite höchstens ${profile.maxColumns} Spalten × ${profile.maxRows} Zeilen`;
   scaleEditorViewport();
 }
 
@@ -1118,16 +1105,15 @@ function selectLayout(layout, keepPage) {
   state.layout = JSON.parse(JSON.stringify(layout));
   state.layout.baseVersion = layout.version || 0;
   state.layout.displayProfile = state.layout.displayProfile || defaultProfileId();
-  const prof = layoutProfile(state.layout);
-  state.layout.columns = state.layout.columns || prof.defaultColumns;
-  state.layout.rows = state.layout.rows || prof.defaultRows;
   if (state.layout.showTabs === undefined) state.layout.showTabs = true;
   if (state.layout.colorMode === undefined) state.layout.colorMode = "color";
   state.layout.theme = applyTheme(state.layout.theme);
   migrateLayoutKinds(state.layout);
-  state.layout.pages = (state.layout.pages || []).filter((page) => PAGES.some((item) => item[0] === page.id));
+  state.layout.pages = (state.layout.pages || []).filter((page) => page && /^[a-z0-9_-]{1,24}$/.test(String(page.id || ""))).slice(0, MAX_PAGES);
   if (!state.layout.pages.length) state.layout.pages = [{ id: "start", title: "Start", tiles: [] }];
   for (const page of state.layout.pages) {
+    /* Alte Ansichten: das Raster der Ansicht gilt für jede Seite ohne eigenes Raster. */
+    normalizePageGrid(page, state.layout);
     page.tiles = page.tiles || [];
     for (const tile of page.tiles) {
       tile.kind = tile.kind || "value";
@@ -1139,8 +1125,9 @@ function selectLayout(layout, keepPage) {
     : state.layout.pages[0].id;
   state.selected = null;
   state.dirty = false;
-  $("columns").value = state.layout.columns;
-  $("rows").value = state.layout.rows;
+  delete state.layout.columns;
+  delete state.layout.rows;
+  $("layout-name").value = state.layout.name || "";
   $("show-tabs").checked = state.layout.showTabs;
   if ($("color-mono")) {
     $("color-mono").checked = state.layout.colorMode === "mono";
@@ -1156,11 +1143,10 @@ function selectLayout(layout, keepPage) {
 }
 
 function newLayout(name) {
-  const prof = DISPLAY_PROFILES[defaultProfileId()];
   selectLayout({
     id: "", name: name || "Neue Ansicht", version: 0, published: false,
-    displayProfile: defaultProfileId(), columns: prof.defaultColumns, rows: prof.defaultRows,
-    showTabs: true, pages: [{ id: "start", title: "Start", tiles: [] }]
+    displayProfile: defaultProfileId(),
+    showTabs: true, pages: [{ id: "start", title: "Start", columns: DEFAULT_GRID_COLUMNS, rows: DEFAULT_GRID_ROWS, tiles: [] }]
   });
   markDirty();
 }
@@ -1183,16 +1169,15 @@ function renderPageTabs() {
       renderGrid();
       renderProperties();
     });
-    button.addEventListener("dblclick", () => openLayoutDialog());
+    button.addEventListener("dblclick", () => openPagesDialog());
     bar.appendChild(button);
   }
-  const missing = PAGES.filter((item) => !state.layout.pages.some((page) => page.id === item[0]));
-  if (missing.length) {
+  if (state.layout.pages.length < MAX_PAGES) {
     const add = document.createElement("button");
     add.type = "button";
     add.className = "add";
     add.textContent = "+ Seite";
-    add.addEventListener("click", () => openLayoutDialog());
+    add.addEventListener("click", () => openPagesDialog(true));
     bar.appendChild(add);
   }
   const menu = $("menu-pages");
@@ -1213,7 +1198,7 @@ function renderPageTabs() {
   const edit = document.createElement("button");
   edit.type = "button";
   edit.textContent = "Seiten verwalten …";
-  edit.addEventListener("click", () => openLayoutDialog());
+  edit.addEventListener("click", () => openPagesDialog());
   menu.appendChild(edit);
 }
 
@@ -1299,7 +1284,8 @@ function tileAt(col, row) {
 
 function fits(tile, col, row, colSpan, rowSpan, ignoreId) {
   const page = currentPage();
-  if (col < 0 || row < 0 || col + colSpan > state.layout.columns || row + rowSpan > state.layout.rows) return false;
+  const grid = pageGridOf(page);
+  if (col < 0 || row < 0 || col + colSpan > grid.columns || row + rowSpan > grid.rows) return false;
   const moving = tile || { col, row, colSpan, rowSpan, kind: "" };
   for (const other of page.tiles) {
     if (other.tileId === ignoreId) continue;
@@ -1314,8 +1300,9 @@ function fits(tile, col, row, colSpan, rowSpan, ignoreId) {
 }
 
 function freeCell(colSpan, rowSpan) {
-  for (let row = 0; row < state.layout.rows; row += 1) {
-    for (let col = 0; col < state.layout.columns; col += 1) {
+  const grid = currentGrid();
+  for (let row = 0; row < grid.rows; row += 1) {
+    for (let col = 0; col < grid.columns; col += 1) {
       if (fits(null, col, row, colSpan || 1, rowSpan || 1, null)) return { col, row };
     }
   }
@@ -1446,8 +1433,9 @@ function cellUnderPointer(event, grid) {
   if (!event || !grid || !state.layout) return null;
   const rect = grid.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1) return null;
-  const col = Math.min(state.layout.columns - 1, Math.max(0, Math.floor((event.clientX - rect.left) / (rect.width / state.layout.columns))));
-  const row = Math.min(state.layout.rows - 1, Math.max(0, Math.floor((event.clientY - rect.top) / (rect.height / state.layout.rows))));
+  const layoutGrid = currentGrid();
+  const col = trackIndexAt(Math.max(0, event.clientX - rect.left), rect.width, layoutGrid.columnWeights);
+  const row = trackIndexAt(Math.max(0, event.clientY - rect.top), rect.height, layoutGrid.rowWeights);
   return { col, row };
 }
 
@@ -1456,8 +1444,9 @@ function renderGrid() {
   grid.innerHTML = "";
   if (!state.layout) return;
   const page = currentPage();
-  grid.style.gridTemplateColumns = `repeat(${state.layout.columns}, 1fr)`;
-  grid.style.gridTemplateRows = `repeat(${state.layout.rows}, 1fr)`;
+  const pageGrid = pageGridOf(page);
+  grid.style.gridTemplateColumns = gridTemplateOf(pageGrid.columnWeights);
+  grid.style.gridTemplateRows = gridTemplateOf(pageGrid.rowWeights);
   clearEditorGridBackground();
   const covered = new Set();
   for (const tile of page.tiles) {
@@ -1465,8 +1454,8 @@ function renderGrid() {
       for (let y = tile.row; y < tile.row + (tile.rowSpan || 1); y += 1) covered.add(`${x}:${y}`);
     }
   }
-  for (let row = 0; row < state.layout.rows; row += 1) {
-    for (let col = 0; col < state.layout.columns; col += 1) {
+  for (let row = 0; row < pageGrid.rows; row += 1) {
+    for (let col = 0; col < pageGrid.columns; col += 1) {
       if (covered.has(`${col}:${row}`)) continue;
       const cell = document.createElement("div");
       cell.className = "cell";
@@ -1553,8 +1542,9 @@ async function refreshEditorTilePreviews() {
 
 function gridCellFromPointer(grid, clientX, clientY) {
   const rect = grid.getBoundingClientRect();
-  const col = Math.min(state.layout.columns - 1, Math.max(0, Math.floor(((clientX - rect.left) / rect.width) * state.layout.columns)));
-  const row = Math.min(state.layout.rows - 1, Math.max(0, Math.floor(((clientY - rect.top) / rect.height) * state.layout.rows)));
+  const layoutGrid = currentGrid();
+  const col = trackIndexAt(Math.max(0, clientX - rect.left), rect.width, layoutGrid.columnWeights);
+  const row = trackIndexAt(Math.max(0, clientY - rect.top), rect.height, layoutGrid.rowWeights);
   return { col, row };
 }
 
@@ -1565,16 +1555,6 @@ function applyTileSpan(tile, col, row, colSpan, rowSpan) {
   tile.colSpan = colSpan;
   tile.rowSpan = rowSpan;
   return true;
-}
-
-function resizeTilePreset(colSpan, rowSpan) {
-  const tile = selectedTile();
-  if (!tile) return;
-  if (applyTileSpan(tile, tile.col, tile.row, colSpan, rowSpan)) {
-    markDirty();
-    renderGrid();
-    renderProperties();
-  } else setStatus("Diese Größe passt nicht ins Raster.");
 }
 
 function bindResizeHandles(element, tile) {
@@ -1686,7 +1666,7 @@ function buildTileElement(tile, context) {
     const displayText = live && live.text ? live.text : (variable ? "12,3" : "—");
     const label = tile.title || (variable ? variable.name : "Wert");
     let on = element.classList.contains("on");
-    if (mode === "probe" && switchTile) {
+    if (switchTile) {
       element.innerHTML = panelSwitchHtml(tile, label, on, iconId, showIcon);
     } else {
       const stateLine = switchTile
@@ -1724,9 +1704,6 @@ function buildTileElement(tile, context) {
       if (cardBody !== null) {
         element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, stateLine, cardBody, "", tile)}</div>`;
       }
-    }
-    if (DIM_CONTROLS.includes(control) || control === "blinds" || control === "setpoint" || (control === "switch" && tile.actionId) || (interaction === "switch" && tile.showIcon !== false && tile.actionId)) {
-      bindTileControls(element, tile, mode, live);
     }
   } else if (tile.kind === "nav") {
     const navIcon = tile.showTitle === false ? "" : (tile.icon ? `<div class="tile-fit-icon">${iconVisual(tile.icon)}</div>` : "");
@@ -1781,12 +1758,7 @@ function buildTileElement(tile, context) {
       ? `<button type="button" class="oh-icon-toggle" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile.onColor)}</button>`
       : "";
     const kicker = steps.length ? `Szene · ${steps.length} Lampen` : "Szene";
-    if (mode === "probe") {
-      element.innerHTML = panelSwitchHtml(tile, label, on, iconId, showIcon);
-    } else {
-      element.innerHTML = `${editorKicker(mode, kicker)}<div class="tile-scale">${ohCardMarkup(label, escapeHtml(stateText), cardBody, "", tile)}</div>`;
-    }
-    if (tile.actionId) bindTileControls(element, tile, mode, live);
+    element.innerHTML = panelSwitchHtml(tile, label, on, iconId, showIcon);
   } else if (tile.kind === "weather") {
     element.classList.add("oh-style", "weather");
     const label = tile.title || "Wetter";
@@ -1813,7 +1785,7 @@ function buildTileElement(tile, context) {
     if (context.probeImageUrls && context.probeImageUrls[tile.tileId]) {
       const src = context.probeImageUrls[tile.tileId].url || context.probeImageUrls[tile.tileId];
       element.innerHTML = `<img src="${src}" alt="">`;
-    } else if (mode === "probe" && context.probeImageErrors && context.probeImageErrors[tile.tileId]) {
+    } else if (context.probeImageErrors && context.probeImageErrors[tile.tileId]) {
       const detail = context.probeImageErrorDetails && context.probeImageErrorDetails[tile.tileId];
       element.innerHTML = `<div class="media-placeholder">${escapeHtml(probeImageErrorText(context.probeImageErrors[tile.tileId], detail))}</div>`;
     }
@@ -1832,11 +1804,11 @@ function buildTileElement(tile, context) {
       const src = context.probeImageUrls[tile.tileId].url || context.probeImageUrls[tile.tileId];
       setTileMarkup(element, `${editorKicker(mode, "Kamera")}${cameraLiveImgHtml(src)}`);
       const img = element.querySelector("img.live-preview");
-      if (img && mode === "probe") {
+      if (img) {
         img.addEventListener("error", () => {
           const err = (context.probeImageErrors && context.probeImageErrors[tile.tileId]) || "camera_fetch";
           const detail = context.probeImageErrorDetails && context.probeImageErrorDetails[tile.tileId];
-          paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, tile.title, mode === "edit");
+          paintCameraPreviewError(element, tile, err, detail, fromMedia, bound, tile.title, true);
         });
       }
     } else {
@@ -1844,7 +1816,7 @@ function buildTileElement(tile, context) {
       let preview;
       if (live && live.quality === "empty") {
         preview = "Keine Bildquelle (Variable leer oder nicht konfiguriert)";
-      } else if ((mode === "probe" && tile.cameraFile) || (mode === "edit" && context.probeImageErrors && context.probeImageErrors[tile.tileId])) {
+      } else if (context.probeImageErrors && context.probeImageErrors[tile.tileId]) {
         const err = context.probeImageErrors && context.probeImageErrors[tile.tileId];
         const detail = context.probeImageErrorDetails && context.probeImageErrorDetails[tile.tileId];
         preview = probeImageErrorText(err || "unknown", detail);
@@ -1919,36 +1891,7 @@ function buildTileElement(tile, context) {
     bindDrop(element, tile.col, tile.row, tile);
     if (state.selected === tile.tileId) bindResizeHandles(element, tile);
   }
-  if (mode === "probe" && tile.kind === "nav" && tile.targetPage) {
-    element.style.cursor = "pointer";
-    element.addEventListener("click", () => {
-      probe.page = tile.targetPage;
-      renderProbe();
-    });
-  } else if (mode === "probe" && tile.actionId) {
-    const iconSwitch = (tile.kind === "scene" || tileInteractionMode(tile) === "switch") && tile.showIcon !== false;
-    const inline = tileHasInlineProbeControl(tile) || iconSwitch;
-    const panelTap = tile.kind === "scene" || tileInteractionMode(tile) === "switch";
-    if (panelTap) {
-      element.style.cursor = "pointer";
-      element.addEventListener("click", (event) => {
-        if (event.target.closest("[data-icon-toggle], .sw, .ctl, button")) return;
-        const iconBtn = element.querySelector("[data-icon-toggle]");
-        if (iconBtn) {
-          iconBtn.click();
-          return;
-        }
-        sendProbeAction(tile, { value: String(probeToggleTarget(tile, element.classList.contains("on"))) });
-      });
-    } else if (!inline) {
-      element.style.cursor = "pointer";
-      element.addEventListener("click", (event) => {
-        if (event.target.closest("button, .ctl, [data-dim-track]")) return;
-        sendProbeAction(tile);
-      });
-    }
-  }
-  if (mode !== "probe" && (spanW > 1 || spanH > 1)) {
+  if (spanW > 1 || spanH > 1) {
     const badge = document.createElement("span");
     badge.className = "span-badge";
     badge.textContent = `${spanW}×${spanH}`;
@@ -2019,169 +1962,6 @@ function controlMarkup(control, tile, live, demoOn) {
     return `<div class="ctl setpoint"><button type="button" class="sp-btn" data-setpoint="down">−</button><span class="sp-val">${escapeHtml(displayText)}</span><button type="button" class="sp-btn" data-setpoint="up">+</button></div>`;
   }
   return "";
-}
-
-function applyDimVisual(element, pct, tile) {
-  const track = element.querySelector("[data-dim-track]") || element.querySelector(".track");
-  const fill = track ? track.querySelector(".fill") : element.querySelector(".fill");
-  const knob = track ? track.querySelector(".knob") : element.querySelector(".knob");
-  const valueEl = element.querySelector(".ctl-value");
-  const clamped = Math.round(Math.min(100, Math.max(0, pct)));
-  if (fill) fill.style.width = `${clamped}%`;
-  if (knob) knob.style.left = `${clamped}%`;
-  if (valueEl) valueEl.textContent = `${clamped} %`;
-  const control = tile.control || "switch";
-  const sw = element.querySelector(".sw");
-  if (sw && control === "combo") sw.classList.toggle("on", clamped > 0);
-  element.dataset.lastDimPct = String(clamped);
-  return clamped;
-}
-
-function bindTileControls(element, tile, mode, live) {
-  if (mode === "edit") return;
-  const control = tile.control || "";
-  const iconSwitch = (tileInteractionMode(tile) === "switch" || tile.kind === "scene") && tile.showIcon !== false && Boolean(tile.actionId);
-  const stop = (event) => {
-    event.stopPropagation();
-    event.preventDefault();
-  };
-  const ctlRoot = element.querySelector(".ctl");
-  if (ctlRoot) {
-    ctlRoot.addEventListener("click", (event) => event.stopPropagation());
-    ctlRoot.addEventListener("dblclick", (event) => event.stopPropagation());
-  }
-  const dimCtl = element.querySelector(".dim-ctl");
-  const sw = element.querySelector(".sw");
-  let lastPct = dimPercentFromTile(tile, live);
-  element.dataset.lastDimPct = String(lastPct);
-
-  const syncSwitchOffState = () => {
-    if (!dimCtl || tile.dimShowSwitch === false) return;
-    const on = sw && sw.classList.contains("on");
-    dimCtl.classList.toggle("dim-off", !on);
-  };
-
-  const iconToggle = element.querySelector("[data-icon-toggle]");
-  if (iconSwitch && iconToggle) {
-    iconToggle.addEventListener("pointerdown", stop);
-    iconToggle.addEventListener("click", (event) => {
-      stop(event);
-      const wasOn = iconToggle.getAttribute("aria-pressed") === "true";
-      const target = probeToggleTarget(tile, wasOn);
-      const nowOn = valueMeansOn(tile, target);
-      iconToggle.setAttribute("aria-pressed", nowOn ? "true" : "false");
-      iconToggle.innerHTML = iconVisual(nowOn ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff"), nowOn);
-      element.classList.toggle("on", nowOn);
-      if (mode === "edit") {
-        state.editorIconDemo[tile.tileId] = nowOn;
-        return;
-      }
-      if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(target) });
-    });
-  }
-
-  if (sw && (DIM_CONTROLS.includes(control) || control === "switch") && !iconSwitch) {
-    sw.addEventListener("pointerdown", stop);
-    sw.addEventListener("click", (event) => {
-      stop(event);
-      const wasOn = sw.classList.contains("on");
-      const target = probeToggleTarget(tile, wasOn);
-      const nowOn = valueMeansOn(tile, target);
-      if (DIM_CONTROLS.includes(control)) {
-        applyDimVisual(element, percentForLevel(tile, target), tile);
-        sw.classList.toggle("on", nowOn);
-        syncSwitchOffState();
-      } else {
-        sw.classList.toggle("on", nowOn);
-        element.classList.toggle("on", nowOn);
-      }
-      if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(target) });
-    });
-  }
-  syncSwitchOffState();
-
-  const track = element.querySelector("[data-dim-track]") || element.querySelector(".track");
-  const knob = track ? track.querySelector(".knob") : null;
-  const tapTrack = dimTapTrackEnabled(tile, control);
-
-  const canAdjustDim = () => {
-    if (control === "combo" && tile.dimShowSwitch !== false && sw && !sw.classList.contains("on")) return false;
-    return Boolean(track && knob);
-  };
-
-  const pctFromPointer = (clientX) => {
-    const rect = track.getBoundingClientRect();
-    const ratio = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
-    return applyDimVisual(element, ratio * 100, tile);
-  };
-
-  if (track && knob) {
-    if (tapTrack) track.classList.add("tap-enabled");
-    const endDrag = (endEvent, sendValue) => {
-      try {
-        track.releasePointerCapture(endEvent.pointerId);
-      } catch (_e) { /* ignore */ }
-      track.removeEventListener("pointermove", onMove);
-      track.removeEventListener("pointerup", onUp);
-      track.removeEventListener("lostpointercapture", onUp);
-      if (mode === "edit") element.draggable = true;
-      if (sendValue && mode === "probe" && tile.actionId) {
-        const pct = Number(element.dataset.lastDimPct || lastPct);
-        sendProbeAction(tile, { value: String(valueFromDimPercent(tile, pct)) });
-      }
-    };
-    let onMove;
-    let onUp;
-    const startDrag = (event) => {
-      if (!canAdjustDim()) return;
-      stop(event);
-      if (mode === "edit") element.draggable = false;
-      track.setPointerCapture(event.pointerId);
-      lastPct = pctFromPointer(event.clientX);
-      onMove = (moveEvent) => {
-        lastPct = pctFromPointer(moveEvent.clientX);
-      };
-      onUp = (endEvent) => endDrag(endEvent, true);
-      track.addEventListener("pointermove", onMove);
-      track.addEventListener("pointerup", onUp);
-      track.addEventListener("lostpointercapture", onUp);
-    };
-    knob.addEventListener("pointerdown", startDrag);
-    track.addEventListener("pointerdown", (event) => {
-      if (event.target === knob || knob.contains(event.target)) return;
-      if (!tapTrack) {
-        stop(event);
-        return;
-      }
-      startDrag(event);
-    });
-  }
-
-  element.querySelectorAll(".bl-btn").forEach((btn) => {
-    btn.addEventListener("pointerdown", stop);
-    btn.addEventListener("click", (event) => {
-      stop(event);
-      const dir = btn.dataset.blind === "up" ? 1 : -1;
-      const step = 10;
-      const pct = Number(element.dataset.lastDimPct || dimPercentFromTile(tile, live));
-      const next = applyDimVisual(element, pct + dir * step, tile);
-      if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(valueFromDimPercent(tile, next)) });
-    });
-  });
-
-  element.querySelectorAll(".sp-btn").forEach((btn) => {
-    btn.addEventListener("pointerdown", stop);
-    btn.addEventListener("click", (event) => {
-      stop(event);
-      const step = tile.setpointStep != null ? tile.setpointStep : 0.5;
-      const dir = btn.dataset.setpoint === "up" ? 1 : -1;
-      const spVal = element.querySelector(".sp-val");
-      const current = numericLiveValue(tile, live) ?? 21;
-      const next = Math.round((current + dir * step) * 10) / 10;
-      if (spVal) spVal.textContent = `${String(next).replace(".", ",")}${tile.unit ? " " + tile.unit : " °C"}`;
-      if (mode === "probe" && tile.actionId) sendProbeAction(tile, { value: String(next) });
-    });
-  });
 }
 
 function bindDrop(target, col, row, existing) {
@@ -2309,8 +2089,8 @@ function addTile(kind, col, row, variable, control) {
   } else if (kind === "label") {
     tile.text = "Text";
   } else if (kind === "chart") {
-    tile.colSpan = Math.min(2, state.layout.columns);
-    tile.rowSpan = Math.min(2, state.layout.rows);
+    tile.colSpan = Math.min(2, currentGrid().columns);
+    tile.rowSpan = Math.min(2, currentGrid().rows);
     tile.variableId = 0;
     tile.chartPeriod = "24h";
     tile.chartStyle = "area";
@@ -2337,11 +2117,11 @@ function addTile(kind, col, row, variable, control) {
     tile.presenceMode = "home";
     tile.title = tile.title || "Anwesenheit";
     tile.variableId = 0;
-    tile.colSpan = Math.min(2, state.layout.columns);
+    tile.colSpan = Math.min(2, currentGrid().columns);
     if (variable) assignVariable(tile, variable, true);
   } else if (kind === "energyflow") {
-    tile.colSpan = Math.min(2, state.layout.columns);
-    tile.rowSpan = Math.min(2, state.layout.rows);
+    tile.colSpan = Math.min(2, currentGrid().columns);
+    tile.rowSpan = Math.min(2, currentGrid().rows);
     tile.flowMode = "signed";
     tile.homeOverride = true;
     tile.unit = "W";
@@ -2360,7 +2140,7 @@ function addTile(kind, col, row, variable, control) {
   } else if (kind === "multi" || kind === "contacts") {
     tile.rows = [{ variableId: variable ? variable.id : 0, title: variable ? variable.name : "Zeile", unit: "", decimals: 0 }];
     tile.title = tile.title || (kind === "multi" ? "Mehrwert" : "Kontakte");
-    tile.colSpan = Math.min(2, state.layout.columns);
+    tile.colSpan = Math.min(2, currentGrid().columns);
   } else if (kind === "gauge") {
     tile.variableId = variable ? variable.id : 0;
     tile.valueMin = 0;
@@ -2379,7 +2159,7 @@ function addTile(kind, col, row, variable, control) {
     tile.orientation = "horizontal";
     tile.thickness = 2;
     tile.lineColor = "#5a7391";
-    tile.colSpan = Math.max(1, state.layout.columns);
+    tile.colSpan = Math.max(1, currentGrid().columns);
     tile.rowSpan = 1;
     if (!fits(null, col, row, tile.colSpan, 1, null)) tile.colSpan = 1;
   } else if (kind === "image") {
@@ -2400,8 +2180,8 @@ function addTile(kind, col, row, variable, control) {
     tile.cameraLiveFps = 3;
     tile.cameraIntervalSec = 10;
     tile.variableId = 0;
-    tile.colSpan = Math.min(2, state.layout.columns);
-    tile.rowSpan = Math.min(2, state.layout.rows);
+    tile.colSpan = Math.min(2, currentGrid().columns);
+    tile.rowSpan = Math.min(2, currentGrid().rows);
     if (!fits(null, col, row, tile.colSpan, tile.rowSpan, null)) {
       tile.colSpan = 1;
       tile.rowSpan = 1;
@@ -2795,7 +2575,7 @@ function renderRowEditor(tile) {
 function fillIconSelect(select, allowEmpty) {
   select.innerHTML = allowEmpty ? '<option value="">Kein Symbol</option>' : "";
   select.classList.add("icon-font");
-  for (const [value, name, code] of ICONS) {
+  for (const [value, name, code] of ICONS_SORTED) {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = `${String.fromCodePoint(code)} ${name}`;
@@ -2953,10 +2733,6 @@ function renderProperties() {
   if ($("p-group")) $("p-group").value = tile.group || "";
   $("p-col").value = tile.col + 1;
   $("p-row").value = tile.row + 1;
-  $("p-colspan").value = tile.colSpan || 1;
-  $("p-rowspan").value = tile.rowSpan || 1;
-  $("p-colspan").max = state.layout.columns;
-  $("p-rowspan").max = state.layout.rows;
   if (tile.kind === "nav") {
     fillIconSelect($("p-icon"), true);
     $("p-icon").value = tile.icon || "";
@@ -3193,8 +2969,8 @@ function applyProperties() {
   else delete tile.group;
   const col = Math.max(0, Number($("p-col").value) - 1);
   const row = Math.max(0, Number($("p-row").value) - 1);
-  const colSpan = Math.max(1, Number($("p-colspan").value) || 1);
-  const rowSpan = Math.max(1, Number($("p-rowspan").value) || 1);
+  const colSpan = Math.max(1, tile.colSpan || 1);
+  const rowSpan = Math.max(1, tile.rowSpan || 1);
   if (fits(tile, col, row, colSpan, rowSpan, tile.tileId)) {
     tile.col = col;
     tile.row = row;
@@ -3383,12 +3159,12 @@ function applyProperties() {
     if (vertical !== wasVertical && state.layout) {
       if (vertical) {
         tile.colSpan = 1;
-        tile.rowSpan = state.layout.rows;
-        if (tile.row + tile.rowSpan > state.layout.rows) tile.row = 0;
+        tile.rowSpan = currentGrid().rows;
+        if (tile.row + tile.rowSpan > currentGrid().rows) tile.row = 0;
       } else {
         tile.rowSpan = 1;
-        tile.colSpan = state.layout.columns;
-        if (tile.col + tile.colSpan > state.layout.columns) tile.col = 0;
+        tile.colSpan = currentGrid().columns;
+        if (tile.col + tile.colSpan > currentGrid().columns) tile.col = 0;
       }
     }
   }
@@ -3503,7 +3279,7 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-show-title-icon", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-colspan", "p-rowspan", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-show-title-icon", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
@@ -3541,19 +3317,6 @@ if ($("p-imagesource")) {
   });
 }
 if ($("p-image-background")) $("p-image-background").addEventListener("change", applyProperties);
-for (const id of ["resize-1x1", "resize-2x1", "resize-1x2", "resize-2x2", "resize-full-width"]) {
-  const button = $(id);
-  if (!button) continue;
-  button.addEventListener("click", () => {
-    const tile = selectedTile();
-    if (!tile) return;
-    if (id === "resize-1x1") resizeTilePreset(1, 1);
-    if (id === "resize-2x1") resizeTilePreset(2, 1);
-    if (id === "resize-1x2") resizeTilePreset(1, 2);
-    if (id === "resize-2x2") resizeTilePreset(2, 2);
-    if (id === "resize-full-width") resizeTilePreset(state.layout.columns, tile.rowSpan || 1);
-  });
-}
 const displayProfileSelect = $("display-profile");
 if (displayProfileSelect) {
   displayProfileSelect.addEventListener("change", () => {
@@ -3561,9 +3324,7 @@ if (displayProfileSelect) {
     state.layout.displayProfile = displayProfileSelect.value;
     applyGridAspect();
     markDirty();
-    if ($("probe-dialog").open && probeSourceMode() === "draft") {
-      loadProbe(true).catch((error) => setStatus(error.message));
-    }
+    if ($("pages-dialog").open) renderPagesDialog();
   });
 }
 bindClick("p-save", () => {
@@ -3691,85 +3452,184 @@ function appendEnergyFlowDetails(body, tile, fields, add, check, number, text) {
   sync();
 }
 
-/* ---------- Ansicht-Dialog ---------- */
+/* ---------- Seiten-Dialog ---------- */
 
-function openLayoutDialog() {
-  const dialog = $("layout-dialog");
-  $("l-name").value = state.layout.name;
-  fillProfileSelect($("l-display-profile"), state.layout.displayProfile || defaultProfileId());
-  $("l-columns").value = state.layout.columns;
-  $("l-rows").value = state.layout.rows;
-  $("l-tabs").checked = state.layout.showTabs;
-  const prof = layoutProfile(state.layout);
-  $("l-columns").max = prof.maxColumns;
-  $("l-rows").max = prof.maxRows;
-  const list = $("l-pages");
-  list.innerHTML = "";
-  for (const [id, name] of PAGES) {
-    const existing = state.layout.pages.find((page) => page.id === id);
-    const row = document.createElement("div");
-    row.className = "page-row";
-    const wrap = document.createElement("label");
-    const check = Object.assign(document.createElement("input"), { type: "checkbox", checked: Boolean(existing), value: id });
-    const title = Object.assign(document.createElement("input"), { type: "text", value: existing ? existing.title || name : name });
-    const count = document.createElement("small");
-    count.textContent = existing ? `${existing.tiles.length}` : "";
-    wrap.append(check, title, count);
-    const background = document.createElement("select");
-    background.className = "page-bg";
-    fillImageSelect(background);
-    background.value = existing && existing.backgroundId ? existing.backgroundId : "";
-    const pageIcon = document.createElement("select");
-    pageIcon.className = "page-icon";
-    fillIconSelect(pageIcon, true);
-    pageIcon.value = existing && existing.icon ? existing.icon : "";
-    row.append(wrap, background, pageIcon);
-    list.appendChild(row);
-  }
+const pagesDialog = { draft: [], general: null };
+
+function pageTileLoss(page) {
+  return (page.tiles || []).filter((tile) => tile.col + (tile.colSpan || 1) > page.columns || tile.row + (tile.rowSpan || 1) > page.rows).length;
+}
+
+function pageField(label, control) {
+  const wrap = document.createElement("label");
+  wrap.className = "pf";
+  const caption = document.createElement("span");
+  caption.textContent = label;
+  wrap.append(caption, control);
+  return wrap;
+}
+
+function openPagesDialog(addPage) {
+  if (!state.layout) return;
+  const dialog = $("pages-dialog");
+  pagesDialog.draft = JSON.parse(JSON.stringify(state.layout.pages));
+  pagesDialog.general = {
+    displayProfile: state.layout.displayProfile,
+    colorMode: state.layout.colorMode,
+    theme: { ...state.layout.theme },
+    dirty: state.dirty
+  };
+  if (addPage && pagesDialog.draft.length < MAX_PAGES) pagesDialog.draft.push(newPage(state.layout, pagesDialog.draft));
+  renderPagesDialog();
   dialog.returnValue = "";
   dialog.showModal();
-  dialog.onclose = () => {
-    if (dialog.returnValue !== "ok") return;
-    state.layout.name = $("l-name").value.trim() || state.layout.name;
-    state.layout.displayProfile = $("l-display-profile").value || defaultProfileId();
-    const prof = layoutProfile(state.layout);
-    const columns = Math.min(prof.maxColumns, Math.max(1, Number($("l-columns").value) || prof.defaultColumns));
-    const rows = Math.min(prof.maxRows, Math.max(1, Number($("l-rows").value) || prof.defaultRows));
-    const pages = [];
-    for (const wrap of list.querySelectorAll("label")) {
-      const [check, title] = wrap.querySelectorAll("input");
-      if (!check.checked) continue;
-      const existing = state.layout.pages.find((page) => page.id === check.value);
-      const page = existing ? Object.assign(existing, { title: title.value.trim() || pageTitle(check.value) }) : { id: check.value, title: title.value.trim() || pageTitle(check.value), tiles: [] };
-      const background = wrap.parentElement.querySelector("select.page-bg");
-      if (background && background.value) page.backgroundId = background.value;
-      else delete page.backgroundId;
-      const pageIcon = wrap.parentElement.querySelector("select.page-icon");
-      if (pageIcon && pageIcon.value) page.icon = pageIcon.value;
-      else delete page.icon;
-      pages.push(page);
-    }
-    if (!pages.length) pages.push(state.layout.pages[0] || { id: "start", title: "Start", tiles: [] });
-    state.layout.pages = pages;
-    for (const page of pages) {
-      page.tiles = page.tiles.filter((tile) => tile.col + (tile.colSpan || 1) <= columns && tile.row + (tile.rowSpan || 1) <= rows);
-      for (const tile of page.tiles) {
-        if (tile.kind === "nav" && !pages.some((item) => item.id === tile.targetPage)) tile.targetPage = pages[0].id;
-      }
-    }
-    state.layout.columns = columns;
-    state.layout.rows = rows;
-    state.layout.showTabs = $("l-tabs").checked;
-    $("columns").value = columns;
-    $("rows").value = rows;
-    $("show-tabs").checked = state.layout.showTabs;
-    if (!pages.some((page) => page.id === state.page)) state.page = pages[0].id;
-    markDirty();
-    renderPageTabs();
-    renderGrid();
-    renderProperties();
-  };
 }
+
+function renderPagesDialog() {
+  const list = $("l-pages");
+  const pages = pagesDialog.draft;
+  const prof = layoutProfile(state.layout);
+  list.innerHTML = "";
+  for (const page of pages) normalizePageGrid(page, state.layout);
+  pages.forEach((page, index) => {
+    const card = document.createElement("div");
+    card.className = "page-card";
+    const fields = document.createElement("div");
+    fields.className = "page-grid";
+
+    const title = Object.assign(document.createElement("input"), { type: "text", value: page.title || "", maxLength: 40 });
+    title.addEventListener("input", () => { page.title = title.value; });
+    const icon = document.createElement("select");
+    fillIconSelect(icon, true);
+    icon.value = page.icon || "";
+    icon.addEventListener("change", () => {
+      if (icon.value) page.icon = icon.value;
+      else delete page.icon;
+    });
+    const background = document.createElement("select");
+    fillImageSelect(background);
+    background.value = page.backgroundId || "";
+    background.addEventListener("change", () => {
+      if (background.value) page.backgroundId = background.value;
+      else delete page.backgroundId;
+    });
+    const columns = Object.assign(document.createElement("input"), { type: "number", min: 1, max: prof.maxColumns, value: page.columns });
+    columns.addEventListener("change", () => {
+      page.columns = Math.min(prof.maxColumns, Math.max(1, Number(columns.value) || page.columns));
+      page.columnWeights = normalizeWeights(page.columnWeights, page.columns);
+      renderPagesDialog();
+    });
+    const rows = Object.assign(document.createElement("input"), { type: "number", min: 1, max: prof.maxRows, value: page.rows });
+    rows.addEventListener("change", () => {
+      page.rows = Math.min(prof.maxRows, Math.max(1, Number(rows.value) || page.rows));
+      page.rowWeights = normalizeWeights(page.rowWeights, page.rows);
+      renderPagesDialog();
+    });
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Entfernen";
+    remove.disabled = pages.length <= 1;
+    remove.addEventListener("click", () => {
+      pages.splice(index, 1);
+      renderPagesDialog();
+    });
+    const lost = pageTileLoss(page);
+    const count = (page.tiles || []).length;
+    const countText = document.createElement("span");
+    countText.className = "page-count" + (lost ? " warn" : "");
+    countText.textContent = lost
+      ? `${count} Kacheln, ${lost} fallen weg`
+      : `${count} ${count === 1 ? "Kachel" : "Kacheln"}`;
+    const removeCell = document.createElement("div");
+    removeCell.className = "pf";
+    removeCell.append(countText, remove);
+
+    fields.append(
+      pageField("Titel", title),
+      pageField("Symbol", icon),
+      pageField("Hintergrund", background),
+      pageField("Spalten", columns),
+      pageField("Zeilen", rows),
+      removeCell
+    );
+
+    const weightRow = (label, weights, key, prefix) => {
+      const heading = document.createElement("div");
+      heading.className = "page-weights-label";
+      heading.textContent = label;
+      const grid = document.createElement("div");
+      grid.className = "page-grid";
+      weights.forEach((weight, position) => {
+        const input = Object.assign(document.createElement("input"), { type: "number", min: 1, max: 3, step: 1, value: weight });
+        input.addEventListener("change", () => {
+          const next = Math.min(3, Math.max(1, Math.round(Number(input.value)) || 2));
+          input.value = next;
+          page[key][position] = next;
+        });
+        grid.appendChild(pageField(`${prefix} ${position + 1}`, input));
+      });
+      return [heading, grid];
+    };
+    card.append(
+      fields,
+      ...weightRow("Breite je Spalte (1 schmal, 2 normal, 3 breit)", page.columnWeights, "columnWeights", "Spalte"),
+      ...weightRow("Höhe je Zeile (1 flach, 2 normal, 3 hoch)", page.rowWeights, "rowWeights", "Zeile")
+    );
+    list.appendChild(card);
+  });
+  $("pages-add").disabled = pages.length >= MAX_PAGES;
+}
+
+function restorePagesGeneral() {
+  const saved = pagesDialog.general;
+  if (!saved || !state.layout) return;
+  state.layout.displayProfile = saved.displayProfile;
+  state.layout.colorMode = saved.colorMode;
+  state.layout.theme = applyTheme(saved.theme);
+  fillProfileSelect($("display-profile"), saved.displayProfile);
+  $("color-mono").checked = saved.colorMode === "mono";
+  document.getElementById("editor-screen")?.classList.toggle("mono", saved.colorMode === "mono");
+  applyGridAspect();
+  state.dirty = saved.dirty;
+  updateTitle();
+}
+
+$("pages-add").addEventListener("click", () => {
+  if (pagesDialog.draft.length >= MAX_PAGES) return;
+  pagesDialog.draft.push(newPage(state.layout, pagesDialog.draft));
+  renderPagesDialog();
+});
+
+$("pages-dialog").addEventListener("close", () => {
+  if ($("pages-dialog").returnValue !== "ok") {
+    restorePagesGeneral();
+    return;
+  }
+  if (!state.layout) return;
+  const pages = pagesDialog.draft;
+  let dropped = 0;
+  pages.forEach((page, index) => {
+    normalizePageGrid(page, state.layout);
+    page.title = (page.title || "").trim() || `Seite ${index + 1}`;
+    const before = page.tiles.length;
+    page.tiles = page.tiles.filter((tile) => tile.col + (tile.colSpan || 1) <= page.columns && tile.row + (tile.rowSpan || 1) <= page.rows);
+    dropped += before - page.tiles.length;
+  });
+  for (const page of pages) {
+    for (const tile of page.tiles) {
+      if (tile.kind === "nav" && !pages.some((item) => item.id === tile.targetPage)) tile.targetPage = pages[0].id;
+    }
+  }
+  state.layout.pages = pages;
+  if (!pages.some((page) => page.id === state.page)) state.page = pages[0].id;
+  if (state.selected && !currentPage().tiles.some((tile) => tile.tileId === state.selected)) state.selected = null;
+  markDirty();
+  renderPageTabs();
+  renderGrid();
+  renderProperties();
+  if (dropped) setStatus(`${dropped} ${dropped === 1 ? "Kachel passte" : "Kacheln passten"} nicht mehr ins Raster und ${dropped === 1 ? "wurde" : "wurden"} entfernt.`);
+});
 
 /* ---------- Variablen ---------- */
 
@@ -4102,8 +3962,6 @@ async function store(publish) {
   }
   setStatus(publish ? "Veröffentliche …" : "Speichere …");
   try {
-    state.layout.columns = Number($("columns").value) || 2;
-    state.layout.rows = Number($("rows").value) || 4;
     state.layout.showTabs = $("show-tabs").checked;
     state.layout.colorMode = $("color-mono")?.checked ? "mono" : "color";
     state.layout.theme = readThemeInputs();
@@ -4212,7 +4070,11 @@ $("p-row-add")?.addEventListener("click", () => {
   renderRowEditor(tile);
   renderGrid();
 });
-$("edit-layout").addEventListener("click", openLayoutDialog);
+$("layout-name").addEventListener("input", () => {
+  if (!state.layout) return;
+  state.layout.name = $("layout-name").value;
+  markDirty();
+});
 $("color-mono")?.addEventListener("change", () => {
   if (!state.layout) return;
   state.layout.colorMode = $("color-mono").checked ? "mono" : "color";
@@ -4235,18 +4097,11 @@ $("layout-select").addEventListener("change", () => {
   }
   selectLayout(layout);
 });
-for (const id of ["columns", "rows", "show-tabs"]) {
+for (const id of ["show-tabs"]) {
   const field = $(id);
   if (!field) continue;
   field.addEventListener("change", () => {
     if (!state.layout) return;
-    const columns = Math.min(4, Math.max(1, Number($("columns").value) || 2));
-    const rows = Math.min(6, Math.max(1, Number($("rows").value) || 4));
-    for (const page of state.layout.pages) {
-      page.tiles = page.tiles.filter((tile) => tile.col + (tile.colSpan || 1) <= columns && tile.row + (tile.rowSpan || 1) <= rows);
-    }
-    state.layout.columns = columns;
-    state.layout.rows = rows;
     state.layout.showTabs = $("show-tabs").checked;
     if ($("color-mono")) state.layout.colorMode = $("color-mono").checked ? "mono" : "color";
     markDirty();
@@ -4520,21 +4375,6 @@ function probeImageErrorText(code, detail) {
   return base;
 }
 
-function probeImageStreamUrl(panelId, tileId, bust) {
-  const q = new URLSearchParams({
-    panel: String(panelId),
-    tile: String(tileId),
-    v: String(bust ?? Date.now())
-  });
-  return `probe-image?${q.toString()}`;
-}
-
-function revokeProbeObjectUrls() {
-  for (const entry of Object.values(probe.probeImageUrls || {})) {
-    if (entry && entry.revoke) URL.revokeObjectURL(entry.url);
-  }
-}
-
 function setTileMarkup(element, html) {
   const chrome = [...element.children].filter((node) => node.classList.contains("resize-handle") || node.classList.contains("span-badge"));
   element.innerHTML = html;
@@ -4588,464 +4428,10 @@ function paintEditorLiveTile(element, tile) {
   }
 }
 
-let probe = { page: "", snapshot: null, panels: [], probeImageUrls: {}, probeImageErrors: {}, probeImageErrorDetails: {}, timer: null, lastLive: "" };
-
-function probeHardwareProfile() {
-  const panelId = Number($("probe-panel") && $("probe-panel").value);
-  const panel = (probe.panels || []).find((item) => Number(item.id) === panelId);
-  if (panel && DISPLAY_PROFILES[panel.displayProfile]) return DISPLAY_PROFILES[panel.displayProfile];
-  const layout = probe.snapshot && probe.snapshot.layout;
-  return layout ? layoutProfile(layout) : DISPLAY_PROFILES[defaultProfileId()];
-}
-
-function applyProbeChrome(profile) {
-  const screen = $("probe-screen");
-  if (!screen || !profile) return;
-  const header = profile.height >= 480 ? 68 : 0;
-  screen.style.setProperty("--lcd-w", String(profile.width));
-  screen.style.setProperty("--lcd-h", String(profile.height));
-  screen.style.setProperty("--header-h", String(header));
-  const layout = probe.snapshot && probe.snapshot.layout;
-  screen.classList.toggle("mono", Boolean(layout && layout.colorMode === "mono"));
-}
-
-function scaleProbeViewport() {
-  const profile = probeHardwareProfile();
-  applyProbeChrome(profile);
-  scaleDisplayScreen($("probe-viewport"), $("probe-stage"), $("probe-screen"), profile);
-}
-
-function applyLiveStateToProbeTile(element, tile, live) {
-  if (!element || !tile || !live) return;
-  applyTileStatus(element, live, tile);
-  const ohState = element.querySelector(".oh-card-state");
-  if (tile.kind === "presence") {
-    const active = live.presenceState === "active";
-    const stateLine = active ? (tile.presenceMode === "alarm" ? "ALARM" : "Da") : "Abwesend";
-    if (ohState) ohState.innerHTML = escapeHtml(stateLine);
-    const badge = element.querySelector(".presence-badge");
-    if (badge) {
-      badge.classList.toggle("on", active);
-      badge.classList.toggle("off", !active);
-    }
-  } else if (tile.kind === "weather") {
-    if (ohState && live.text != null && live.text !== "") ohState.innerHTML = escapeHtml(live.text);
-    const ohFoot = element.querySelector(".oh-card-foot");
-    if (ohFoot && live.forecast != null) ohFoot.textContent = live.forecast;
-  } else if (tile.kind === "scene") {
-    let on = false;
-    if (typeof live.value === "boolean") on = live.value;
-    element.classList.toggle("on", Boolean(tile.actionId) && on);
-    const panelState = element.querySelector(".panel-state");
-    if (panelState) panelState.textContent = on ? "Ein" : "Aus";
-    else if (ohState) ohState.textContent = tile.showStateText ? (on ? "Ein" : "Aus") : (tile.actionId ? "Tippen" : "—");
-    const iconBtn = element.querySelector("[data-icon-toggle]");
-    if (iconBtn && tile.showIcon !== false) {
-      const iconId = on ? (tile.iconOn || "lightOn") : (tile.iconOff || "lightOff");
-      iconBtn.innerHTML = iconVisual(iconId, on, tile.onColor);
-      iconBtn.setAttribute("aria-pressed", on ? "true" : "false");
-    }
-  } else if (tile.kind === "value") {
-    const readout = element.querySelector(".value-readout");
-    if (readout && live.text != null && live.text !== "") readout.textContent = live.text;
-    if (ohState && live.text != null && live.text !== "") {
-      ohState.innerHTML = escapeHtml(live.text);
-    }
-    const iconBtn = element.querySelector("[data-icon-toggle]");
-    if (iconBtn && tileInteractionMode(tile) === "switch" && tile.showIcon !== false) {
-      const on = liveIsOn(tile, live, false);
-      const iconId = effectiveIcon(tile, live.value, undefined);
-      iconBtn.innerHTML = iconVisual(iconId, on, tile.onColor);
-      iconBtn.setAttribute("aria-pressed", on ? "true" : "false");
-      element.classList.toggle("on", on);
-      const panelState = element.querySelector(".panel-state");
-      if (panelState && tile.showStateText) panelState.textContent = on ? "Ein" : "Aus";
-    }
-    const sw = element.querySelector(".sw");
-    if (sw && tile.control === "switch" && tile.actionId && tile.showIcon === false) {
-      const on = liveIsOn(tile, live, false);
-      sw.classList.toggle("on", on);
-      element.classList.toggle("on", on);
-    }
-    const panelState = element.querySelector(".panel-state");
-    if (panelState && tile.showStateText && !(iconBtn && tile.showIcon !== false)) {
-      const on = liveIsOn(tile, live, false);
-      element.classList.toggle("on", on);
-      panelState.textContent = on ? "Ein" : "Aus";
-    }
-    if (live.value != null && live.value !== "" && element.querySelector(".dim-ctl")) {
-      const pct = dimPercentFromTile(tile, live);
-      applyDimVisual(element, pct, tile);
-    }
-  } else if (live.text != null && live.text !== "") {
-    if (ohState) ohState.innerHTML = escapeHtml(live.text);
-    const valueEl = element.querySelector(".value");
-    if (valueEl) valueEl.textContent = live.text;
-    const fitEl = element.querySelector(".tile-fit-text");
-    if (fitEl) fitEl.textContent = live.text;
-  }
-  if (tile.kind === "energyflow" && live.flows) {
-    const kicker = element.querySelector(".kicker");
-    const kickerHtml = kicker ? kicker.outerHTML : "";
-    element.innerHTML = kickerHtml + buildEnergyFlowHtml(tile, live, "probe");
-    element.dataset.tileId = tile.tileId;
-  }
-  if (tile.kind === "chart") paintChartTileContent(element, tile, live, "probe");
-}
-
-function updateProbeValuesOnly() {
-  if (!probe.snapshot || !probe.snapshot.state) return;
-  const values = {};
-  for (const tile of probe.snapshot.state.tiles || []) values[tile.tileId] = tile;
-  const layout = probe.snapshot.layout;
-  const page = layout && layout.pages ? layout.pages.find((p) => p.id === probe.page) : null;
-  const tilesById = {};
-  for (const t of (page && page.tiles) || []) tilesById[t.tileId] = t;
-  for (const element of $("probe-grid").querySelectorAll(".tile")) {
-    const tileId = element.dataset.tileId;
-    if (!tileId || !values[tileId]) continue;
-    applyLiveStateToProbeTile(element, tilesById[tileId], values[tileId]);
-  }
-  probe.lastLive = new Date().toLocaleTimeString("de-DE");
-  scheduleFitTileText($("probe-grid"));
-}
-
-function probeImageBlobFromResult(result) {
-  if (!result || !result.ok || !result.data) return null;
-  const mime = result.mime || "image/jpeg";
-  const binary = atob(result.data);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: mime });
-}
-
-async function loadProbeImages(layout, panelId, stateTiles) {
-  revokeProbeObjectUrls();
-  probe.probeImageUrls = {};
-  probe.probeImageErrors = {};
-  probe.probeImageErrorDetails = {};
-  if (!layout) return;
-  if (!panelId) panelId = await resolvePreviewPanelId();
-  if (!panelId) return;
-  for (const page of layout.pages || []) {
-    for (const tile of page.tiles || []) {
-      if (!tileNeedsProbeImage(tile)) continue;
-      try {
-        normalizeMediaTileBindings(tile);
-        const result = await call("probeImage", { id: panelId, tileId: tile.tileId, tile });
-        const blob = probeImageBlobFromResult(result);
-        if (blob && blob.size) {
-          probe.probeImageUrls[tile.tileId] = { url: URL.createObjectURL(blob), revoke: true };
-          continue;
-        }
-        probe.probeImageErrors[tile.tileId] = (result && result.error) || "camera_fetch";
-        probe.probeImageErrorDetails[tile.tileId] = (result && result.detail) || "Kein Bild von Symcon";
-      } catch (error) {
-        probe.probeImageErrors[tile.tileId] = "fetch";
-        probe.probeImageErrorDetails[tile.tileId] = error && error.message ? error.message : "";
-      }
-    }
-  }
-}
-
-function paintProbeClock() {
-  const el = $("probe-clock");
-  if (!el) return;
-  const now = new Date();
-  const hh = String(now.getHours()).padStart(2, "0");
-  const mm = String(now.getMinutes()).padStart(2, "0");
-  el.textContent = `${hh}:${mm}`;
-}
-
-function renderProbe() {
-  const grid = $("probe-grid");
-  const tabs = $("probe-tabs");
-  const home = $("probe-home");
-  grid.innerHTML = "";
-  tabs.innerHTML = "";
-  if (home && !home.dataset.ready) {
-    home.innerHTML = iconVisual("home");
-    home.dataset.ready = "1";
-  }
-  paintProbeClock();
-  const layout = probe.snapshot && probe.snapshot.layout;
-  if (!layout || !(layout.pages || []).length) {
-    tabs.classList.add("hidden");
-    grid.innerHTML = '<div class="hint" style="color:#9fb2c8;padding:12px">Diese Anzeige hat keine Ansicht.</div>';
-    return;
-  }
-  if (!probe.page || !(layout.pages || []).some((page) => page.id === probe.page)) probe.page = layout.pages[0].id;
-  const values = {};
-  for (const tile of (probe.snapshot.state && probe.snapshot.state.tiles) || []) values[tile.tileId] = tile;
-  const profile = probeHardwareProfile();
-  const probeInfo = probe.snapshot && probe.snapshot.probe;
-  let metaText;
-  if (probeInfo && probeInfo.draft) {
-    metaText = `Editor-Vorschau · ${profile.label} · ${profile.width}×${profile.height}`;
-    if (state.dirty) metaText += " · ungespeicherte Änderungen";
-  } else {
-    metaText = `Anzeige-Vorschau · ${profile.label} · ${profile.width}×${profile.height}`;
-    if (probeInfo && probeInfo.previewActive) {
-      metaText += " · Geräte-Vorschau (zeitlich begrenzt) aktiv";
-    } else {
-      metaText += " · veröffentlichte Ansicht der Instanz";
-    }
-    if (state.dirty && state.layout && probeInfo && state.layout.id === probeInfo.layoutId) {
-      metaText += " · Editor-Entwurf ist noch nicht veröffentlicht";
-    }
-  }
-  const panelId = Number($("probe-panel").value);
-  const panel = (probe.panels || []).find((item) => Number(item.id) === panelId);
-  if (panel && panel.displayProfile && layout.displayProfile && panel.displayProfile !== layout.displayProfile) {
-    metaText += ` · Ansichtsprofil ${profileLabel(layout.displayProfile)}`;
-  }
-  $("probe-meta").textContent = metaText;
-  const showTabs = layout.showTabs !== false && (layout.pages || []).length > 1;
-  if (showTabs) {
-    tabs.classList.remove("hidden");
-    for (const page of layout.pages.slice(0, 6)) {
-      const button = document.createElement("button");
-      button.type = "button";
-      fillTabButton(button, page, page.id);
-      if (page.id === probe.page) button.classList.add("active");
-      button.addEventListener("click", () => {
-        probe.page = page.id;
-        renderProbe();
-      });
-      tabs.appendChild(button);
-    }
-  } else {
-    tabs.classList.add("hidden");
-  }
-  const current = layout.pages.find((page) => page.id === probe.page);
-  applyPageBackground(grid, current || null);
-  grid.style.gridTemplateColumns = `repeat(${layout.columns || 2}, 1fr)`;
-  grid.style.gridTemplateRows = `repeat(${layout.rows || 4}, 1fr)`;
-  const pageTiles = (current && current.tiles) || [];
-  paintGroupFrames(grid, pageTiles);
-  const ordered = [...pageTiles].sort((a, b) => (isBackgroundImage(a) ? 0 : 1) - (isBackgroundImage(b) ? 0 : 1));
-  for (const tile of ordered) {
-    const element = buildTileElement(tile, {
-      mode: "probe",
-      pageTiles,
-      stateByTileId: values,
-      probeImageUrls: probe.probeImageUrls,
-      probeImageErrors: probe.probeImageErrors,
-      probeImageErrorDetails: probe.probeImageErrorDetails
-    });
-    element.dataset.tileId = tile.tileId;
-    grid.appendChild(element);
-  }
-  observeTileFitRoot(grid);
-  scheduleFitTileText(grid);
-  scaleProbeViewport();
-  probe.lastLive = new Date().toLocaleTimeString("de-DE");
-}
-
-async function loadProbeDraft(id) {
-  const layout = editorLayoutSnapshot();
-  if (!layout) {
-    probe.snapshot = null;
-    renderProbe();
-    return;
-  }
-  let config = {};
-  let stateTiles = [];
-  if (id) {
-    const preview = await call("previewLayout", { id, layout });
-    if (preview.ok === false) throw new Error(preview.error || "Live-Vorschau fehlgeschlagen");
-    stateTiles = preview.tiles || [];
-    try {
-      const inspect = await call("inspect", { id });
-      config = inspect.config || {};
-    } catch (error) {
-      /* optional */
-    }
-  }
-  probe.snapshot = {
-    layout,
-    state: { tiles: stateTiles },
-    config,
-    probe: { draft: true, layoutId: layout.id || "", previewActive: false }
-  };
-  await loadProbeImages(layout, id, stateTiles);
-  renderProbe();
-}
-
-async function loadProbe(fullRender) {
-  const id = Number($("probe-panel").value);
-  if (probeSourceMode() === "draft") {
-    await loadProbeDraft(id);
-    return;
-  }
-  if (!id) {
-    probe.snapshot = null;
-    renderProbe();
-    return;
-  }
-  const previous = probe.snapshot;
-  probe.snapshot = await call("inspect", { id });
-  const state = probe.snapshot.state || {};
-  if (state.unchanged && previous && previous.state && (previous.state.tiles || []).length) {
-    state.tiles = previous.state.tiles;
-    probe.snapshot.state = state;
-  }
-  const grid = $("probe-grid");
-  const hasTiles = grid.querySelectorAll(".tile").length > 0;
-  const layoutSame =
-    previous &&
-    previous.layout &&
-    probe.snapshot.layout &&
-    previous.layout.id === probe.snapshot.layout.id &&
-    (previous.layout.version || 0) === (probe.snapshot.layout.version || 0);
-  if (fullRender === false && (state.unchanged || (hasTiles && layoutSame))) {
-    updateProbeValuesOnly();
-    return;
-  }
-  if (probe.snapshot.layout) {
-    await loadProbeImages(probe.snapshot.layout, id, (probe.snapshot.state && probe.snapshot.state.tiles) || []);
-  }
-  renderProbe();
-}
-
-function stopProbeTimer() {
-  if (probe.timer) {
-    clearInterval(probe.timer);
-    probe.timer = null;
-  }
-  if (probe.clockTimer) {
-    clearInterval(probe.clockTimer);
-    probe.clockTimer = null;
-  }
-}
-
-function startProbeTimer() {
-  stopProbeTimer();
-  probe.clockTimer = setInterval(paintProbeClock, 1000);
-  if (!$("probe-live").checked) return;
-  const sec = Math.max(2, Number(probe.snapshot && probe.snapshot.config && probe.snapshot.config.stateIntervalSec) || 3);
-  probe.timer = setInterval(() => {
-    if (!$("probe-dialog").open) {
-      stopProbeTimer();
-      return;
-    }
-    loadProbe(false).catch(() => {});
-  }, sec * 1000);
-}
-
-function probeTileFromLayout(tileId) {
-  const layout = probe.snapshot && probe.snapshot.layout;
-  if (!layout) return null;
-  for (const page of layout.pages || []) {
-    for (const t of page.tiles || []) {
-      if (t.tileId === tileId) return t;
-    }
-  }
-  return null;
-}
-
-async function sendProbeAction(tile, options = {}) {
-  const layoutTile = probeTileFromLayout(tile.tileId) || tile;
-  if (!layoutTile.actionId) {
-    setStatus("Kachel ist nicht schaltbar: In Details „Schaltbar“ aktivieren, Variable mit Aktion wählen, Entwurf speichern bzw. veröffentlichen.");
-    return;
-  }
-  let value = "";
-  if (options.value != null && options.value !== "") {
-    value = String(options.value);
-  } else if (options.switchToggle) {
-    value = "";
-  } else if (layoutTile.actionKind === "dim" || layoutTile.actionKind === "position") {
-    const entered = prompt("Wert", "50");
-    if (entered === null) return;
-    value = entered.trim();
-  }
-  try {
-    const result = await call("simulateAction", {
-      id: Number($("probe-panel").value),
-      tileId: layoutTile.tileId,
-      actionId: layoutTile.actionId,
-      value,
-      tile: layoutTile
-    });
-    if (result && result.ok === false) throw new Error(result.error || "Aktion abgelehnt");
-    setStatus("Aktion ausgeführt.");
-    await loadProbe(false);
-  } catch (error) {
-    setStatus(error.message);
-  }
-}
-
-async function openProbe() {
-  const select = $("probe-panel");
-  try {
-    const settings = await call("settings");
-    probe.panels = settings.panels || [];
-    select.innerHTML = "";
-    for (const panel of probe.panels) {
-      const option = document.createElement("option");
-      option.value = String(panel.id);
-      const hw = profileLabel(panel.displayProfile);
-      option.textContent = `${panel.name} (${panel.id}) · ${hw}`;
-      select.appendChild(option);
-    }
-    if (probe.panels[0]) state.previewPanelId = probe.panels[0].id;
-    if (!select.options.length) {
-      setStatus("Noch keine Anzeige-Instanz angelegt.");
-      return;
-    }
-  } catch (error) {
-    setStatus(error.message);
-    return;
-  }
-  $("probe-dialog").showModal();
-  requestAnimationFrame(() => scaleProbeViewport());
-  try {
-    await loadProbe(true);
-  } catch (error) {
-    setStatus(error.message);
-    const meta = $("probe-meta");
-    if (meta) meta.textContent = error.message;
-  }
-  requestAnimationFrame(() => {
-    scaleProbeViewport();
-    scheduleFitTileText($("probe-grid"));
-  });
-  startProbeTimer();
-}
-
-$("probe-dialog").addEventListener("close", () => {
-  stopProbeTimer();
-  revokeProbeObjectUrls();
-});
-$("probe-live").addEventListener("change", () => {
-  if ($("probe-dialog").open) startProbeTimer();
-  else stopProbeTimer();
-});
 window.addEventListener("resize", () => {
   scaleEditorViewport();
   scheduleFitTileText($("grid"));
-  if ($("probe-dialog").open) {
-    scaleProbeViewport();
-    scheduleFitTileText($("probe-grid"));
-  }
 });
-
-for (const input of document.querySelectorAll('input[name="probe-source"]')) {
-  input.addEventListener("change", () => {
-    if ($("probe-dialog").open) loadProbe(true).catch((error) => setStatus(error.message));
-  });
-}
-
-$("probe-panel").addEventListener("change", () => {
-  probe.page = "";
-  loadProbe(true).catch((error) => setStatus(error.message));
-});
-$("probe-refresh").addEventListener("click", () => loadProbe(true).catch((error) => setStatus(error.message)));
-$("probe-home").addEventListener("click", () => {
-  loadProbe(true).catch((error) => setStatus(error.message));
-});
-$("open-probe").addEventListener("click", openProbe);
 
 /* ---------- Start ---------- */
 

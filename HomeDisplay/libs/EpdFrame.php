@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/ChartRender.php';
+require_once __DIR__ . '/PanelSchema.php';
 
 /** Monochromes Vollbild (1 Bit/Pixel, zeilenweise) für E-Ink — optional serverseitig gerendert. */
 final class HomeDisplayEpdFrame
@@ -27,8 +28,6 @@ final class HomeDisplayEpdFrame
         $gray = imagecolorallocate($img, 120, 120, 120);
         imagefilledrectangle($img, 0, 0, $width, $height, $white);
 
-        $cols = max(1, (int) ($layout['columns'] ?? 2));
-        $rows = max(1, (int) ($layout['rows'] ?? 4));
         $pages = $layout['pages'] ?? [];
         if (!is_array($pages) || $pages === []) {
             $mono = self::gdToMono($img, $width, $height);
@@ -50,8 +49,9 @@ final class HomeDisplayEpdFrame
             imagestring($img, 2, 4, 2, self::clip($title, 48), $black);
         }
         imageline($img, 0, $header, $width, $header, $black);
-        $cellW = (int) floor($width / $cols);
-        $cellH = (int) floor(($height - $header) / $rows);
+        $grid = HomeDisplayPanelSchema::pageGrid($page, $layout);
+        $edgesX = self::trackEdges($grid['columnWeights'], $width);
+        $edgesY = self::trackEdges($grid['rowWeights'], $height - $header);
         $byId = [];
         foreach ($stateTiles as $st) {
             if (!is_array($st)) {
@@ -70,10 +70,14 @@ final class HomeDisplayEpdFrame
             $row = (int) ($tile['row'] ?? 0);
             $colSpan = max(1, (int) ($tile['colSpan'] ?? 1));
             $rowSpan = max(1, (int) ($tile['rowSpan'] ?? 1));
-            $x = $col * $cellW;
-            $y = $header + $row * $cellH;
-            $w = $colSpan * $cellW;
-            $h = $rowSpan * $cellH;
+            $lastCol = min($col + $colSpan, count($edgesX) - 1);
+            $lastRow = min($row + $rowSpan, count($edgesY) - 1);
+            $col = min($col, count($edgesX) - 1);
+            $row = min($row, count($edgesY) - 1);
+            $x = $edgesX[$col];
+            $y = $header + $edgesY[$row];
+            $w = $edgesX[$lastCol] - $edgesX[$col];
+            $h = $edgesY[$lastRow] - $edgesY[$row];
             $kind = (string) ($tile['kind'] ?? 'value');
             $tileId = (string) ($tile['tileId'] ?? '');
             $st = $byId[$tileId] ?? [];
@@ -153,6 +157,24 @@ final class HomeDisplayEpdFrame
                 }
             }
         }
+    }
+
+    /**
+     * Kanten der Spalten oder Zeilen in Pixeln, aus den Anteilen. Die letzte Kante ist die volle Länge.
+     *
+     * @param list<int> $weights
+     * @return list<int>
+     */
+    private static function trackEdges(array $weights, int $length): array
+    {
+        $total = max(1, array_sum($weights));
+        $edges = [0];
+        $sum = 0;
+        foreach ($weights as $weight) {
+            $sum += $weight;
+            $edges[] = (int) floor($length * $sum / $total);
+        }
+        return $edges;
     }
 
     private static function clip(string $text, int $maxLen): string

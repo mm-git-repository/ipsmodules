@@ -29,7 +29,7 @@ static const char *TAG_UI = "ui";
 #define HEADER_LEFT 72
 #define HEADER_RIGHT 160
 #define TAB_H 56
-#define TAB_W 132
+#define TAB_MIN_W 80
 
 /* true nur wenn show_page vom Client-Task kommt – dann LVGL-Lock zwischen Kacheln freigeben. */
 static bool show_page_may_yield;
@@ -528,7 +528,7 @@ static const icon_cp_t ICON_CP[] = {
     {"speakerOff", 0xF04C4}, {"tvOff", 0xF083B}, {"waterOff", 0xF058D},
     {"coolOff", 0xF14E3}, {"fireOff", 0xF1722}, {"motionOff", 0xF1435},
     {"smokeOff", 0xF1809}, {"windowOpen", 0xF05B1}, {"blindsOpen", 0xF1011},
-    {"blindsClosed", 0xF00AC},
+    {"blindsClosed", 0xF00AC}, {"bathtub", 0xF1818}, {"armchair", 0xF156E},
 };
 
 static const char *pua(unsigned cp)
@@ -1601,7 +1601,50 @@ static void add_group_frame(int x, int y, int w, int h, lv_border_side_t sides, 
     lv_obj_clear_flag(frame, LV_OBJ_FLAG_CLICKABLE);
 }
 
-static void draw_group_frames(cJSON *page, int cell_w, int cell_h)
+/* Spalten- und Zeilenkanten der aktuellen Seite in Pixeln. Kante i ist die Summe der Anteile davor. */
+#define GRID_COLS_MAX 4
+#define GRID_ROWS_MAX 6
+static int col_edge[GRID_COLS_MAX + 1];
+static int row_edge[GRID_ROWS_MAX + 1];
+static int col_count = 1;
+static int row_count = 1;
+
+static int edge_at(const int *edges, int count, int index)
+{
+    if (index < 0) index = 0;
+    if (index > count) index = count;
+    return edges[index];
+}
+
+static int col_x(int col) { return edge_at(col_edge, col_count, col); }
+static int row_y(int row) { return edge_at(row_edge, row_count, row); }
+static int span_w(int col, int span) { return edge_at(col_edge, col_count, col + span) - edge_at(col_edge, col_count, col); }
+static int span_h(int row, int span) { return edge_at(row_edge, row_count, row + span) - edge_at(row_edge, row_count, row); }
+
+/* Anteile 1 bis 3 aus einer Liste lesen; fehlt sie oder passt die Länge nicht, sind alle gleich. */
+static void build_edges(int *edges, int count, int length, cJSON *weights)
+{
+    int share[GRID_ROWS_MAX];
+    int total = 0;
+    bool valid = cJSON_IsArray(weights) && cJSON_GetArraySize(weights) == count;
+    for (int i = 0; i < count; i++) {
+        int weight = 1;
+        if (valid) {
+            cJSON *item = cJSON_GetArrayItem(weights, i);
+            if (cJSON_IsNumber(item) && item->valueint >= 1 && item->valueint <= 3) weight = item->valueint;
+        }
+        share[i] = weight;
+        total += weight;
+    }
+    int sum = 0;
+    edges[0] = 0;
+    for (int i = 0; i < count; i++) {
+        sum += share[i];
+        edges[i + 1] = (int) ((int64_t) length * sum / total);
+    }
+}
+
+static void draw_group_frames(cJSON *page)
 {
     cJSON *items[24];
     int count = 0;
@@ -1649,8 +1692,8 @@ static void draw_group_frames(cJSON *page, int cell_w, int cell_h)
         if (cell_count <= 0) continue;
         bool rectangular = cell_count == (max_c - min_c + 1) * (max_r - min_r + 1);
         if (rectangular) {
-            add_group_frame(min_c * cell_w + 4, min_r * cell_h + 4,
-                (max_c - min_c + 1) * cell_w - 8, (max_r - min_r + 1) * cell_h - 8,
+            add_group_frame(col_x(min_c) + 4, row_y(min_r) + 4,
+                span_w(min_c, max_c - min_c + 1) - 8, span_h(min_r, max_r - min_r + 1) - 8,
                 LV_BORDER_SIDE_FULL, true);
             continue;
         }
@@ -1669,7 +1712,7 @@ static void draw_group_frames(cJSON *page, int cell_w, int cell_h)
             if (right) sides |= LV_BORDER_SIDE_RIGHT;
             if (above) sides |= LV_BORDER_SIDE_TOP;
             if (below) sides |= LV_BORDER_SIDE_BOTTOM;
-            add_group_frame(x * cell_w + 4, y * cell_h + 4, cell_w - 8, cell_h - 8, sides, false);
+            add_group_frame(col_x(x) + 4, row_y(y) + 4, span_w(x, 1) - 8, span_h(y, 1) - 8, sides, false);
         }
     }
 }
@@ -1721,13 +1764,17 @@ static void show_page(int index)
         lv_obj_clear_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(page_bar, HEADER_LEFT, (HEADER_H - TAB_H) / 2);
         lv_obj_set_size(page_bar, HOMEDISPLAY_LCD_H_RES - HEADER_LEFT - HEADER_RIGHT, TAB_H);
-        int tab_x = 0;
-        for (int item = 0; item < count && item < 6; item++) {
-            if (tab_x + TAB_W > HOMEDISPLAY_LCD_H_RES - HEADER_LEFT - HEADER_RIGHT) break;
+        /* Eine Zeile, Breite gleichmäßig geteilt. Passt nicht jede Seite in die Leiste, entfallen die letzten. */
+        const int bar_w = HOMEDISPLAY_LCD_H_RES - HEADER_LEFT - HEADER_RIGHT;
+        int shown = count;
+        while (shown > 1 && bar_w / shown < TAB_MIN_W) shown--;
+        const int tab_w = bar_w / shown;
+        for (int item = 0; item < shown; item++) {
+            int tab_x = item * tab_w;
             cJSON *candidate = cJSON_GetArrayItem(pages, item);
             lv_obj_t *button = lv_btn_create(page_bar);
             lv_obj_set_pos(button, tab_x, 0);
-            lv_obj_set_size(button, TAB_W - 6, TAB_H);
+            lv_obj_set_size(button, tab_w - 6, TAB_H);
             lv_obj_set_style_max_height(button, TAB_H, 0);
             lv_obj_set_style_pad_all(button, 0, 0);
             lv_obj_set_style_radius(button, 6, 0);
@@ -1736,7 +1783,7 @@ static void show_page(int index)
             lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
             lv_obj_set_style_text_color(button, lv_color_hex(text_fg()), 0);
             lv_obj_t *row = lv_obj_create(button);
-            lv_obj_set_size(row, TAB_W - 16, LV_SIZE_CONTENT);
+            lv_obj_set_size(row, tab_w - 16, LV_SIZE_CONTENT);
             style_flat(row);
             lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
             lv_obj_set_style_pad_all(row, 0, 0);
@@ -1747,7 +1794,7 @@ static void show_page(int index)
             lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_center(row);
             const char *tab_icon = cJSON_GetStringValue(cJSON_GetObjectItem(candidate, "icon"));
-            int caption_w = TAB_W - 16;
+            int caption_w = tab_w - 16;
             if (tab_icon && tab_icon[0]) {
                 lv_obj_t *symbol = lv_label_create(row);
                 paint_icon_label(symbol, tab_icon, false, false, text_fg());
@@ -1757,28 +1804,46 @@ static void show_page(int index)
             lv_obj_t *caption = lv_label_create(row);
             const char *title = cJSON_GetStringValue(cJSON_GetObjectItem(candidate, "title"));
             label_set_folded(caption, title ? title : "");
+            /* Schrift in Stufen verkleinern, bis der Titel in eine Zeile passt. */
+            char folded[320];
+            fold_german(folded, sizeof(folded), title ? title : "");
+            const lv_font_t *tab_fonts[] = {&lv_font_montserrat_28, &lv_font_montserrat_24, &lv_font_montserrat_20, &lv_font_montserrat_16};
+            const lv_font_t *tab_font = tab_fonts[3];
+            for (int step = 0; step < 4; step++) {
+                lv_point_t text_size;
+                lv_txt_get_size(&text_size, folded, tab_fonts[step], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+                if (text_size.x <= caption_w) {
+                    tab_font = tab_fonts[step];
+                    break;
+                }
+            }
+            /* Feste Höhe von einer Zeile: sonst bricht LVGL um, statt mit Punkten zu kürzen. */
             lv_label_set_long_mode(caption, LV_LABEL_LONG_DOT);
-            lv_obj_set_width(caption, caption_w);
-            lv_obj_set_style_text_font(caption, &lv_font_montserrat_28, 0);
+            lv_obj_set_size(caption, caption_w, lv_font_get_line_height(tab_font));
+            lv_obj_set_style_text_font(caption, tab_font, 0);
             lv_obj_set_style_text_color(caption, lv_color_hex(text_fg()), 0);
             lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_add_event_cb(button, page_event, LV_EVENT_CLICKED, (void *) (intptr_t) item);
-            tab_x += TAB_W;
         }
     } else {
         lv_obj_add_flag(page_bar, LV_OBJ_FLAG_HIDDEN);
     }
     if (home_button) lv_obj_move_foreground(home_button);
     if (info_label) lv_obj_move_foreground(info_label);
-    columns = json_int(layout_root, "columns", 2);
+    /* Raster der Seite; ältere Veröffentlichungen tragen es noch an der Ansicht. */
+    cJSON *page_cols = cJSON_GetObjectItem(page, "columns");
+    cJSON *page_rows = cJSON_GetObjectItem(page, "rows");
+    columns = cJSON_IsNumber(page_cols) ? page_cols->valueint : json_int(layout_root, "columns", 4);
     if (columns < 1) columns = 1;
-    if (columns > 4) columns = 4;
-    int rows = json_int(layout_root, "rows", 4);
+    if (columns > GRID_COLS_MAX) columns = GRID_COLS_MAX;
+    int rows = cJSON_IsNumber(page_rows) ? page_rows->valueint : json_int(layout_root, "rows", 5);
     if (rows < 1) rows = 1;
-    if (rows > 6) rows = 6;
-    int cell_w = grid_w / columns;
-    int cell_h = grid_h / rows;
-    draw_group_frames(page, cell_w, cell_h);
+    if (rows > GRID_ROWS_MAX) rows = GRID_ROWS_MAX;
+    col_count = columns;
+    row_count = rows;
+    build_edges(col_edge, columns, grid_w, cJSON_GetObjectItem(page, "columnWeights"));
+    build_edges(row_edge, rows, grid_h, cJSON_GetObjectItem(page, "rowWeights"));
+    draw_group_frames(page);
     cJSON *tile = NULL;
     cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
         if (tile_count >= 24) break;
@@ -1798,8 +1863,8 @@ static void show_page(int index)
             if (thickness > 12) thickness = 12;
             uint32_t line_color = parse_hex_color(cJSON_GetStringValue(cJSON_GetObjectItem(tile, "lineColor")), 0x5A7391);
             lv_obj_t *card = lv_obj_create(grid);
-            lv_obj_set_pos(card, col * cell_w, row * cell_h);
-            lv_obj_set_size(card, cell_w * col_span, cell_h * row_span);
+            lv_obj_set_pos(card, col_x(col), row_y(row));
+            lv_obj_set_size(card, span_w(col, col_span), span_h(row, row_span));
             lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
             lv_obj_set_style_radius(card, 0, 0);
             style_flat(card);
@@ -1811,9 +1876,9 @@ static void show_page(int index)
             lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
             lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
             if (vertical) {
-                lv_obj_set_size(line, thickness, cell_h * row_span);
+                lv_obj_set_size(line, thickness, span_h(row, row_span));
             } else {
-                lv_obj_set_size(line, cell_w * col_span, thickness);
+                lv_obj_set_size(line, span_w(col, col_span), thickness);
             }
             lv_obj_align(line, LV_ALIGN_CENTER, 0, 0);
             continue;
@@ -1872,11 +1937,11 @@ static void show_page(int index)
         view->card = lv_obj_create(grid);
         int inset_l = 0, inset_r = 0, inset_t = 0, inset_b = 0;
         group_insets(page, tile, &inset_l, &inset_r, &inset_t, &inset_b);
-        int card_w = cell_w * col_span - 8 - inset_l - inset_r;
-        int card_h = cell_h * row_span - 8 - inset_t - inset_b;
+        int card_w = span_w(col, col_span) - 8 - inset_l - inset_r;
+        int card_h = span_h(row, row_span) - 8 - inset_t - inset_b;
         if (card_w < 16) card_w = 16;
         if (card_h < 16) card_h = 16;
-        lv_obj_set_pos(view->card, col * cell_w + 4 + inset_l, row * cell_h + 4 + inset_t);
+        lv_obj_set_pos(view->card, col_x(col) + 4 + inset_l, row_y(row) + 4 + inset_t);
         lv_obj_set_size(view->card, card_w, card_h);
         lv_obj_set_style_radius(view->card, 8, 0);
         lv_obj_set_style_bg_color(view->card, lv_color_hex(view->base_bg), 0);
@@ -1922,7 +1987,7 @@ static void show_page(int index)
             lv_obj_t *label = lv_label_create(view->card);
             lv_label_set_text(label, text ? text : "");
             lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-            lv_obj_set_width(label, cell_w * col_span - 24);
+            lv_obj_set_width(label, span_w(col, col_span) - 24);
             bool label_bold = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textBold"));
             bool label_italic = cJSON_IsTrue(cJSON_GetObjectItem(tile, "textItalic"));
             lv_obj_set_style_text_font(label, font_for(view->text_px, label_bold, label_italic), 0);
@@ -1963,12 +2028,12 @@ static void show_page(int index)
                 label_set_folded(name, view->title[0] ? view->title : "Kamera");
                 lv_obj_set_style_text_font(name, font_for(view->title_px, view->title_bold, view->title_italic), 0);
                 lv_obj_align(name, LV_ALIGN_TOP_LEFT, 4, 2);
-                img_w = cell_w * col_span - 16;
-                img_h = cell_h * row_span - 44;
+                img_w = span_w(col, col_span) - 16;
+                img_h = span_h(row, row_span) - 44;
             } else {
                 lv_obj_set_style_pad_all(view->card, 0, 0);
-                img_w = cell_w * col_span - 8;
-                img_h = cell_h * row_span - 8;
+                img_w = span_w(col, col_span) - 8;
+                img_h = span_h(row, row_span) - 8;
             }
             if (img_w < 16) img_w = 16;
             if (img_h < 16) img_h = 16;
@@ -2254,7 +2319,7 @@ static void show_page(int index)
                 lv_label_set_text(view->rows[row_index], caption && caption[0] ? caption : "-");
                 lv_obj_set_style_text_font(view->rows[row_index], font_for(view->text_px, view->text_bold, view->text_italic), 0);
                 lv_obj_set_pos(view->rows[row_index], contacts ? 30 : 8, y);
-                lv_obj_set_width(view->rows[row_index], cell_w * col_span - (contacts ? 40 : 16));
+                lv_obj_set_width(view->rows[row_index], span_w(col, col_span) - (contacts ? 40 : 16));
                 lv_label_set_long_mode(view->rows[row_index], LV_LABEL_LONG_DOT);
                 y += 28;
             }
@@ -2332,7 +2397,7 @@ static void show_page(int index)
                 lv_obj_align(view->power, LV_ALIGN_LEFT_MID, 8, 6);
             }
             if (view->dim_show_bar) {
-                int width = cell_w * col_span - (view->dim_show_switch ? 96 : 28);
+                int width = span_w(col, col_span) - (view->dim_show_switch ? 96 : 28);
                 if (width < 48) width = 48;
                 build_track(view, width);
                 lv_obj_align(view->track, LV_ALIGN_BOTTOM_MID, view->dim_show_switch ? 16 : 0, -14);

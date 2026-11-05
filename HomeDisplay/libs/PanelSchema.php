@@ -19,7 +19,14 @@ final class HomeDisplayPanelSchema
         'system' => 'System',
     ];
 
+    public const DEFAULT_COLUMNS = 4;
+
+    public const DEFAULT_ROWS = 5;
+
+    public const MAX_PAGES = 8;
+
     public const ICONS = [
+        'bathtub', 'armchair',
         'energy', 'temperature', 'light', 'shutter', 'pump', 'valve', 'alarm', 'home', 'clock', 'info',
         'lightOn', 'lightOff', 'humidity', 'sun', 'moon', 'water', 'heat', 'cool', 'fan', 'door', 'lock', 'plug', 'batteryIcon', 'wifi', 'car',
         'motion', 'window', 'garage', 'smoke', 'thermostat', 'solar', 'camera', 'tv', 'speaker', 'washing', 'bed', 'bell', 'leaf', 'fire', 'kitchen', 'pool', 'hall', 'kids',
@@ -78,6 +85,42 @@ final class HomeDisplayPanelSchema
 
     public const MAX_ROWS = 6;
 
+    /**
+     * Raster einer Seite. Fehlt es an der Seite, gilt das alte Raster der Ansicht, sonst 4 x 5.
+     * Anteile (1 bis 3) je Spalte und Zeile; fehlen sie oder passt die Länge nicht, sind alle gleich.
+     *
+     * @param array<string, mixed> $page
+     * @param array<string, mixed> $layout
+     * @return array{columns: int, rows: int, columnWeights: list<int>, rowWeights: list<int>}
+     */
+    public static function pageGrid(array $page, array $layout = []): array
+    {
+        $columns = (int) ($page['columns'] ?? $layout['columns'] ?? self::DEFAULT_COLUMNS);
+        $rows = (int) ($page['rows'] ?? $layout['rows'] ?? self::DEFAULT_ROWS);
+        $columns = max(1, $columns);
+        $rows = max(1, $rows);
+        return [
+            'columns' => $columns,
+            'rows' => $rows,
+            'columnWeights' => self::trackWeights($page['columnWeights'] ?? null, $columns),
+            'rowWeights' => self::trackWeights($page['rowWeights'] ?? null, $rows),
+        ];
+    }
+
+    /** @return list<int> */
+    private static function trackWeights($raw, int $count): array
+    {
+        if (!is_array($raw) || count($raw) !== $count) {
+            return array_fill(0, $count, 1);
+        }
+        $weights = [];
+        foreach (array_values($raw) as $value) {
+            $weight = (int) $value;
+            $weights[] = ($weight >= 1 && $weight <= 3) ? $weight : 1;
+        }
+        return $weights;
+    }
+
     /** @param array<string, mixed> $layout */
     public static function validateLayout(array $layout, bool $publish): void
     {
@@ -89,18 +132,13 @@ final class HomeDisplayPanelSchema
         $profile = self::profile($profileId);
         $maxColumns = (int) $profile['maxColumns'];
         $maxRows = (int) $profile['maxRows'];
-        $columns = (int) ($layout['columns'] ?? 0);
-        if ($columns < 1 || $columns > $maxColumns) {
-            throw new InvalidArgumentException('Das Raster hat zu viele Spalten für das Display-Profil.');
-        }
-        $rows = (int) ($layout['rows'] ?? 4);
-        if ($rows < 1 || $rows > $maxRows) {
-            throw new InvalidArgumentException('Das Raster hat zu viele Zeilen für das Display-Profil.');
-        }
         self::theme($layout);
         $pages = $layout['pages'] ?? null;
         if (!is_array($pages) || $pages === []) {
             throw new InvalidArgumentException('Ansicht ohne Seite.');
+        }
+        if (count($pages) > self::MAX_PAGES) {
+            throw new InvalidArgumentException('Eine Ansicht hat höchstens ' . self::MAX_PAGES . ' Seiten.');
         }
         $pageIds = [];
         foreach ($pages as $page) {
@@ -108,10 +146,17 @@ final class HomeDisplayPanelSchema
                 throw new InvalidArgumentException('Ungültige Seite.');
             }
             $pageId = (string) ($page['id'] ?? '');
-            if (!isset(self::PAGES[$pageId]) || isset($pageIds[$pageId])) {
-                throw new InvalidArgumentException('Unbekannte oder doppelte Seite: ' . $pageId);
+            if (!preg_match('/^[a-z0-9_-]{1,24}$/', $pageId) || isset($pageIds[$pageId])) {
+                throw new InvalidArgumentException('Ungültige oder doppelte Seite: ' . $pageId);
             }
             $pageIds[$pageId] = true;
+            $grid = self::pageGrid($page, $layout);
+            if ($grid['columns'] < 1 || $grid['columns'] > $maxColumns) {
+                throw new InvalidArgumentException('Seite „' . $pageId . '“ hat zu viele Spalten für das Display-Profil.');
+            }
+            if ($grid['rows'] < 1 || $grid['rows'] > $maxRows) {
+                throw new InvalidArgumentException('Seite „' . $pageId . '“ hat zu viele Zeilen für das Display-Profil.');
+            }
             $background = (string) ($page['backgroundId'] ?? '');
             if ($background === '') {
                 continue;
@@ -126,6 +171,9 @@ final class HomeDisplayPanelSchema
         $seen = [];
         foreach ($pages as $page) {
             $pageId = (string) $page['id'];
+            $pageGrid = self::pageGrid($page, $layout);
+            $columns = $pageGrid['columns'];
+            $rows = $pageGrid['rows'];
             $tiles = $page['tiles'] ?? [];
             if (!is_array($tiles)) {
                 throw new InvalidArgumentException('Ungültige Kacheln.');
@@ -555,7 +603,8 @@ final class HomeDisplayPanelSchema
             }
             $publicPage = [
                 'id' => (string) ($page['id'] ?? ''),
-                'title' => (string) ($page['title'] ?? self::PAGES[$page['id']] ?? ''),
+                'title' => (string) ($page['title'] ?? self::PAGES[$page['id'] ?? ''] ?? ''),
+            ] + self::pageGrid($page, $layout) + [
                 'tiles' => $tiles,
             ];
             $pageIcon = (string) ($page['icon'] ?? '');
@@ -575,8 +624,6 @@ final class HomeDisplayPanelSchema
             'id' => (string) ($layout['id'] ?? ''),
             'name' => (string) ($layout['name'] ?? ''),
             'version' => (int) ($layout['version'] ?? 0),
-            'columns' => max(1, (int) ($layout['columns'] ?? 2)),
-            'rows' => max(1, (int) ($layout['rows'] ?? 4)),
             'showTabs' => !array_key_exists('showTabs', $layout) || (bool) $layout['showTabs'],
             'colorMode' => ((string) ($layout['colorMode'] ?? 'color') === 'mono') ? 'mono' : 'color',
             'theme' => self::theme($layout),
@@ -703,8 +750,13 @@ final class HomeDisplayPanelSchema
             return (int) ($left['Position'] ?? 0) <=> (int) ($right['Position'] ?? 0);
         });
         $pages = [];
+        $gridProfile = self::profile(self::defaultProfileId());
         foreach (self::PAGES as $id => $title) {
-            $pages[$id] = ['id' => $id, 'title' => $title, 'tiles' => []];
+            $pages[$id] = [
+                'id' => $id, 'title' => $title,
+                'columns' => (int) $gridProfile['defaultColumns'], 'rows' => (int) $gridProfile['defaultRows'],
+                'tiles' => [],
+            ];
         }
         $index = 0;
         foreach ($rows as $row) {
@@ -753,12 +805,9 @@ final class HomeDisplayPanelSchema
         if ($used === []) {
             $used = [$pages['start']];
         }
-        $profile = self::profile(self::defaultProfileId());
         return [
             'name' => $name,
             'displayProfile' => self::defaultProfileId(),
-            'columns' => (int) $profile['defaultColumns'],
-            'rows' => (int) $profile['defaultRows'],
             'showTabs' => true,
             'pages' => $used,
         ];
@@ -778,7 +827,7 @@ final class HomeDisplayPanelSchema
         $columns = (int) $profile['defaultColumns'];
         $rows = (int) $profile['defaultRows'];
         $pages = [];
-        $pages[] = ['id' => 'start', 'title' => 'Start', 'tiles' => [
+        $pages[] = ['id' => 'start', 'title' => 'Start', 'columns' => $columns, 'rows' => $rows, 'tiles' => [
             ['tileId' => 'start-title', 'kind' => 'label', 'text' => 'Zuhause', 'size' => 'large', 'col' => 0, 'row' => 0, 'colSpan' => 3, 'rowSpan' => 1],
             ['tileId' => 'nav-energie', 'kind' => 'nav', 'icon' => 'energy', 'title' => 'Energie', 'targetPage' => 'energie', 'col' => 0, 'row' => 1, 'colSpan' => 1, 'rowSpan' => 1],
             ['tileId' => 'nav-klima', 'kind' => 'nav', 'icon' => 'temperature', 'title' => 'Klima', 'targetPage' => 'klima', 'col' => 1, 'row' => 1, 'colSpan' => 1, 'rowSpan' => 1],
@@ -834,9 +883,9 @@ final class HomeDisplayPanelSchema
                 }
                 $tiles[] = $tile;
             }
-            $pages[] = ['id' => $pageId, 'title' => self::PAGES[$pageId], 'tiles' => $tiles];
+            $pages[] = ['id' => $pageId, 'title' => self::PAGES[$pageId], 'columns' => $columns, 'rows' => $rows, 'tiles' => $tiles];
         }
-        $pages[] = ['id' => 'system', 'title' => 'System', 'tiles' => [
+        $pages[] = ['id' => 'system', 'title' => 'System', 'columns' => $columns, 'rows' => $rows, 'tiles' => [
             ['tileId' => 'system-title', 'kind' => 'label', 'text' => 'System', 'size' => 'large', 'col' => 0, 'row' => 0, 'colSpan' => 2, 'rowSpan' => 1],
             ['tileId' => 'system-home', 'kind' => 'nav', 'icon' => 'home', 'title' => 'Start', 'targetPage' => 'start', 'col' => 2, 'row' => 0, 'colSpan' => 1, 'rowSpan' => 1],
             ['tileId' => 'system-info', 'kind' => 'label', 'text' => 'Geraeteinfos: Serial-Menue', 'col' => 0, 'row' => 1, 'colSpan' => 3, 'rowSpan' => 1],
@@ -844,8 +893,6 @@ final class HomeDisplayPanelSchema
         return [
             'name' => $name,
             'displayProfile' => $profileId,
-            'columns' => $columns,
-            'rows' => $rows,
             'showTabs' => false,
             'pages' => $pages,
         ];
