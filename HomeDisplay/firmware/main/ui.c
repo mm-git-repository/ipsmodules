@@ -1602,8 +1602,9 @@ static void add_group_frame(int x, int y, int w, int h, lv_border_side_t sides, 
 }
 
 /* Spalten- und Zeilenkanten der aktuellen Seite in Pixeln. Kante i ist die Summe der Anteile davor. */
-#define GRID_COLS_MAX 4
+#define GRID_COLS_MAX 8
 #define GRID_ROWS_MAX 6
+#define GRID_EDGE_MAX (GRID_COLS_MAX > GRID_ROWS_MAX ? GRID_COLS_MAX : GRID_ROWS_MAX)
 static int col_edge[GRID_COLS_MAX + 1];
 static int row_edge[GRID_ROWS_MAX + 1];
 static int col_count = 1;
@@ -1624,7 +1625,7 @@ static int span_h(int row, int span) { return edge_at(row_edge, row_count, row +
 /* Anteile 1 bis 3 aus einer Liste lesen; fehlt sie oder passt die Länge nicht, sind alle gleich. */
 static void build_edges(int *edges, int count, int length, cJSON *weights)
 {
-    int share[GRID_ROWS_MAX];
+    int share[GRID_EDGE_MAX];
     int total = 0;
     bool valid = cJSON_IsArray(weights) && cJSON_GetArraySize(weights) == count;
     for (int i = 0; i < count; i++) {
@@ -2126,7 +2127,10 @@ static void show_page(int index)
         if (ghost) show_title_icon = false;
         const char *title_icon_field = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "titleIcon"));
         const char *title_icon_src = NULL;
-        if (plain_value) title_icon_src = (title_icon_field && title_icon_field[0]) ? title_icon_field : NULL;
+        /* Bei Schaltern, Szenen und Dimmern ist `icon` das Schalt-Symbol. Es steht schon groß auf der Kachel,
+         * die Überschrift zeigt dort nur das eigens gewählte Symbol. */
+        bool own_title_icon_only = plain_value || icon_toggle || dimmer || action_dim;
+        if (own_title_icon_only) title_icon_src = (title_icon_field && title_icon_field[0]) ? title_icon_field : NULL;
         else if (title_icon_field && title_icon_field[0]) title_icon_src = title_icon_field;
         else title_icon_src = icon;
         if (show_title && plain_value) {
@@ -2157,25 +2161,39 @@ static void show_page(int index)
             lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
             lv_obj_clear_flag(name, LV_OBJ_FLAG_CLICKABLE);
         } else if (show_title && strcmp(kind, "chart") != 0) {
-            lv_obj_t *title_row_icon = NULL;
-            lv_align_t title_pos = LV_ALIGN_TOP_LEFT;
-            lv_coord_t title_x = 0;
-            if (strcmp(title_align, "center") == 0) title_pos = LV_ALIGN_TOP_MID;
-            else if (strcmp(title_align, "right") == 0) title_pos = LV_ALIGN_TOP_RIGHT;
-            if (show_title_icon && title_icon_src && title_icon_src[0] && !icon_toggle && !dimmer && !action_dim) {
-                lv_coord_t icon_x = strcmp(title_align, "right") == 0 ? -4 : (strcmp(title_align, "center") == 0 ? -28 : 0);
-                title_row_icon = lv_label_create(view->card);
-                view->title_icon = title_row_icon;
+            /* Symbol und Text in einer Zeile. Getrennte Ausrichtung hat das Symbol auf den Text gelegt. */
+            const lv_font_t *title_font = font_for(view->title_px, view->title_bold, view->title_italic);
+            bool has_heading_icon = show_title_icon && title_icon_src && title_icon_src[0];
+            int title_h = lv_font_get_line_height(title_font);
+            if (has_heading_icon && title_h < 28) title_h = 28;
+            view->title_row = lv_obj_create(view->card);
+            lv_obj_set_size(view->title_row, LV_PCT(100), title_h);
+            style_flat(view->title_row);
+            lv_obj_set_style_bg_opa(view->title_row, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_all(view->title_row, 0, 0);
+            lv_obj_set_flex_flow(view->title_row, LV_FLEX_FLOW_ROW);
+            lv_flex_align_t main = LV_FLEX_ALIGN_START;
+            if (strcmp(title_align, "center") == 0) main = LV_FLEX_ALIGN_CENTER;
+            else if (strcmp(title_align, "right") == 0) main = LV_FLEX_ALIGN_END;
+            lv_obj_set_flex_align(view->title_row, main, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_column(view->title_row, 6, 0);
+            lv_obj_clear_flag(view->title_row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_align(view->title_row, LV_ALIGN_TOP_LEFT, 0, 0);
+            if (has_heading_icon) {
+                make_icon_label(view->title_row, view, title_icon_src, &view->title_icon, false);
+                lv_obj_set_style_text_color(view->title_icon, lv_color_hex(text_fg()), 0);
                 snprintf(view->title_icon_name, sizeof(view->title_icon_name), "%s", title_icon_src);
-                show_icon_label(title_row_icon, view, title_icon_src, false, false);
-                lv_obj_align(title_row_icon, title_pos, icon_x, 0);
-                lv_obj_clear_flag(title_row_icon, LV_OBJ_FLAG_CLICKABLE);
-                title_x = strcmp(title_align, "right") == 0 ? -40 : (strcmp(title_align, "center") == 0 ? 18 : 40);
             }
-            lv_obj_t *name = lv_label_create(view->card);
+            lv_obj_t *name = lv_label_create(view->title_row);
             label_set_folded(name, view->title[0] ? view->title : "-");
-            lv_obj_set_style_text_font(name, font_for(view->title_px, view->title_bold, view->title_italic), 0);
-            lv_obj_align(name, title_pos, title_x, 2);
+            view->title_label = name;
+            lv_obj_set_style_text_font(name, title_font, 0);
+            lv_obj_set_style_text_color(name, lv_color_hex(text_fg()), 0);
+            int max_text = card_w - 20 - (has_heading_icon ? 34 : 0);
+            if (max_text < 8) max_text = 8;
+            lv_obj_set_width(name, text_width_capped(view->title[0] ? view->title : "-", title_font, max_text));
+            lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+            lv_obj_clear_flag(name, LV_OBJ_FLAG_CLICKABLE);
         }
 
         if (strcmp(kind, "chart") == 0) {
@@ -2394,7 +2412,9 @@ static void show_page(int index)
             }
             if (view->dim_show_switch) {
                 build_power(view);
-                lv_obj_align(view->power, LV_ALIGN_LEFT_MID, 8, 6);
+                /* Feste Größe, unterhalb der Titelzeile, damit er nie in die Überschrift ragt. */
+                lv_obj_set_size(view->power, 56, 28);
+                lv_obj_align(view->power, LV_ALIGN_LEFT_MID, 8, show_title ? 16 : 6);
             }
             if (view->dim_show_bar) {
                 int width = span_w(col, col_span) - (view->dim_show_switch ? 96 : 28);
@@ -2492,6 +2512,7 @@ static void show_page(int index)
                 lv_obj_align(view->label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
             }
         }
+        if (view->title_row) lv_obj_move_foreground(view->title_row);
         tile_count++;
     }
     lv_obj_add_flag(clock_layer, LV_OBJ_FLAG_HIDDEN);
@@ -2513,9 +2534,12 @@ static void show_page(int index)
     ESP_LOGI(TAG_UI, "Seite fertig (%d Kacheln)", tile_count);
 }
 
+/* Anzeige in MEZ: fester Versatz zur UTC-Zeit, ohne Sommerzeit. Uhr und RTC bleiben UTC. */
+#define DISPLAY_TZ_OFFSET_S 3600
+
 static bool night_now(void)
 {
-    int64_t now = clock_base + (esp_timer_get_time() - clock_set_at) / 1000000;
+    int64_t now = clock_base + (esp_timer_get_time() - clock_set_at) / 1000000 + DISPLAY_TZ_OFFSET_S;
     if (now < 0) now = 0;
     int hour = (int) ((now % 86400) / 3600);
     if (night_from == night_to) return true;
@@ -2537,7 +2561,7 @@ static void clock_tick(lv_timer_t *timer)
 {
     (void) timer;
     frame_counter++;
-    int64_t now = clock_base + (esp_timer_get_time() - clock_set_at) / 1000000;
+    int64_t now = clock_base + (esp_timer_get_time() - clock_set_at) / 1000000 + DISPLAY_TZ_OFFSET_S;
     if (now < 0) now = 0;
     int seconds = (int) (now % 86400);
     int hour = seconds / 3600;
@@ -3094,7 +3118,7 @@ static void chart_format_stamp(char *out, size_t length, int64_t unix_time, cons
         else snprintf(out, length, "-%dm", (int) ((back + 30) / 60));
         return;
     }
-    time_t stamp = (time_t) unix_time;
+    time_t stamp = (time_t) (unix_time + DISPLAY_TZ_OFFSET_S);
     struct tm broken;
     gmtime_r(&stamp, &broken);
     if (period && strcmp(period, "7d") == 0) {

@@ -1749,6 +1749,56 @@ class HomeDisplay extends IPSModuleStrict
         return $text;
     }
 
+    /**
+     * Verstecktes Hilfsskript unter der Instanz. Jeder Aufruf läuft parallel, RequestAction darin blockiert die anderen Lampen nicht.
+     */
+    private function sceneRunnerId(): int
+    {
+        $ident = 'SceneRunner';
+        $scriptId = 0;
+        foreach (IPS_GetChildrenIDs($this->InstanceID) as $child) {
+            $object = IPS_GetObject($child);
+            if ((string) ($object['ObjectIdent'] ?? '') === $ident) {
+                $scriptId = (int) $child;
+                break;
+            }
+        }
+        $source = <<<'PHP'
+<?php
+$delay = (int) ($_IPS['delayMs'] ?? 0);
+if ($delay > 0) {
+    usleep(min($delay, 10000) * 1000);
+}
+try {
+    $variableId = (int) ($_IPS['variableId'] ?? 0);
+    $encoded = (string) ($_IPS['valueJson'] ?? 'null');
+    $value = json_decode($encoded);
+    if ($variableId <= 0 || ($value === null && $encoded !== 'null')) {
+        return;
+    }
+    RequestAction($variableId, $value);
+    $colorId = (int) ($_IPS['colorVariableId'] ?? 0);
+    if ($colorId > 0) {
+        RequestAction($colorId, (int) ($_IPS['colorValue'] ?? 0));
+    }
+} catch (Throwable $error) {
+    IPS_LogMessage('HomeDisplay', 'Szene: ' . $error->getMessage());
+}
+PHP;
+        if ($scriptId === 0) {
+            $scriptId = IPS_CreateScript(0);
+            IPS_SetParent($scriptId, $this->InstanceID);
+            IPS_SetIdent($scriptId, $ident);
+            IPS_SetName($scriptId, 'Szenenlauf');
+            IPS_SetHidden($scriptId, true);
+        }
+        $current = str_replace("\r\n", "\n", IPS_GetScriptContent($scriptId));
+        if ($current !== str_replace("\r\n", "\n", $source)) {
+            IPS_SetScriptContent($scriptId, $source);
+        }
+        return $scriptId;
+    }
+
     /** @param array{id: int, token: string} $device @param array<string, mixed> $body @param array<string, mixed>|null $tileOverride Nur für SimulateAction (Editor/Prüfung). */
     private function performAction(array $device, array $body, ?array $tileOverride = null): array
     {
@@ -1768,19 +1818,17 @@ class HomeDisplay extends IPSModuleStrict
             return ['ok' => true, 'duplicate' => true];
         }
         if (isset($decision['steps']) && is_array($decision['steps'])) {
+            // Jede Lampe in einem eigenen Skript: RequestAction würde sonst auf die vorige Lampe warten.
+            $runner = $this->sceneRunnerId();
             foreach ($decision['steps'] as $step) {
-                try {
-                    $delay = (int) ($step['delayMs'] ?? 0);
-                    if ($delay > 0) {
-                        usleep($delay * 1000);
-                    }
-                    RequestAction((int) $step['variableId'], $step['value']);
-                    if (isset($step['colorVariableId'])) {
-                        RequestAction((int) $step['colorVariableId'], (int) $step['colorValue']);
-                    }
-                } catch (Throwable $error) {
-                    IPS_LogMessage('HomeDisplay', 'Szene: ' . $error->getMessage());
-                }
+                $params = [
+                    'variableId' => (int) $step['variableId'],
+                    'valueJson' => json_encode($step['value']),
+                    'delayMs' => (int) ($step['delayMs'] ?? 0),
+                    'colorVariableId' => (int) ($step['colorVariableId'] ?? 0),
+                    'colorValue' => (int) ($step['colorValue'] ?? 0),
+                ];
+                IPS_RunScriptEx($runner, $params);
             }
         } else {
             RequestAction($decision['variableId'], $decision['value']);

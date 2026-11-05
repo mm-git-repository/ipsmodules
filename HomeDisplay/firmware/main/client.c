@@ -21,7 +21,10 @@
 #include "freertos/task.h"
 #include "esp_rom_crc.h"
 
+#include "esp_spiffs.h"
+
 #include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -169,6 +172,11 @@ static esp_err_t request_to_base(const char *base, const char *path, const char 
     snprintf(url, sizeof(url), "%s%s", base, path);
     esp_http_client_config_t config;
     configure_http_client(&config, url);
+    /* Zustand und Layout enthalten Diagramme; der Server braucht dafür länger als für ein Manifest. */
+    if (strncmp(path, "/v1/state", 9) == 0 || strncmp(path, "/v1/layout", 10) == 0) {
+        config.timeout_ms = 20000;
+    }
+    int64_t request_started = esp_timer_get_time();
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
         return ESP_ERR_NO_MEM;
@@ -191,14 +199,26 @@ static esp_err_t request_to_base(const char *base, const char *path, const char 
         esp_http_client_write(client, body, strlen(body));
     }
     if (error == ESP_OK) {
-        esp_http_client_fetch_headers(client);
+        int64_t header_result = esp_http_client_fetch_headers(client);
         int status = esp_http_client_get_status_code(client);
         last_http_status = status;
         int total = 0;
+        if (header_result < 0 || status <= 0) {
+            /* Ohne Kopfzeilen kein Body: früher galt das als Erfolg mit leerer Antwort. */
+            ESP_LOGW(TAG, "Keine Antwort auf %s %s (Kopfzeilen %lld, Status %d, %d ms)", method, path,
+                     (long long) header_result, status, (int) ((esp_timer_get_time() - request_started) / 1000));
+            error = header_result == -ESP_ERR_HTTP_EAGAIN ? ESP_ERR_TIMEOUT : ESP_FAIL;
+            response[0] = '\0';
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+            return error;
+        }
         while (total < (int) response_length - 1) {
             esp_task_wdt_reset();
             int chunk = esp_http_client_read(client, response + total, response_length - 1 - total);
             if (chunk < 0) {
+                ESP_LOGW(TAG, "Lesefehler auf %s %s nach %d Byte (Fehler %d, %d ms)", method, path, total, chunk,
+                         (int) ((esp_timer_get_time() - request_started) / 1000));
                 error = ESP_FAIL;
                 break;
             }
@@ -447,12 +467,13 @@ static esp_err_t download_to_file(const char *path, const char *target, int time
         ESP_LOGW(TAG, "Download HTTP %d auf %s: %s", status, path, body[0] ? body : "(keine Antwort)");
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
-        return ESP_FAIL;
+        return status == 404 ? ESP_ERR_NOT_FOUND : ESP_FAIL;
     }
     char temp[96];
     snprintf(temp, sizeof(temp), "%s.part", target);
     FILE *file = fopen(temp, "wb");
     if (!file) {
+        ESP_LOGW(TAG, "Download %s: fopen %s fehlgeschlagen (errno %d)", path, temp, errno);
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return ESP_FAIL;
@@ -473,6 +494,7 @@ static esp_err_t download_to_file(const char *path, const char *target, int time
         }
         int read = esp_http_client_read(client, buffer, sizeof(buffer));
         if (read < 0) {
+            ESP_LOGW(TAG, "Download-Lesefehler %s nach %u Byte (Fehler %d)", path, (unsigned) total, read);
             error = ESP_FAIL;
             break;
         }
@@ -492,6 +514,7 @@ static esp_err_t download_to_file(const char *path, const char *target, int time
             break;
         }
         if (fwrite(buffer, 1, read, file) != (size_t) read) {
+            ESP_LOGW(TAG, "Download %s: Schreibfehler nach %u Byte (errno %d)", path, (unsigned) total, errno);
             error = ESP_FAIL;
             break;
         }
@@ -501,14 +524,24 @@ static esp_err_t download_to_file(const char *path, const char *target, int time
     esp_http_client_cleanup(client);
     if (error == ESP_OK) {
         remove(target);
-        if (rename(temp, target) != 0) error = ESP_FAIL;
+        if (rename(temp, target) != 0) {
+            ESP_LOGW(TAG, "Download %s: rename nach %s fehlgeschlagen (errno %d)", path, target, errno);
+            error = ESP_FAIL;
+        }
     } else {
         remove(temp);
     }
     return error;
 }
 
-static void fetch_one_image(const char *id, const char *file)
+/* Katalogbilder, die nicht geladen werden konnten: beim nächsten Manifest erneut versuchen. */
+static int images_missing;
+static int image_retry_round;
+static bool image_retrying;
+static bool image_background_loaded;
+
+/* tile_id ist NULL bei Seitenhintergründen. */
+static void fetch_one_image(const char *id, const char *file, const char *tile_id)
 {
     if (!id || !id[0] || !file || !file[0]) return;
     char target[96];
@@ -518,8 +551,61 @@ static void fetch_one_image(const char *id, const char *file)
     char path[64];
     snprintf(path, sizeof(path), "/v1/images/%s", id);
     homedisplay_ui_status("Lade Bilder");
-    if (download_to_file(path, target, 15000, 2 * 1024 * 1024) != ESP_OK) {
-        ESP_LOGW(TAG, "Bild %s konnte nicht geladen werden", id);
+    esp_err_t error = download_to_file(path, target, 15000, 2 * 1024 * 1024);
+    if (error != ESP_OK) {
+        if (error == ESP_ERR_NOT_FOUND && image_retry_round >= 1) {
+            ESP_LOGW(TAG, "Bild %s fehlt auf dem Server, kein weiterer Versuch", id);
+            return;
+        }
+        ESP_LOGW(TAG, "Bild %s konnte nicht geladen werden (%s), neuer Versuch beim nächsten Manifest", id, esp_err_to_name(error));
+        images_missing++;
+        return;
+    }
+    if (image_retrying) {
+        /* Ansicht steht bereits: nur die betroffene Kachel bzw. den Hintergrund nachziehen. */
+        if (tile_id && tile_id[0]) homedisplay_ui_refresh_image(tile_id, file);
+        else image_background_loaded = true;
+    }
+}
+
+static bool layout_uses_file(cJSON *layout_root, const char *name)
+{
+    static const char *tile_keys[] = { "imageFile", "mediaFile", "cameraFile" };
+    cJSON *page = NULL;
+    cJSON_ArrayForEach(page, cJSON_GetObjectItem(layout_root, "pages")) {
+        const char *background = cJSON_GetStringValue(cJSON_GetObjectItem(page, "backgroundFile"));
+        if (background && strcmp(background, name) == 0) return true;
+        cJSON *tile = NULL;
+        cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
+            for (size_t key = 0; key < sizeof(tile_keys) / sizeof(tile_keys[0]); key++) {
+                const char *value = cJSON_GetStringValue(cJSON_GetObjectItem(tile, tile_keys[key]));
+                if (value && strcmp(value, name) == 0) return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Der Speicher fasst nur 1 MB. Dateien früherer Layouts (alte Bilder, Hintergründe) machen sonst Platz
+ * für neue Bilder unmöglich (errno 28). Behalten wird nur, was das aktuelle Layout nennt, plus die Zwischenspeicher. */
+static void prune_storage(cJSON *layout_root)
+{
+    DIR *dir = opendir("/storage");
+    if (!dir) return;
+    struct dirent *entry;
+    int removed = 0;
+    while ((entry = readdir(dir)) != NULL) {
+        const char *name = entry->d_name;
+        if (strcmp(name, "layout.json") == 0 || strcmp(name, "config.json") == 0 || strcmp(name, "state.json") == 0) continue;
+        if (layout_uses_file(layout_root, name)) continue;
+        char path[300];
+        snprintf(path, sizeof(path), "/storage/%s", name);
+        if (remove(path) == 0) removed++;
+    }
+    closedir(dir);
+    size_t total = 0, used = 0;
+    if (esp_spiffs_info("storage", &total, &used) == ESP_OK) {
+        ESP_LOGI(TAG, "Speicher: %d unbenutzte Dateien entfernt, %u von %u KB belegt", removed, (unsigned) (used / 1024), (unsigned) (total / 1024));
     }
 }
 
@@ -528,21 +614,42 @@ static void fetch_images(const char *layout_json)
 {
     cJSON *root = cJSON_Parse(layout_json);
     if (!root) return;
+    prune_storage(root);
+    images_missing = 0;
     cJSON *page = NULL;
     cJSON_ArrayForEach(page, cJSON_GetObjectItem(root, "pages")) {
         fetch_one_image(
             cJSON_GetStringValue(cJSON_GetObjectItem(page, "backgroundId")),
-            cJSON_GetStringValue(cJSON_GetObjectItem(page, "backgroundFile")));
+            cJSON_GetStringValue(cJSON_GetObjectItem(page, "backgroundFile")),
+            NULL);
         cJSON *tile = NULL;
         cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
             const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
             if (!kind || strcmp(kind, "image") != 0) continue;
             fetch_one_image(
                 cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageId")),
-                cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageFile")));
+                cJSON_GetStringValue(cJSON_GetObjectItem(tile, "imageFile")),
+                cJSON_GetStringValue(cJSON_GetObjectItem(tile, "tileId")));
         }
     }
     cJSON_Delete(root);
+}
+
+/* Holt fehlende Katalogbilder aus dem zwischengespeicherten Layout nach, ohne die Ansicht neu zu zeichnen. */
+static void retry_missing_images(char *response, size_t length)
+{
+    if (images_missing <= 0) return;
+    if (!read_cache(LAYOUT_CACHE, response, length)) return;
+    image_retry_round++;
+    image_retrying = true;
+    image_background_loaded = false;
+    fetch_images(response);
+    image_retrying = false;
+    if (image_background_loaded && read_cache(LAYOUT_CACHE, response, length)) {
+        /* Ein Hintergrund lässt sich nur durch erneutes Aufbauen der Seite zeigen. */
+        homedisplay_ui_apply_layout(response);
+        last_seq = -1;
+    }
 }
 
 #define CAM_STAMP_MAX 16
@@ -1199,13 +1306,23 @@ static void pull_manifest(char *response, size_t length)
         return;
     }
     if (strcmp(next_layout, layout_sha) == 0 && homedisplay_ui_layout_ready()) {
+        retry_missing_images(response, length);
         return;
     }
     if (strcmp(next_layout, layout_sha) == 0 && read_cache(LAYOUT_CACHE, response, length)) {
         homedisplay_ui_apply_layout(response);
+        /* Neue Kacheln haben noch keine Werte: den vollständigen Stand erneut anfordern. */
+        last_seq = -1;
         if (homedisplay_ui_layout_ready()) {
+            /* Nach dem Start fehlen evtl. noch Bilder, die zuvor nicht geladen werden konnten. */
+            image_retry_round = -1;
+            images_missing = 1;
+            retry_missing_images(response, length);
             return;
         }
+    }
+    if (strcmp(next_layout, layout_sha) != 0) {
+        ESP_LOGI(TAG, "Layout-Hash gewechselt: %.8s -> %.8s", layout_sha[0] ? layout_sha : "(leer)", next_layout);
     }
     ui_setup("Hole Vorlage vom Server\nLayout wird geladen ...");
     if (request("/v1/layout", "GET", NULL, response, length) != ESP_OK) {
@@ -1214,6 +1331,7 @@ static void pull_manifest(char *response, size_t length)
     }
     ui_setup("Verarbeite Vorlage\nLade Katalogbilder ...");
     esp_task_wdt_reset();
+    image_retry_round = 0;
     fetch_images(response);
     esp_task_wdt_reset();
     /* Ansicht zuerst zeigen – Kameras/Medien kommen danach bzw. über /v1/state,
@@ -1423,14 +1541,22 @@ static void client_task(void *argument)
         char path[64];
         snprintf(path, sizeof(path), "/v1/state?since=%d&visible=%d", last_seq, homedisplay_ui_page_visible() ? 1 : 0);
         esp_err_t error = request(path, "GET", NULL, response, response_length);
+        cJSON *root = NULL;
+        if (error == ESP_OK) {
+            root = cJSON_Parse(response);
+            if (!root) {
+                /* Leere oder kaputte Antwort ist kein Erfolg: sonst bleiben Werte und Diagramme still leer. */
+                ESP_LOGW(TAG, "State-Antwort nicht lesbar (%u Byte): %.80s", (unsigned) strlen(response), response);
+                error = ESP_FAIL;
+            }
+        }
         if (error == ESP_OK) {
             failures = 0;
-            cJSON *root = cJSON_Parse(response);
-            cJSON *seq = root ? cJSON_GetObjectItem(root, "seq") : NULL;
-            bool unchanged = root && cJSON_IsTrue(cJSON_GetObjectItem(root, "unchanged"));
+            cJSON *seq = cJSON_GetObjectItem(root, "seq");
+            bool unchanged = cJSON_IsTrue(cJSON_GetObjectItem(root, "unchanged"));
             if (seq) last_seq = seq->valueint;
-            if (root) remember_time(root);
-            if (root) cJSON_Delete(root);
+            remember_time(root);
+            cJSON_Delete(root);
             sync_cameras_from_state(response);
             sync_media_from_state(response);
             homedisplay_ui_apply_state(response);

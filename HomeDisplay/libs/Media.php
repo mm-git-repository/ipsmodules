@@ -608,8 +608,8 @@ final class HomeDisplayMedia
         if ($columns < 1) {
             $columns = 1;
         }
-        if ($columns > 4) {
-            $columns = 4;
+        if ($columns > 8) {
+            $columns = 8;
         }
         if ($rows < 1) {
             $rows = 1;

@@ -33,9 +33,9 @@ const ICONS = [
 /* Auswahllisten zeigen die Symbole nach dem deutschen Namen sortiert. */
 const ICONS_SORTED = [...ICONS].sort((a, b) => a[1].localeCompare(b[1], "de"));
 const DISPLAY_PROFILES = {
-  "waveshare-5b-1024x600": { label: "Waveshare 5B (1024×600)", width: 1024, height: 600, defaultColumns: 3, defaultRows: 4, maxColumns: 4, maxRows: 6 },
+  "waveshare-5b-1024x600": { label: "Waveshare 5B (1024×600)", width: 1024, height: 600, defaultColumns: 3, defaultRows: 4, maxColumns: 8, maxRows: 6 },
   "firebeetle-epd-400x300": { label: "FireBeetle E-Ink 4,2\" (400×300)", width: 400, height: 300, defaultColumns: 3, defaultRows: 4, maxColumns: 3, maxRows: 4 },
-  "firebeetle-epd-800x480": { label: "FireBeetle E-Ink 7,5\" (800×480)", width: 800, height: 480, defaultColumns: 4, defaultRows: 6, maxColumns: 4, maxRows: 6 }
+  "firebeetle-epd-800x480": { label: "FireBeetle E-Ink 7,5\" (800×480)", width: 800, height: 480, defaultColumns: 4, defaultRows: 6, maxColumns: 8, maxRows: 6 }
 };
 
 function migrateLayoutKinds(layout) {
@@ -294,7 +294,9 @@ function displayMainText(tile, live) {
 
 function panelSwitchHtml(tile, title, on, iconId, showIcon) {
   const align = tile && tile.titleAlign === "center" ? "align-center" : (tile && tile.titleAlign === "right" ? "align-right" : "");
-  const titleHtml = tile && tile.showTitle === false ? "" : `<div class="panel-title ${align}"${cssFont(titlePxOf(tile), tile && tile.titleBold, tile && tile.titleItalic)}>${escapeHtml(title || "")}</div>`;
+  const headingId = tile && titleIconShown(tile) ? titleIconId(tile) : "";
+  const headingIcon = headingId ? `<span class="panel-title-icon">${iconVisual(headingId)}</span>` : "";
+  const titleHtml = tile && tile.showTitle === false ? "" : `<div class="panel-title ${align}"${cssFont(titlePxOf(tile), tile && tile.titleBold, tile && tile.titleItalic)}>${headingIcon}<span class="panel-title-text">${escapeHtml(title || "")}</span></div>`;
   const iconHtml = showIcon
     ? `<button type="button" class="panel-icon-btn" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile && tile.onColor)}</button>`
     : "";
@@ -318,6 +320,13 @@ function titleIconId(tile) {
   if (!tile) return "";
   const plain = tile.kind === "value" && tileInteractionMode(tile) === "";
   if (plain) return tile.titleIcon || "";
+  // Schalter, Szenen und Dimmer zeigen ihr Schalt-Symbol groß; die Überschrift nur das eigens gewählte.
+  const interaction = tile.kind === "value" ? tileInteractionMode(tile) : "";
+  const control = tile.control || "";
+  const ownOnly = tile.kind === "scene"
+    || (tile.kind === "value" && (interaction === "switch" || (tile.iconMode || "") === "toggle"
+      || DIM_CONTROLS.includes(control) || (tile.actionKind === "dim" && control !== "setpoint")));
+  if (ownOnly) return tile.titleIcon || "";
   return tile.titleIcon || tile.icon || "";
 }
 
@@ -1669,9 +1678,7 @@ function buildTileElement(tile, context) {
     if (switchTile) {
       element.innerHTML = panelSwitchHtml(tile, label, on, iconId, showIcon);
     } else {
-      const stateLine = switchTile
-        ? (tile.showStateText ? (on ? "Ein" : "Aus") : "")
-        : (interaction === "" ? "" : (escapeHtml(displayText) + (body ? "" : (tile.unit ? " " + escapeHtml(tile.unit) : ""))));
+      const stateLine = dimmerStateLine(tile, live, interaction, displayText, body);
       let cardBody;
       if (showIcon) {
         cardBody = `<button type="button" class="oh-icon-toggle" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile.onColor)}</button>`;
@@ -1911,22 +1918,38 @@ function renderTile(tile) {
   });
 }
 
+/* Oben rechts wie auf der Anzeige: Prozent und/oder Ein/Aus, kein Messwert. */
+function dimHeaderText(tile, live) {
+  const showPercent = tile.dimShowPercent !== false;
+  const showState = tile.dimShowStateText === true;
+  if (!showPercent && !showState) return "";
+  const pct = dimPercentFromTile(tile, live);
+  const numeric = numericLiveValue(tile, live);
+  const on = numeric != null ? valueMeansOn(tile, numeric) : pct > 0;
+  if (showPercent && showState) return `${pct} %  ${on ? "Ein" : "Aus"}`;
+  if (showPercent) return `${pct} %`;
+  return on ? "Ein" : "Aus";
+}
+
+function dimmerStateLine(tile, live, interaction, displayText, body) {
+  if (interaction === "combo") return escapeHtml(dimHeaderText(tile, live));
+  if (interaction === "" || interaction === "blinds" || interaction === "battery" || interaction === "setpoint") return "";
+  return escapeHtml(displayText) + (body ? "" : (tile.unit ? " " + escapeHtml(tile.unit) : ""));
+}
+
 function dimTrackMarkup(tile, control, live, pct) {
   const showSw = tile.dimShowSwitch !== false && control !== "slider";
   const showBar = tile.dimShowBar !== false;
-  const showValue = tile.dimShowPercent !== false;
   const layout = tile.dimLayout || "horizontal";
   const numeric = numericLiveValue(tile, live);
   const swOn = numeric != null ? valueMeansOn(tile, numeric) : pct > 0;
   const swHtml = showSw ? `<span class="sw${swOn ? " on" : ""}"></span>` : "";
-  const valueHtml = showValue ? `<span class="ctl-value">${pct} %</span>` : "";
-  const stateHtml = tile.dimShowStateText ? `<span class="ctl-value">${swOn ? "Ein" : "Aus"}</span>` : "";
   const trackHtml = showBar ? `<div class="track" data-dim-track><div class="fill" style="width:${pct}%"></div><div class="knob" style="left:${pct}%"></div></div>` : "";
   const offClass = showSw && !swOn ? " dim-off" : "";
   if (layout === "stacked" && showSw && showBar) {
-    return `<div class="ctl dim-ctl layout-stacked${offClass}">${swHtml}<div class="dim-slider-row">${trackHtml}${valueHtml}${stateHtml}</div></div>`;
+    return `<div class="ctl dim-ctl layout-stacked${offClass}">${swHtml}<div class="dim-slider-row">${trackHtml}</div></div>`;
   }
-  return `<div class="ctl dim-ctl${offClass}">${swHtml}${trackHtml}${valueHtml}${stateHtml}</div>`;
+  return `<div class="ctl dim-ctl${offClass}">${swHtml}${trackHtml}</div>`;
 }
 
 function controlMarkup(control, tile, live, demoOn) {
@@ -3528,12 +3551,22 @@ function renderPagesDialog() {
 
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.textContent = "Entfernen";
+    remove.className = "icon-btn danger";
+    remove.setAttribute("aria-label", "Seite entfernen");
+    remove.title = "Seite entfernen";
+    remove.innerHTML = '<span class="mdi">&#xf09e7;</span>';
     remove.disabled = pages.length <= 1;
     remove.addEventListener("click", () => {
       pages.splice(index, 1);
       renderPagesDialog();
     });
+    const rowsButton = document.createElement("button");
+    rowsButton.type = "button";
+    rowsButton.className = "icon-btn";
+    rowsButton.setAttribute("aria-label", "Zeilen");
+    rowsButton.title = "Zeilenhöhen";
+    rowsButton.innerHTML = '<span class="mdi">&#xf04f2;</span>';
+    rowsButton.addEventListener("click", () => openPageRowsDialog(page));
     const lost = pageTileLoss(page);
     const count = (page.tiles || []).length;
     const countText = document.createElement("span");
@@ -3542,8 +3575,8 @@ function renderPagesDialog() {
       ? `${count} Kacheln, ${lost} fallen weg`
       : `${count} ${count === 1 ? "Kachel" : "Kacheln"}`;
     const removeCell = document.createElement("div");
-    removeCell.className = "pf";
-    removeCell.append(countText, remove);
+    removeCell.className = "pf page-actions";
+    removeCell.append(countText, rowsButton, remove);
 
     fields.append(
       pageField("Titel", title),
@@ -3559,7 +3592,7 @@ function renderPagesDialog() {
       heading.className = "page-weights-label";
       heading.textContent = label;
       const grid = document.createElement("div");
-      grid.className = "page-grid";
+      grid.className = "page-grid page-grid-weights";
       weights.forEach((weight, position) => {
         const input = Object.assign(document.createElement("input"), { type: "number", min: 1, max: 3, step: 1, value: weight });
         input.addEventListener("change", () => {
@@ -3573,12 +3606,31 @@ function renderPagesDialog() {
     };
     card.append(
       fields,
-      ...weightRow("Breite je Spalte (1 schmal, 2 normal, 3 breit)", page.columnWeights, "columnWeights", "Spalte"),
-      ...weightRow("Höhe je Zeile (1 flach, 2 normal, 3 hoch)", page.rowWeights, "rowWeights", "Zeile")
+      ...weightRow("Breite je Spalte (1 schmal, 2 normal, 3 breit)", page.columnWeights, "columnWeights", "Spalte")
     );
     list.appendChild(card);
   });
   $("pages-add").disabled = pages.length >= MAX_PAGES;
+}
+
+/* Zeilenhöhen einer Seite in eigenem Popup; der Seiten-Dialog bleibt offen. */
+function openPageRowsDialog(page) {
+  const dialog = $("page-rows-dialog");
+  $("page-rows-title").textContent = page.title || "Seite";
+  const grid = $("page-rows-grid");
+  grid.innerHTML = "";
+  page.rowWeights = normalizeWeights(page.rowWeights, page.rows);
+  page.rowWeights.forEach((weight, position) => {
+    const input = Object.assign(document.createElement("input"), { type: "number", min: 1, max: 3, step: 1, value: weight });
+    input.addEventListener("change", () => {
+      const next = Math.min(3, Math.max(1, Math.round(Number(input.value)) || 2));
+      input.value = next;
+      page.rowWeights[position] = next;
+    });
+    grid.appendChild(pageField(`Zeile ${position + 1}`, input));
+  });
+  dialog.returnValue = "";
+  dialog.showModal();
 }
 
 function restorePagesGeneral() {

@@ -657,8 +657,12 @@ dialog button[value=ok], dialog button[value=publish] { background: var(--accent
 #grid .display-chart .oh-chart-line { stroke-width: 3px; }
 #grid .panel-switch { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; }
 #grid .panel-title { flex: none; font-size: 20px; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#grid .panel-title.align-center { text-align: center; }
-#grid .panel-title.align-right { text-align: right; }
+#grid .panel-title { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 0.25em; }
+#grid .panel-title.align-center { justify-content: center; text-align: center; }
+#grid .panel-title.align-right { justify-content: flex-end; text-align: right; }
+#grid .panel-title-icon { flex: none; display: inline-flex; align-items: center; line-height: 1; }
+#grid .panel-title-icon .mdi { font-size: 1em; line-height: 1; }
+#grid .panel-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #grid .panel-icon { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
 #grid .panel-icon-btn { margin: 0; padding: 0; border: 0; background: transparent; color: inherit; line-height: 1; pointer-events: none; }
 #grid .panel-icon .mdi { font-size: 48px; line-height: 1; }
@@ -689,5 +693,12 @@ table.panels tr.inactive td { color: var(--muted); }
 .pf input[type=color] { padding: 2px; }
 .page-weights-label { font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
 .page-weights { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px 10px; }
+.page-grid.page-grid-weights { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.page-actions { flex-direction: row; align-items: center; gap: 6px; }
+.page-actions .page-count { flex: 1 1 auto; min-width: 0; margin: 0; }
+.page-actions .icon-btn { flex: none; width: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.page-actions .icon-btn .mdi { font-size: 18px; line-height: 1; }
+.page-actions .icon-btn.danger:not(:disabled) { color: #b33a3a; }
+#page-rows-dialog { width: min(560px, 94vw); }
 .page-count { font-size: 12px; margin: 2px 0 0; }
 .page-count.warn { color: #b33a3a; }

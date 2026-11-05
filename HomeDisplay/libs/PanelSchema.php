@@ -44,7 +44,7 @@ final class HomeDisplayPanelSchema
             'height' => 600,
             'defaultColumns' => 3,
             'defaultRows' => 4,
-            'maxColumns' => 4,
+            'maxColumns' => 8,
             'maxRows' => 6,
         ],
         'firebeetle-epd-400x300' => [
@@ -62,7 +62,7 @@ final class HomeDisplayPanelSchema
             'height' => 480,
             'defaultColumns' => 4,
             'defaultRows' => 6,
-            'maxColumns' => 4,
+            'maxColumns' => 8,
             'maxRows' => 6,
         ],
     ];
@@ -179,6 +179,9 @@ final class HomeDisplayPanelSchema
                 throw new InvalidArgumentException('Ungültige Kacheln.');
             }
             $occupied = [];
+            /* Hintergrundbilder belegen keine Zellen: Wert-Kacheln dürfen darüber liegen. */
+            $backdropCells = [];
+            $coverCells = [];
             foreach ($tiles as $tile) {
                 if (!is_array($tile)) {
                     throw new InvalidArgumentException('Ungültige Kachel.');
@@ -208,16 +211,31 @@ final class HomeDisplayPanelSchema
                 if ($col + $colSpan > $columns || $row + $rowSpan > $rows) {
                     throw new InvalidArgumentException('Kachel liegt außerhalb des Rasters.');
                 }
+                $backdrop = $kind === 'image' && !empty($tile['imageBackground']);
                 for ($x = $col; $x < $col + $colSpan; $x++) {
                     for ($y = $row; $y < $row + $rowSpan; $y++) {
                         $key = $pageId . ':' . $x . ':' . $y;
-                        if (isset($occupied[$key])) {
+                        $cells = $backdrop ? $backdropCells : $occupied;
+                        if (isset($cells[$key])) {
                             throw new InvalidArgumentException('Kacheln überlappen sich.');
                         }
-                        $occupied[$key] = true;
+                        if ($backdrop) {
+                            $backdropCells[$key] = true;
+                        } else {
+                            $occupied[$key] = true;
+                            if ($kind !== 'value') {
+                                $coverCells[$key] = true;
+                            }
+                        }
                     }
                 }
                 self::validateKind($tile, $kind, $pageIds, $publish);
+            }
+            /* Nur Wert-Kacheln dürfen auf einem Hintergrundbild liegen, wie im Editor. */
+            foreach ($coverCells as $key => $unused) {
+                if (isset($backdropCells[$key])) {
+                    throw new InvalidArgumentException('Über einem Hintergrundbild sind nur Wert-Kacheln erlaubt.');
+                }
             }
         }
     }
