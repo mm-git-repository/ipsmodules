@@ -41,10 +41,18 @@ static bool show_page_may_yield;
 #define VALUE_RULE_MAX 12
 
 typedef struct {
-    float value;
+    float from;
+    float to;
+    bool has_from;
+    bool has_to;
     char icon[24];
-    uint32_t color;
-    bool has_color;
+    bool after;
+    uint32_t icon_color;
+    uint32_t text_color;
+    uint32_t bg_color;
+    bool has_icon_color;
+    bool has_text_color;
+    bool has_bg_color;
 } value_rule_t;
 static lv_point_t chart_point_pool[CHART_SLOT_MAX][CHART_POINT_MAX];
 static lv_point_t chart_yest_pool[CHART_SLOT_MAX][CHART_POINT_MAX];
@@ -659,31 +667,54 @@ static lv_coord_t text_width_capped(const char *text, const lv_font_t *font, lv_
     return width;
 }
 
+/* Erste passende Zeile gewinnt; ohne Von und Bis gilt eine Zeile immer, auch ohne Messwert. */
 static const value_rule_t *value_rule_match(const tile_view_t *view)
 {
-    if (!view || !view->have_number) return NULL;
+    if (!view) return NULL;
     for (int i = 0; i < view->value_rule_count; i++) {
-        float delta = view->value_rules[i].value - view->live_number;
-        if (delta < 0) delta = -delta;
-        if (delta < 0.0001f) return &view->value_rules[i];
+        const value_rule_t *rule = &view->value_rules[i];
+        if (!rule->has_from && !rule->has_to) return rule;
+        if (!view->have_number) continue;
+        if (rule->has_from && view->live_number < rule->from - 0.0001f) continue;
+        if (rule->has_to && view->live_number > rule->to + 0.0001f) continue;
+        return rule;
     }
     return NULL;
 }
 
-static void apply_value_rule_icon(tile_view_t *view, lv_coord_t text_h)
+static uint32_t value_text_ink(const tile_view_t *view, const value_rule_t *rule)
 {
-    if (!view || !view->icon_label || !view->value_row) return;
+    if (rule && rule->has_text_color) return rule->text_color;
+    return view->own_text ? view->text_color : 0xF4F7FB;
+}
+
+static bool apply_value_rule_icon(tile_view_t *view, lv_coord_t text_h)
+{
+    if (!view || !view->icon_label || !view->value_row) return false;
     const value_rule_t *rule = value_rule_match(view);
-    bool base = view->icon_name[0] && strcmp(view->icon_place, "none") != 0;
-    if (!rule && !base) {
-        lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
-        return;
+    const char *icon = NULL;
+    bool after = false;
+    uint32_t ink = icon_ink(view);
+    if (view->value_rule_count > 0) {
+        if (rule && rule->icon[0]) {
+            icon = rule->icon;
+            after = rule->after;
+            ink = rule->has_icon_color ? rule->icon_color : value_text_ink(view, rule);
+        }
+    } else if (view->icon_name[0] && strcmp(view->icon_place, "none") != 0) {
+        icon = view->icon_name;
+        after = strcmp(view->icon_place, "after") == 0;
     }
-    const char *icon = (rule && rule->icon[0]) ? rule->icon : view->icon_name;
-    uint32_t ink = (rule && rule->has_color) ? rule->color : icon_ink(view);
+    if (!icon) {
+        lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+        return false;
+    }
+    if (after) lv_obj_move_foreground(view->icon_label);
+    else lv_obj_move_background(view->icon_label);
     lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_flex_grow(view->icon_label, 0, 0);
     paint_icon_label(view->icon_label, icon, false, text_h > 36, ink);
+    return true;
 }
 
 /* Überschrift als Icon-vor-Text-Zeile. Zahl und Symbol darunter vertikal mittig. */
@@ -729,9 +760,10 @@ static void layout_value_row(tile_view_t *view)
         lv_obj_move_foreground(view->title_row);
     }
 
-    const value_rule_t *rule = value_rule_match(view);
-    bool want_icon = view->icon_label && ((view->icon_name[0] && strcmp(view->icon_place, "none") != 0) || rule);
-    apply_value_rule_icon(view, text_h);
+    bool want_icon = apply_value_rule_icon(view, text_h);
+    if (view->value_rule_count > 0) {
+        lv_obj_set_style_text_color(view->label, lv_color_hex(value_text_ink(view, value_rule_match(view))), 0);
+    }
 
     lv_coord_t icon_w = want_icon ? text_h + 6 : 0;
     lv_coord_t max_value = inner_w - icon_w;
@@ -2991,16 +3023,37 @@ static void show_page(int index)
             cJSON *rule = NULL;
             cJSON_ArrayForEach(rule, rules) {
                 if (view->value_rule_count >= VALUE_RULE_MAX) break;
-                cJSON *rule_value = cJSON_GetObjectItem(rule, "value");
-                const char *rule_icon = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "icon"));
-                if (!cJSON_IsNumber(rule_value) || !rule_icon || !rule_icon[0]) continue;
+                if (!cJSON_IsObject(rule)) continue;
                 value_rule_t *slot = &view->value_rules[view->value_rule_count++];
-                slot->value = (float) rule_value->valuedouble;
-                snprintf(slot->icon, sizeof(slot->icon), "%s", rule_icon);
-                const char *rule_color = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "color"));
-                if (rule_color && rule_color[0] == '#') {
-                    slot->color = parse_hex_color(rule_color, 0xF4F7FB);
-                    slot->has_color = true;
+                memset(slot, 0, sizeof(*slot));
+                cJSON *from = cJSON_GetObjectItem(rule, "from");
+                cJSON *to = cJSON_GetObjectItem(rule, "to");
+                if (cJSON_IsNumber(from)) {
+                    slot->from = (float) from->valuedouble;
+                    slot->has_from = true;
+                }
+                if (cJSON_IsNumber(to)) {
+                    slot->to = (float) to->valuedouble;
+                    slot->has_to = true;
+                }
+                const char *rule_icon = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "icon"));
+                if (rule_icon) snprintf(slot->icon, sizeof(slot->icon), "%s", rule_icon);
+                const char *rule_place = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "place"));
+                slot->after = rule_place && strcmp(rule_place, "after") == 0;
+                const char *icon_color = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "iconColor"));
+                if (icon_color && icon_color[0] == '#') {
+                    slot->icon_color = parse_hex_color(icon_color, 0xF4F7FB);
+                    slot->has_icon_color = true;
+                }
+                const char *text_ink = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "textColor"));
+                if (text_ink && text_ink[0] == '#') {
+                    slot->text_color = parse_hex_color(text_ink, 0xF4F7FB);
+                    slot->has_text_color = true;
+                }
+                const char *bg_ink = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "bgColor"));
+                if (bg_ink && bg_ink[0] == '#') {
+                    slot->bg_color = parse_hex_color(bg_ink, view->base_bg);
+                    slot->has_bg_color = true;
                 }
             }
         }
@@ -3392,16 +3445,9 @@ static void show_page(int index)
             lv_obj_set_flex_flow(line, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(line, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
             lv_obj_set_style_pad_column(line, 6, 0);
-            bool after = strcmp(view->icon_place, "after") == 0 && icon && icon[0];
             bool icon_slot = (icon && icon[0] && strcmp(view->icon_place, "none") != 0) || view->value_rule_count > 0;
-            if (icon_slot && !after) {
-                make_icon_label(line, view, (icon && icon[0]) ? icon : "energy", &view->icon_label, false);
-                if (!icon || !icon[0] || strcmp(view->icon_place, "none") == 0) {
-                    lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
-                }
-            }
+            if (icon_slot) make_icon_label(line, view, (icon && icon[0]) ? icon : "energy", &view->icon_label, false);
             lv_obj_set_parent(view->label, line);
-            if (icon_slot && after) make_icon_label(line, view, icon, &view->icon_label, false);
             if (view->show_age) {
                 view->age_label = lv_label_create(view->value_box);
                 lv_label_set_text(view->age_label, "");
@@ -4779,7 +4825,13 @@ static void apply_state_body(cJSON *root)
                 lv_obj_set_style_bg_color(tiles[index].card,
                     lv_color_hex(on ? tile_on_color(&tiles[index]) : tiles[index].base_bg), 0);
             }
-            if (!tiles[index].bg_clear && !tiles[index].has_action && tiles[index].has_threshold && tiles[index].card) {
+            const value_rule_t *rule = tiles[index].value_row ? value_rule_match(&tiles[index]) : NULL;
+            if (rule && rule->has_bg_color && tiles[index].card) {
+                lv_obj_set_style_bg_color(tiles[index].card, lv_color_hex(rule->bg_color), 0);
+                lv_obj_set_style_bg_opa(tiles[index].card, LV_OPA_COVER, 0);
+            } else if (tiles[index].value_rule_count > 0 && tiles[index].card && !tiles[index].bg_clear) {
+                lv_obj_set_style_bg_color(tiles[index].card, lv_color_hex(tiles[index].base_bg), 0);
+            } else if (!tiles[index].bg_clear && !tiles[index].has_action && tiles[index].has_threshold && tiles[index].card) {
                 uint32_t bg = tiles[index].base_bg;
                 if (number >= tiles[index].threshold) {
                     if (strcmp(tiles[index].status_color, "ok") == 0) bg = 0x1E6B3A;
@@ -4788,7 +4840,7 @@ static void apply_state_body(cJSON *root)
                 }
                 lv_obj_set_style_bg_color(tiles[index].card, lv_color_hex(bg), 0);
             }
-            if (tiles[index].bg_clear && tiles[index].card) {
+            if (tiles[index].bg_clear && tiles[index].card && !(rule && rule->has_bg_color)) {
                 lv_obj_set_style_bg_opa(tiles[index].card, LV_OPA_TRANSP, 0);
             }
             tiles[index].applying = false;

@@ -384,10 +384,46 @@ function normalizeTile(tile) {
       if (!tile.control || tile.control === "switch") tile.control = "switch";
       if (tile.showIcon === undefined) tile.showIcon = true;
     }
+    if (tileInteractionMode(tile) === "" && (tile.displaySource || "variable") !== "text") migrateValueRules(tile);
   }
   if (tile.kind === "scene" && !Array.isArray(tile.sceneSteps) && tile.variableId) {
     tile.sceneSteps = [{ variableId: tile.variableId, value: true }];
   }
+}
+
+const STATUS_BG = { ok: "#1e6b3a", warn: "#8a6a12", alarm: "#8a2424" };
+
+function migrateValueRules(tile) {
+  const rules = [];
+  for (const rule of Array.isArray(tile.valueRules) ? tile.valueRules : []) {
+    if (!rule || typeof rule !== "object") continue;
+    if (rule.value !== undefined && rule.from === undefined && rule.to === undefined) {
+      const value = Number(rule.value);
+      const item = Number.isFinite(value) ? { from: value, to: value } : {};
+      if (rule.icon) item.icon = rule.icon;
+      if (rule.color) item.iconColor = rule.color;
+      if (tile.iconPlace === "after") item.place = "after";
+      rules.push(item);
+    } else {
+      rules.push(rule);
+    }
+  }
+  const place = tile.iconPlace === "after" ? "after" : "before";
+  const icon = tile.iconPlace === "none" ? "" : (tile.icon || "");
+  const threshold = Number(tile.threshold);
+  if (tile.threshold != null && tile.threshold !== "" && Number.isFinite(threshold) && STATUS_BG[tile.color]) {
+    const item = { from: threshold, bgColor: STATUS_BG[tile.color] };
+    if (icon) item.icon = icon;
+    if (icon && place === "after") item.place = "after";
+    rules.push(item);
+  }
+  if (icon) rules.push(place === "after" ? { icon, place } : { icon });
+  delete tile.threshold;
+  delete tile.color;
+  delete tile.icon;
+  delete tile.iconPlace;
+  if (rules.length) tile.valueRules = rules.slice(0, 12);
+  else delete tile.valueRules;
 }
 
 function applyTileChrome(element, tile) {
@@ -707,10 +743,10 @@ function syncInteractionPropertyPanels() {
   if (!tile || tile.kind !== "value") return;
   const mode = interaction.value;
   const plain = mode === "" || mode === "battery";
-  $("p-icon-static")?.classList.toggle("hidden", mode === "switch" || mode === "battery" || mode === "combo");
+  $("p-icon-static")?.classList.toggle("hidden", mode === "" || mode === "switch" || mode === "battery" || mode === "combo");
   $("p-switch-wrap")?.classList.toggle("hidden", mode !== "switch");
   $("p-icon-toggle")?.classList.toggle("hidden", mode !== "switch" || !$("p-show-icon")?.checked);
-  $("p-value-style")?.classList.toggle("hidden", mode !== "");
+  $("p-value-rules")?.classList.toggle("hidden", mode !== "" || ($("p-displaysource")?.value || "variable") === "text");
   $("p-battery-wrap")?.classList.toggle("hidden", mode !== "battery");
   const hintEl = $("p-control-hint");
   if (hintEl) {
@@ -722,7 +758,6 @@ function syncInteractionPropertyPanels() {
   const actionLabel = $("p-action")?.closest("label");
   if (actionLabel) actionLabel.classList.toggle("hidden", mode === "" || mode === "battery");
   $("p-confirm")?.closest("label")?.classList.toggle("hidden", mode === "");
-  if ($("p-value-icon")) $("p-value-icon").disabled = ($("p-icon-place")?.value || "") === "none";
   if (DIM_CONTROLS.includes(mode)) {
     const variable = variableById(tile.variableId);
     if (variable && variable.action && $("p-action")) $("p-action").checked = true;
@@ -750,11 +785,10 @@ function syncDisplaySourcePanels() {
   $("p-variable-wrap")?.classList.toggle("hidden", text);
   $("p-display-text-wrap")?.classList.toggle("hidden", !text);
   $("p-decimals")?.closest("label")?.classList.toggle("hidden", text);
-  $("p-value-rules")?.classList.toggle("hidden", !tile || tile.kind !== "value" || text);
+  $("p-value-rules")?.classList.toggle("hidden", !tile || tile.kind !== "value" || text || ($("p-interaction")?.value || "") !== "");
   if (!text) return;
   $("p-interaction")?.closest("label")?.classList.add("hidden");
   $("p-switch-wrap")?.classList.add("hidden");
-  $("p-value-style")?.classList.add("hidden");
   $("p-setpoint-wrap")?.classList.add("hidden");
   $("p-dim-wrap")?.classList.add("hidden");
   $("p-battery-wrap")?.classList.add("hidden");
@@ -764,32 +798,82 @@ function syncDisplaySourcePanels() {
   $("p-level-wrap")?.classList.add("hidden");
 }
 
+function ruleBound(raw) {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
 function matchingValueRule(tile, live) {
   if (!tile || (tile.displaySource || "variable") === "text" || !Array.isArray(tile.valueRules)) return null;
   let number = null;
   if (live && typeof live.value === "number" && Number.isFinite(live.value)) number = live.value;
   else if (live && typeof live.value === "boolean") number = live.value ? 1 : 0;
-  if (number === null) return null;
   for (const rule of tile.valueRules) {
-    const value = Number(rule.value);
-    if (rule.icon && Number.isFinite(value) && Math.abs(value - number) < 0.0001) return rule;
+    const from = ruleBound(rule.from);
+    const to = ruleBound(rule.to);
+    if (from === null && to === null) return rule;
+    if (number === null) continue;
+    if ((from === null || number >= from) && (to === null || number <= to)) return rule;
   }
   return null;
 }
 
-function collectValueRules() {
+function ruleColorDefaults(tile) {
+  return {
+    icon: (tile?.textColor || DEFAULT_INK).toLowerCase(),
+    text: (tile?.textColor || DEFAULT_INK).toLowerCase(),
+    bg: (tile?.bgColor || DEFAULT_BG).toLowerCase()
+  };
+}
+
+function valueRuleRow(rule, tile) {
+  const defaults = ruleColorDefaults(tile);
+  const row = document.createElement("div");
+  row.className = "rule-row";
+  row.innerHTML = `<input data-rule-from type="number" step="any" placeholder="offen">`
+    + `<input data-rule-to type="number" step="any" placeholder="offen">`
+    + `<select data-rule-icon></select>`
+    + `<select data-rule-place><option value="before">Links</option><option value="after">Rechts</option></select>`
+    + `<input data-rule-icon-color type="color" title="Symbolfarbe">`
+    + `<input data-rule-text-color type="color" title="Textfarbe">`
+    + `<input data-rule-bg-color type="color" title="Kachel-Farbe">`
+    + `<button type="button" data-rule-remove title="Zeile entfernen">×</button>`;
+  fillIconSelect(row.querySelector("[data-rule-icon]"), true);
+  const from = ruleBound(rule?.from);
+  const to = ruleBound(rule?.to);
+  row.querySelector("[data-rule-from]").value = from === null ? "" : String(from);
+  row.querySelector("[data-rule-to]").value = to === null ? "" : String(to);
+  row.querySelector("[data-rule-icon]").value = rule?.icon || "";
+  row.querySelector("[data-rule-place]").value = rule?.place === "after" ? "after" : "before";
+  row.querySelector("[data-rule-icon-color]").value = rule?.iconColor || defaults.icon;
+  row.querySelector("[data-rule-text-color]").value = rule?.textColor || defaults.text;
+  row.querySelector("[data-rule-bg-color]").value = rule?.bgColor || defaults.bg;
+  return row;
+}
+
+function collectValueRules(tile) {
   const rows = [];
   const host = $("p-value-rules-rows");
   if (!host) return rows;
+  const defaults = ruleColorDefaults(tile);
   for (const row of host.querySelectorAll(".rule-row")) {
-    const raw = row.querySelector("[data-rule-value]")?.value ?? "";
+    const item = {};
+    const from = ruleBound(row.querySelector("[data-rule-from]")?.value.trim());
+    const to = ruleBound(row.querySelector("[data-rule-to]")?.value.trim());
+    if (from !== null) item.from = from;
+    if (to !== null) item.to = to;
     const icon = row.querySelector("[data-rule-icon]")?.value || "";
-    const color = (row.querySelector("[data-rule-color]")?.value || "#f4f7fb").toLowerCase();
-    if (raw.trim() === "" && !icon) continue;
-    const value = raw.trim() === "" ? 0 : Number(raw);
-    if (!Number.isFinite(value)) continue;
-    const item = { value, icon };
-    if (/^#[0-9a-f]{6}$/.test(color)) item.color = color;
+    if (icon) {
+      item.icon = icon;
+      if (row.querySelector("[data-rule-place]")?.value === "after") item.place = "after";
+    }
+    const iconColor = chosenColor(row.querySelector("[data-rule-icon-color]"), defaults.icon);
+    const textColor = chosenColor(row.querySelector("[data-rule-text-color]"), defaults.text);
+    const bgColor = chosenColor(row.querySelector("[data-rule-bg-color]"), defaults.bg);
+    if (icon && iconColor) item.iconColor = iconColor;
+    if (textColor) item.textColor = textColor;
+    if (bgColor) item.bgColor = bgColor;
     rows.push(item);
     if (rows.length >= 12) break;
   }
@@ -801,17 +885,7 @@ function renderValueRules(tile) {
   if (!host) return;
   host.innerHTML = "";
   const rules = Array.isArray(tile?.valueRules) ? tile.valueRules.slice(0, 12) : [];
-  for (const rule of rules) {
-    const row = document.createElement("div");
-    row.className = "rule-row";
-    row.innerHTML = `<input data-rule-value type="number" step="any"><select data-rule-icon></select><input data-rule-color type="color" value="#f4f7fb"><button type="button" data-rule-remove>Entfernen</button>`;
-    const select = row.querySelector("[data-rule-icon]");
-    fillIconSelect(select, true);
-    row.querySelector("[data-rule-value]").value = rule.value != null ? String(rule.value) : "0";
-    select.value = rule.icon || "";
-    if (rule.color) row.querySelector("[data-rule-color]").value = rule.color;
-    host.appendChild(row);
-  }
+  for (const rule of rules) host.appendChild(valueRuleRow(rule, tile));
 }
 
 const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text"];
@@ -1835,21 +1909,27 @@ function buildTileElement(tile, context) {
         const readout = textSource || !(live && live.text)
           ? `${tile.prefix ? tile.prefix + " " : ""}${core}${tile.unit ? " " + tile.unit : ""}`
           : core;
+        const rule = textSource ? null : matchingValueRule(tile, live);
+        const useRules = !textSource && Array.isArray(tile.valueRules) && tile.valueRules.length > 0;
+        const textInk = (rule && rule.textColor) || tile.textColor || "";
         const bits = [];
-        if (tile.textColor) bits.push(`color:${tile.textColor}`);
+        if (textInk) bits.push(`color:${textInk}`);
         if (tile.textItalic) bits.push("font-style:italic");
         if (tile.textUnderline) bits.push("text-decoration:underline");
         if (textPxOf(tile)) bits.push(`font-size:${textPxOf(tile)}px`);
         if (tile.textBold) bits.push("font-weight:700");
         const readoutStyle = bits.length ? ` style="${bits.join(";")}"` : "";
-        const rule = textSource ? null : matchingValueRule(tile, live);
-        let place = tile.iconPlace === "after" ? "after" : (tile.iconPlace === "none" || !iconId ? "none" : "before");
-        let shownIcon = iconId;
-        if (rule && rule.icon) {
-          shownIcon = rule.icon;
-          if (place === "none") place = "before";
+        let place;
+        let shownIcon;
+        if (useRules) {
+          shownIcon = (rule && rule.icon) || "";
+          place = !shownIcon ? "none" : (rule.place === "after" ? "after" : "before");
+        } else {
+          shownIcon = iconId;
+          place = tile.iconPlace === "after" ? "after" : (tile.iconPlace === "none" || !iconId ? "none" : "before");
         }
-        const iconColor = (rule && rule.color) || tile.textColor || "";
+        if (rule && rule.bgColor) element.style.setProperty("background", rule.bgColor, "important");
+        const iconColor = (rule && (rule.iconColor || rule.textColor)) || tile.textColor || "";
         const iconStyle = iconColor ? ` style="color:${iconColor}"` : "";
         const headingId = titleIconShown(tile) ? titleIconId(tile) : "";
         const headingIcon = headingId ? `<span class="value-title-icon">${iconVisual(headingId)}</span>` : "";
@@ -3034,11 +3114,6 @@ function renderProperties() {
   if (tile.kind === "value") {
     fillIconSelect($("p-value-icon"), true);
     $("p-value-icon").value = tile.icon || "";
-    if ($("p-icon-place")) {
-      const place = tile.iconPlace === "after" || tile.iconPlace === "none" ? tile.iconPlace : "before";
-      $("p-icon-place").value = place;
-      if ($("p-value-icon")) $("p-value-icon").disabled = place === "none";
-    }
     fillIconSelect($("p-iconon"));
     fillIconSelect($("p-iconoff"));
     if ($("p-iconon")) $("p-iconon").value = tile.iconOn || "lightOn";
@@ -3056,8 +3131,6 @@ function renderProperties() {
     syncInteractionPropertyPanels();
     if ($("p-dim-show-percent")) $("p-dim-show-percent").checked = tile.dimShowPercent !== false;
     if ($("p-dim-layout")) $("p-dim-layout").value = tile.dimLayout || "horizontal";
-    if ($("p-threshold")) $("p-threshold").value = tile.threshold != null ? String(tile.threshold) : "";
-    if ($("p-status-color")) $("p-status-color").value = tile.color || "neutral";
     if ($("p-dim-tap")) {
       const tap = tile.control === "combo" ? (tile.dimTap || "popup") : (tile.dimTapTrack || "popup");
       if (tap === true || tap === "on") $("p-dim-tap").value = "on";
@@ -3366,27 +3439,19 @@ function applyProperties() {
       if ($("p-show-state-text")?.checked) tile.showStateText = true;
       delete tile.icon;
       delete tile.iconPlace;
+    } else if (mode === "") {
+      delete tile.icon;
+      delete tile.iconPlace;
     } else if (mode !== "battery" && mode !== "combo") {
       const iconVal = $("p-value-icon") ? $("p-value-icon").value : "";
       if (iconVal) tile.icon = iconVal;
       else delete tile.icon;
-      if (mode === "") {
-        const place = $("p-icon-place") ? $("p-icon-place").value : "before";
-        tile.iconPlace = place === "after" || place === "none" ? place : "before";
-      } else {
-        delete tile.iconPlace;
-      }
+      delete tile.iconPlace;
     } else {
       delete tile.iconPlace;
     }
-    const thresholdRaw = ($("p-threshold")?.value || "").trim();
-    if (mode === "" && thresholdRaw !== "" && !Number.isNaN(Number(thresholdRaw))) {
-      tile.threshold = Number(thresholdRaw);
-      tile.color = $("p-status-color") ? $("p-status-color").value : "neutral";
-    } else if (mode === "") {
-      delete tile.threshold;
-      delete tile.color;
-    }
+    delete tile.threshold;
+    delete tile.color;
     if (mode === "combo") {
       tile.control = "combo";
       delete tile.icon;
@@ -3468,7 +3533,7 @@ function applyProperties() {
       if (!DIM_CONTROLS.includes(mode)) delete tile.actionKind;
       tile.confirm = false;
     }
-      const rules = collectValueRules();
+      const rules = mode === "" ? collectValueRules(tile) : [];
       if (rules.length) tile.valueRules = rules;
       else delete tile.valueRules;
     }
@@ -3651,7 +3716,7 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-title-icon", "p-title-align", "p-icon-place", "p-bg-color", "p-bg-transparent", "p-own-on", "p-on-color", "p-group", "p-snap", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-icon-colors", "p-icon-off-color", "p-icon-on-color", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-icon-colors", "p-scene-icon-off-color", "p-scene-icon-on-color", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-image-icon-id", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-title-icon", "p-title-align", "p-bg-color", "p-bg-transparent", "p-own-on", "p-on-color", "p-group", "p-snap", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-icon-colors", "p-icon-off-color", "p-icon-on-color", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-icon-colors", "p-scene-icon-off-color", "p-scene-icon-on-color", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-image-icon-id", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
@@ -3681,11 +3746,7 @@ if (valueRuleRows) {
 bindClick("p-value-rules-add", () => {
   const host = $("p-value-rules-rows");
   if (!host || host.querySelectorAll(".rule-row").length >= 12) return;
-  const row = document.createElement("div");
-  row.className = "rule-row";
-  row.innerHTML = `<input data-rule-value type="number" step="any" value="0"><select data-rule-icon></select><input data-rule-color type="color" value="#f4f7fb"><button type="button" data-rule-remove>Entfernen</button>`;
-  fillIconSelect(row.querySelector("[data-rule-icon]"), true);
-  host.appendChild(row);
+  host.appendChild(valueRuleRow({}, selectedTile()));
   applyProperties();
 });
 if ($("p-camerasource")) {

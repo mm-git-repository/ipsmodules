@@ -304,24 +304,15 @@
             </div>
             <label><input id="p-show-state-text" type="checkbox"> Text Ein/Aus anzeigen</label>
           </div>
-          <div id="p-value-style">
-            <div class="row">
-              <label>Schwellwert <input id="p-threshold" placeholder="leer = aus"></label>
-              <label>Farbe ab Schwellwert
-                <select id="p-status-color">
-                  <option value="neutral">Neutral</option>
-                  <option value="ok">Grün</option>
-                  <option value="warn">Gelb</option>
-                  <option value="alarm">Rot</option>
-                </select>
-              </label>
+          <fieldset id="p-value-rules" class="font-box">
+            <legend>Werte</legend>
+            <div class="rule-head">
+              <span>Von</span><span>Bis</span><span>Symbol</span><span>Position</span><span>Symbol</span><span>Text</span><span>Kachel</span><span></span>
             </div>
-          </div>
-          <div id="p-value-rules">
-            <label>Werte</label>
             <div id="p-value-rules-rows"></div>
+            <p class="hint">Leeres Von oder Bis gilt als offen. Die erste passende Zeile gewinnt, eine Zeile ohne Von und Bis gilt immer.</p>
             <button type="button" id="p-value-rules-add">Zeile hinzufügen</button>
-          </div>
+          </fieldset>
           <div id="p-setpoint-wrap" class="hidden">
             <label>Sollwert-Variable <span class="pick-row"><input id="p-setpoint-var" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="setpoint">Auswählen</button></span></label>
             <label>Schritt <input id="p-setpoint-step" type="number" step="0.1" value="0.5"></label>
@@ -329,13 +320,6 @@
           <div class="row" id="p-icon-static">
             <label>Symbol
               <select id="p-value-icon"></select>
-            </label>
-            <label>Position
-              <select id="p-icon-place">
-                <option value="before">Vor dem Text</option>
-                <option value="after">Nach dem Text</option>
-                <option value="none">Kein Icon</option>
-              </select>
             </label>
           </div>
           <div data-for="value" id="p-battery-wrap" class="hidden">

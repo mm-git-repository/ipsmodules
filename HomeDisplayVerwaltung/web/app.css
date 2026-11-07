@@ -448,10 +448,17 @@ label.small { font-size: 12px; color: var(--muted); }
   line-height: 1;
 }
 .tile.value .value-badge-title .value-title-icon .mdi { font-size: 1em; line-height: 1; }
-.rule-row { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
-.rule-row input[type="number"] { width: 72px; }
-.rule-row select { flex: 1; min-width: 0; }
-.rule-row input[type="color"] { width: 42px; padding: 0; }
+.rule-head, .rule-row {
+  display: grid;
+  grid-template-columns: 72px 72px minmax(0, 1fr) 84px 42px 42px 42px 30px;
+  gap: 6px;
+  align-items: center;
+}
+.rule-head { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.rule-row { margin: 4px 0; }
+.rule-row input, .rule-row select { width: 100%; min-width: 0; margin: 0; padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px; }
+.rule-row input[type="color"] { height: 32px; padding: 2px; }
+.rule-row button { height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: white; }
 .tile.value .value-badge-body {
   flex: 1 1 auto;
   min-height: 0;

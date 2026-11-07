@@ -583,19 +583,36 @@ final class HomeDisplayPanelSchema
                     if ($public['displaySource'] !== 'text' && is_array($tile['valueRules'] ?? null)) {
                         $rules = [];
                         foreach (array_slice($tile['valueRules'], 0, 12) as $rule) {
-                            if (!is_array($rule) || !isset($rule['value']) || !is_numeric($rule['value'])) {
+                            if (!is_array($rule)) {
                                 continue;
+                            }
+                            if (isset($rule['value']) && is_numeric($rule['value']) && !isset($rule['from']) && !isset($rule['to'])) {
+                                $rule['from'] = $rule['value'];
+                                $rule['to'] = $rule['value'];
+                                if (!isset($rule['iconColor']) && isset($rule['color'])) {
+                                    $rule['iconColor'] = $rule['color'];
+                                }
+                            }
+                            $item = [];
+                            foreach (['from', 'to'] as $bound) {
+                                if (isset($rule[$bound]) && is_numeric($rule[$bound])) {
+                                    $item[$bound] = (float) $rule[$bound];
+                                }
                             }
                             $ruleIcon = (string) ($rule['icon'] ?? '');
-                            if ($ruleIcon === '' || !in_array($ruleIcon, self::ICONS, true)) {
-                                continue;
+                            if ($ruleIcon !== '' && in_array($ruleIcon, self::ICONS, true)) {
+                                $item['icon'] = $ruleIcon;
+                                if (($rule['place'] ?? '') === 'after') {
+                                    $item['place'] = 'after';
+                                }
                             }
-                            $item = ['value' => (float) $rule['value'], 'icon' => $ruleIcon];
-                            $ruleColor = strtolower(trim((string) ($rule['color'] ?? '')));
-                            if (preg_match('/^#[0-9a-f]{6}$/', $ruleColor)) {
-                                $item['color'] = $ruleColor;
+                            foreach (['iconColor', 'textColor', 'bgColor'] as $key) {
+                                $ruleColor = strtolower(trim((string) ($rule[$key] ?? '')));
+                                if (preg_match('/^#[0-9a-f]{6}$/', $ruleColor)) {
+                                    $item[$key] = $ruleColor;
+                                }
                             }
-                            $rules[] = $item;
+                            $rules[] = (object) $item;
                         }
                         if ($rules !== []) {
                             $public['valueRules'] = $rules;
