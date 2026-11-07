@@ -1460,8 +1460,6 @@ static bool raster_fits_display(const char *file, size_t max_bytes, int *width, 
     return true;
 }
 
-#define IMAGE_SAFE_PX 6
-
 static void contain_size(int src_w, int src_h, int box_w, int box_h, int *out_w, int *out_h)
 {
     if (src_w < 1) src_w = 1;
@@ -1502,55 +1500,43 @@ static void put_alpha_px(uint8_t *dst, lv_color_t color, uint8_t alpha)
     dst[2] = alpha;
 }
 
-/* PNG mit Alpha in PSRAM dekodieren und auf die Zielfläche einpassen. Der volle Puffer wird danach freigegeben. */
-static bool decode_png_fit(tile_view_t *view, const uint8_t *data, size_t length, int box_w, int box_h,
-                           uint32_t flat_bg, int *full_w, int *full_h, int *width, int *height, bool *alpha)
+/* PNG nach RGB565 in den PSRAM. Der volle RGB-Puffer von lodepng wird danach freigegeben. */
+static uint16_t *decode_png_cover(const uint8_t *data, size_t length, int box_w, int box_h,
+                                  int *full_w, int *full_h, int *width, int *height)
 {
-    unsigned char *rgba = NULL;
+    unsigned char *rgb = NULL;
     unsigned w = 0;
     unsigned h = 0;
-    unsigned error = lodepng_decode32(&rgba, &w, &h, data, length);
-    if (error || !rgba || w == 0 || h == 0) {
-        if (rgba) lv_mem_free(rgba);
+    unsigned error = lodepng_decode24(&rgb, &w, &h, data, length);
+    if (error || !rgb || w == 0 || h == 0) {
+        if (rgb) lv_mem_free(rgb);
         ESP_LOGW(TAG_UI, "PNG-Fehler %u", error);
-        return false;
+        return NULL;
     }
     ui_wdt_kick();
-    int out_w = 1;
-    int out_h = 1;
-    contain_size((int) w, (int) h, box_w, box_h, &out_w, &out_h);
-    bool keep_alpha = true;
-    size_t bytes = (size_t) out_w * (size_t) out_h * 3u;
-    if (!image_bytes_fit(view, bytes)) {
-        keep_alpha = false;
-        bytes = (size_t) out_w * (size_t) out_h * 2u;
-        if (!image_bytes_fit(view, bytes)) {
-            lv_mem_free(rgba);
-            return false;
+    if (box_w < 1) box_w = (int) w;
+    if (box_h < 1) box_h = (int) h;
+    int step = 1;
+    while ((int) w / (step + 1) >= box_w && (int) h / (step + 1) >= box_h) step++;
+    int out_w = ((int) w + step - 1) / step;
+    int out_h = ((int) h + step - 1) / step;
+    uint16_t *px = heap_caps_malloc((size_t) out_w * (size_t) out_h * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (px) {
+        for (int y = 0; y < out_h; y++) {
+            const unsigned char *line = rgb + (size_t) (y * step) * w * 3u;
+            for (int x = 0; x < out_w; x++) {
+                const unsigned char *p = line + (size_t) (x * step) * 3u;
+                px[(size_t) y * out_w + x] = lv_color_make(p[0], p[1], p[2]).full;
+            }
+            if ((y & 31) == 0) ui_wdt_kick();
         }
     }
-    lv_color_t background = lv_color_hex(flat_bg);
-    for (int y = 0; y < out_h; y++) {
-        int sy = (int) ((long) y * (long) h / out_h);
-        if (sy >= (int) h) sy = (int) h - 1;
-        const unsigned char *line = rgba + (size_t) sy * (size_t) w * 4u;
-        for (int x = 0; x < out_w; x++) {
-            int sx = (int) ((long) x * (long) w / out_w);
-            if (sx >= (int) w) sx = (int) w - 1;
-            const unsigned char *p = line + (size_t) sx * 4u;
-            lv_color_t ink = lv_color_mix(lv_color_make(p[0], p[1], p[2]), background, p[3]);
-            if (keep_alpha) put_alpha_px(view->image_px + ((size_t) y * (size_t) out_w + (size_t) x) * 3u, lv_color_make(p[0], p[1], p[2]), p[3]);
-            else put_color_px(view->image_px + ((size_t) y * (size_t) out_w + (size_t) x) * 2u, ink);
-        }
-        if ((y & 31) == 0) ui_wdt_kick();
-    }
-    lv_mem_free(rgba);
+    lv_mem_free(rgb);
     *full_w = (int) w;
     *full_h = (int) h;
     *width = out_w;
     *height = out_h;
-    *alpha = keep_alpha;
-    return true;
+    return px;
 }
 
 static void publish_fit_image(tile_view_t *view, int out_w, int out_h, bool alpha)
@@ -1570,7 +1556,7 @@ static void publish_fit_image(tile_view_t *view, int out_w, int out_h, bool alph
     lv_obj_center(view->image_img);
 }
 
-/* Bildkacheln dekodieren JPEG und PNG einmal und passen das ganze Bild in die Fläche ein.
+/* Bildkacheln dekodieren JPEG und PNG einmal und füllen die Kachel randlos. Überschuss wird beschnitten.
  * LVGL würde sonst ein großes Bild bei jedem Neuzeichnen dekodieren und zoomen; das bremst Anzeige und Touch. */
 static bool show_image_fit(tile_view_t *view, const char *file, int box_w, int box_h)
 {
@@ -1602,71 +1588,88 @@ static bool show_image_fit(tile_view_t *view, const char *file, int box_w, int b
     fclose(fp);
     int full_w = 0;
     int full_h = 0;
+    int width = 0;
+    int height = 0;
+    uint16_t *decoded = NULL;
     if (is_png) {
-        int width = 0;
-        int height = 0;
-        bool alpha = false;
         ui_wdt_kick();
-        bool ok = decode_png_fit(view, data, got, box_w, box_h, view->base_bg, &full_w, &full_h, &width, &height, &alpha);
+        decoded = decode_png_cover(data, got, box_w, box_h, &full_w, &full_h, &width, &height);
         heap_caps_free(data);
         ui_wdt_kick();
-        if (!ok) {
+        if (!decoded) {
             ESP_LOGW(TAG_UI, "Bild %s verworfen (PNG nicht lesbar oder kein Speicher)", file);
             return true;
         }
-        publish_fit_image(view, width, height, alpha);
-        ESP_LOGI(TAG_UI, "Bild %s auf Kachel %dx%d eingepasst (Quelle %dx%d)", file, width, height, full_w, full_h);
-        return true;
-    }
-    int scale = 0;
-    int result = homedisplay_jpeg_probe(data, got, SIZE_MAX, &full_w, &full_h, &scale);
-    if (result != 0) {
+    } else {
+        int scale = 0;
+        int result = homedisplay_jpeg_probe(data, got, SIZE_MAX, &full_w, &full_h, &scale);
+        if (result != 0) {
+            heap_caps_free(data);
+            ESP_LOGW(TAG_UI, "Bild %s verworfen (JPEG-Fehler %d, nur Baseline-JPEG)", file, result);
+            return true;
+        }
+        int want_w = box_w < 1 ? full_w : box_w;
+        int want_h = box_h < 1 ? full_h : box_h;
+        scale = 0;
+        while (scale < 3 && (((full_w - 1) >> (scale + 1)) + 1) >= want_w && (((full_h - 1) >> (scale + 1)) + 1) >= want_h) scale++;
+        while (scale < 3 && (size_t) (((full_w - 1) >> scale) + 1) * (size_t) (((full_h - 1) >> scale) + 1) > CAMERA_MAX_PX * 2) scale++;
+        width = ((full_w - 1) >> scale) + 1;
+        height = ((full_h - 1) >> scale) + 1;
+        decoded = heap_caps_malloc((size_t) width * (size_t) height * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!decoded) {
+            heap_caps_free(data);
+            ESP_LOGW(TAG_UI, "Bild %s verworfen (kein Speicher für %dx%d)", file, width, height);
+            return true;
+        }
+        ui_wdt_kick();
+        result = homedisplay_jpeg_decode(data, got, scale, decoded, width, height);
         heap_caps_free(data);
-        ESP_LOGW(TAG_UI, "Bild %s verworfen (JPEG-Fehler %d, nur Baseline-JPEG)", file, result);
-        return true;
+        ui_wdt_kick();
+        if (result != 0) {
+            heap_caps_free(decoded);
+            ESP_LOGW(TAG_UI, "Bild %s verworfen (Dekodierfehler %d)", file, result);
+            return true;
+        }
     }
-    int out_w = 1;
-    int out_h = 1;
-    contain_size(full_w, full_h, box_w, box_h, &out_w, &out_h);
-    scale = 0;
-    while (scale < 3 && (((full_w - 1) >> (scale + 1)) + 1) >= out_w && (((full_h - 1) >> (scale + 1)) + 1) >= out_h) scale++;
-    while (scale < 3 && (size_t) (((full_w - 1) >> scale) + 1) * (size_t) (((full_h - 1) >> scale) + 1) > CAMERA_MAX_PX * 2) scale++;
-    int width = ((full_w - 1) >> scale) + 1;
-    int height = ((full_h - 1) >> scale) + 1;
-    uint16_t *decoded = heap_caps_malloc((size_t) width * (size_t) height * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!decoded) {
-        heap_caps_free(data);
-        ESP_LOGW(TAG_UI, "Bild %s verworfen (kein Speicher für %dx%d)", file, width, height);
-        return true;
+    if (box_w < 1) box_w = width;
+    if (box_h < 1) box_h = height;
+    int crop_w;
+    int crop_h;
+    if ((long) width * box_h > (long) height * box_w) {
+        crop_h = height;
+        crop_w = (int) ((long) height * box_w / box_h);
+    } else {
+        crop_w = width;
+        crop_h = (int) ((long) width * box_h / box_w);
     }
-    ui_wdt_kick();
-    result = homedisplay_jpeg_decode(data, got, scale, decoded, width, height);
-    heap_caps_free(data);
-    ui_wdt_kick();
-    if (result != 0) {
-        heap_caps_free(decoded);
-        ESP_LOGW(TAG_UI, "Bild %s verworfen (Dekodierfehler %d)", file, result);
-        return true;
-    }
+    if (crop_w < 1) crop_w = 1;
+    if (crop_h < 1) crop_h = 1;
+    if (crop_w > width) crop_w = width;
+    if (crop_h > height) crop_h = height;
+    int crop_x = (width - crop_w) / 2;
+    int crop_y = (height - crop_h) / 2;
+    int out_w = box_w;
+    int out_h = box_h;
     if (!image_bytes_fit(view, (size_t) out_w * (size_t) out_h * 2u)) {
         heap_caps_free(decoded);
         ESP_LOGW(TAG_UI, "Bild %s verworfen (kein Speicher für %dx%d)", file, out_w, out_h);
         return true;
     }
+    uint16_t *dst_px = (uint16_t *) view->image_px;
     for (int row = 0; row < out_h; row++) {
-        int sy = (int) ((long) row * height / out_h);
+        int sy = crop_y + (int) ((long) row * crop_h / out_h);
         if (sy >= height) sy = height - 1;
         const uint16_t *src = decoded + (size_t) sy * (size_t) width;
-        uint8_t *dst = view->image_px + (size_t) row * (size_t) out_w * 2u;
+        uint16_t *dst = dst_px + (size_t) row * (size_t) out_w;
         for (int col = 0; col < out_w; col++) {
-            int sx = (int) ((long) col * width / out_w);
+            int sx = crop_x + (int) ((long) col * crop_w / out_w);
             if (sx >= width) sx = width - 1;
-            put_color_px(dst + (size_t) col * 2u, (lv_color_t) { .full = src[sx] });
+            dst[col] = src[sx];
         }
     }
     heap_caps_free(decoded);
     publish_fit_image(view, out_w, out_h, false);
-    ESP_LOGI(TAG_UI, "Bild %s auf Kachel %dx%d eingepasst (Quelle %dx%d)", file, out_w, out_h, full_w, full_h);
+    ESP_LOGI(TAG_UI, "Bild %s auf Kachel %dx%d skaliert (Quelle %dx%d)", file, out_w, out_h, full_w, full_h);
     return true;
 }
 
@@ -1725,7 +1728,7 @@ static void place_cover_image(tile_view_t *view, const char *file, int box_w, in
     if (width > 0 && height > 0 && box_w > 0 && box_h > 0) {
         int zoom_w = (box_w * 256) / width;
         int zoom_h = (box_h * 256) / height;
-        int zoom = zoom_w < zoom_h ? zoom_w : zoom_h;
+        int zoom = zoom_w > zoom_h ? zoom_w : zoom_h;
         if (zoom < 1) zoom = 1;
         if (zoom > 4096) zoom = 4096;
         lv_img_set_pivot(img, width / 2, height / 2);
@@ -2380,19 +2383,16 @@ static void show_page(int index)
             view->image_backdrop = cJSON_IsTrue(cJSON_GetObjectItem(tile, "imageBackground"));
             lv_obj_set_style_pad_all(view->card, 0, 0);
             if (view->image_backdrop) lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
-            int fit_w = card_w - IMAGE_SAFE_PX * 2;
-            int fit_h = card_h - IMAGE_SAFE_PX * 2;
-            if (fit_w < 1) fit_w = 1;
-            if (fit_h < 1) fit_h = 1;
             view->image_img = lv_img_create(view->card);
+            lv_obj_set_size(view->image_img, card_w, card_h);
             lv_obj_center(view->image_img);
             if (source && strcmp(source, "icon") == 0) {
                 const char *text_color = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "textColor"));
                 uint32_t ink = 0xFFFFFF;
                 if (!color_mono && text_color && text_color[0] == '#') ink = parse_hex_color(text_color, 0xFFFFFF);
-                show_icon_fit(view, icon, fit_w, fit_h, ink);
+                show_icon_fit(view, icon, card_w, card_h, ink);
             } else if (file && file[0]) {
-                place_cover_image(view, file, fit_w, fit_h);
+                place_cover_image(view, file, card_w, card_h);
             }
             if (view->image_backdrop && tile_snaps(tile)) lv_obj_move_background(view->card);
             tile_count++;
