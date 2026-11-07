@@ -530,6 +530,9 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
         if ($method === 'deleteImage') {
             return ['ok' => true, 'result' => $this->decodeCall(HDISP_DeleteImage($panel, (string) ($body['id'] ?? '')))];
         }
+        if ($method === 'renameImage') {
+            return ['ok' => true, 'result' => $this->decodeCall(HDISP_RenameImage($panel, (string) ($body['id'] ?? ''), (string) ($body['name'] ?? '')))];
+        }
         if ($method === 'saveConfig' || $method === 'publishConfig') {
             $config = $body['config'] ?? null;
             if (!is_array($config)) {

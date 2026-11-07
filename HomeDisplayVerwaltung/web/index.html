@@ -79,6 +79,7 @@
             <div class="palette-item" draggable="true" data-kind="gauge">Bogen</div>
             <div class="palette-item" draggable="true" data-kind="countdown">Countdown</div>
             <div class="palette-item" draggable="true" data-kind="appointment">Termin</div>
+            <div class="palette-item" draggable="true" data-kind="schedule">Zeitplan</div>
                       </div>
         </div>
       </div>
@@ -120,12 +121,12 @@
             </select>
           </label>
           <label class="switch" title="Titel anzeigen">Anzeigen <input id="p-show-title" type="checkbox" checked></label>
-          <label class="switch" title="Kleines Icon in der Überschrift">Icon <input id="p-show-title-icon" type="checkbox"></label>
           <label class="title-symbol">Symbol <select id="p-title-icon"></select></label>
         </div>
         <label>Gruppe (Frame)
           <input id="p-group" placeholder="z. B. Wohnzimmer" maxlength="40">
         </label>
+        <label class="switch"><input id="p-snap" type="checkbox" checked> Am Raster ausrichten</label>
         <div class="row hidden">
           <label>Spalte <input id="p-col" type="number" min="1"></label>
           <label>Zeile <input id="p-row" type="number" min="1"></label>
@@ -140,6 +141,8 @@
             <span id="p-title-preview" class="font-sample">Aa</span>
             <label class="switch"><input id="p-title-bold" type="checkbox"> Fett</label>
             <label class="switch"><input id="p-title-italic" type="checkbox"> Kursiv</label>
+            <label class="switch"><input id="p-title-color-on" type="checkbox"> Farbe</label>
+            <input id="p-title-color" type="color" value="#f4f7fb">
           </div>
           <div id="p-body-font" class="font-row">
             <label>Inhalt <select id="p-text-px"></select></label>
@@ -218,6 +221,11 @@
           <div id="p-scene-icon-toggle">
             <label>Symbol Ein <select id="p-scene-iconon"></select></label>
             <label>Symbol Aus <select id="p-scene-iconoff"></select></label>
+            <label class="check"><input id="p-scene-icon-colors" type="checkbox"> Symbol färben</label>
+            <div class="row">
+              <label>Aus <input id="p-scene-icon-off-color" type="color" value="#1a1a1a"></label>
+              <label>Ein <input id="p-scene-icon-on-color" type="color" value="#ff9f1a"></label>
+            </div>
           </div>
           <label><input id="p-scene-show-state-text" type="checkbox"> Text Ein/Aus anzeigen</label>
           <label><input id="p-scene-confirm" type="checkbox"> Bestätigung an der Anzeige</label>
@@ -283,6 +291,11 @@
             <div id="p-icon-toggle">
               <label>Symbol Ein <select id="p-iconon"></select></label>
               <label>Symbol Aus <select id="p-iconoff"></select></label>
+              <label class="check"><input id="p-icon-colors" type="checkbox"> Symbol färben</label>
+              <div class="row">
+                <label>Aus <input id="p-icon-off-color" type="color" value="#1a1a1a"></label>
+                <label>Ein <input id="p-icon-on-color" type="color" value="#ff9f1a"></label>
+              </div>
             </div>
             <label><input id="p-show-state-text" type="checkbox"> Text Ein/Aus anzeigen</label>
           </div>
@@ -381,6 +394,12 @@
             </select>
           </label>
         </div>
+        <div data-for="schedule">
+          <label>Wochenplan
+            <select id="p-schedule"></select>
+          </label>
+          <p class="hint">Schaltpunkte eines IP-Symcon-Wochenplans. Farben und Namen kommen aus den Aktionen des Plans. „Jetzt“ markiert die aktuelle Uhrzeit in der Zeile des heutigen Tages.</p>
+        </div>
         <div data-for="label">
           <label>Text <textarea id="p-text" rows="3"></textarea></label>
           <p class="hint">Automatisch skaliert den Text im Editor. Eine feste Pixelgröße gilt auch auf der Anzeige.</p>
@@ -424,13 +443,17 @@
             <select id="p-imagesource">
               <option value="catalog">Katalog (hochgeladen)</option>
               <option value="media">IPS-Medien-Variable</option>
+              <option value="icon">Symbol</option>
             </select>
           </label>
           <div id="p-image-catalog">
             <label>Bild <select id="p-image"></select></label>
             <img id="p-image-preview" alt="">
           </div>
-          <label><input id="p-image-background" type="checkbox"> Als Hintergrund (Wert-Kacheln darüber nur als Text)</label>
+          <div id="p-image-icon" class="hidden">
+            <label>Symbol <select id="p-image-icon-id"></select></label>
+          </div>
+          <label id="p-image-background-wrap"><input id="p-image-background" type="checkbox"> Als Hintergrund (Wert-Kacheln darüber nur als Text)</label>
           <div id="p-image-media" class="hidden">
             <label>Medien-Variable <span class="pick-row"><input id="p-image-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="image">Auswählen</button></span></label>
             <p class="hint">Integer-Variable mit Media-ID oder Medienobjekt (Typ Bild) aus dem Baum. IP-Symcon liefert die Bilddatei.</p>
@@ -505,13 +528,14 @@
         <label>Buttons <input id="theme-button" type="color" value="#2a4f7c"></label>
         <label>Akzent <input id="theme-accent" type="color" value="#ffb547"></label>
         <label class="check"><input id="color-mono" type="checkbox"> Schwarz/Weiß</label>
+        <label class="check"><input id="l-tab-bold" type="checkbox"> Reiter fett</label>
       </div>
       <h4>Helligkeit und Ruheanzeige</h4>
-      <p class="hint">Gilt für diese Ansicht. Die Beleuchtung kann nur an oder aus: 0 schaltet sie aus, jeder Wert darüber schaltet sie an. Nachts gilt der Nachtwert, wenn „Nachts dimmen“ an ist.</p>
+      <p class="hint">Gilt für diese Ansicht. Die Beleuchtung ist an oder aus. Nachts gilt der Nachtschalter, wenn „Nachts dimmen“ an ist.</p>
       <div class="general-grid">
         <label class="check"><input id="l-night-dim" type="checkbox" checked> Nachts dimmen</label>
-        <label>Tag (0–100) <input id="l-day-brightness" type="number" min="0" max="100" value="70"></label>
-        <label>Nacht (0–100) <input id="l-night-brightness" type="number" min="0" max="100" value="15"></label>
+        <label class="check"><input id="l-day-brightness" type="checkbox" checked> Tag an</label>
+        <label class="check"><input id="l-night-brightness" type="checkbox"> Nacht an</label>
         <label>Nacht ab Stunde <input id="l-night-from" type="number" min="0" max="23" value="22"></label>
         <label>Nacht bis Stunde <input id="l-night-to" type="number" min="0" max="23" value="6"></label>
         <label>Ruheanzeige
@@ -546,8 +570,7 @@
 
   <dialog id="page-rows-dialog">
     <form method="dialog" class="pages-form">
-      <h3>Zeilenhöhen – <span id="page-rows-title"></span></h3>
-      <p class="hint">Höhe je Zeile: 1 flach, 2 normal, 3 hoch.</p>
+      <h3>Raster – <span id="page-rows-title"></span></h3>
       <div id="page-rows-grid" class="page-grid"></div>
       <div class="row right">
         <button value="ok">Fertig</button>

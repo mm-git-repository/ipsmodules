@@ -538,9 +538,7 @@ static esp_err_t download_to_file(const char *path, const char *target, int time
 static int images_missing;
 static int image_retry_round;
 static bool image_retrying;
-static bool image_background_loaded;
 
-/* tile_id ist NULL bei Seitenhintergründen. */
 static void fetch_one_image(const char *id, const char *file, const char *tile_id)
 {
     if (!id || !id[0] || !file || !file[0]) return;
@@ -562,11 +560,7 @@ static void fetch_one_image(const char *id, const char *file, const char *tile_i
         return;
     }
     ESP_LOGI(TAG, "Bild %s geladen als %s", id, file);
-    if (image_retrying) {
-        /* Ansicht steht bereits: nur die betroffene Kachel bzw. den Hintergrund nachziehen. */
-        if (tile_id && tile_id[0]) homedisplay_ui_refresh_image(tile_id, file);
-        else image_background_loaded = true;
-    }
+    if (image_retrying && tile_id && tile_id[0]) homedisplay_ui_refresh_image(tile_id, file);
 }
 
 static bool layout_uses_file(cJSON *layout_root, const char *name)
@@ -574,8 +568,6 @@ static bool layout_uses_file(cJSON *layout_root, const char *name)
     static const char *tile_keys[] = { "imageFile", "mediaFile", "cameraFile" };
     cJSON *page = NULL;
     cJSON_ArrayForEach(page, cJSON_GetObjectItem(layout_root, "pages")) {
-        const char *background = cJSON_GetStringValue(cJSON_GetObjectItem(page, "backgroundFile"));
-        if (background && strcmp(background, name) == 0) return true;
         cJSON *tile = NULL;
         cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
             for (size_t key = 0; key < sizeof(tile_keys) / sizeof(tile_keys[0]); key++) {
@@ -610,7 +602,7 @@ static void prune_storage(cJSON *layout_root)
     }
 }
 
-/* Lädt Kachelbilder und Seitenhintergründe in den Flash, bevor die Ansicht gezeichnet wird. */
+/* Lädt Kachelbilder in den Flash, bevor die Ansicht gezeichnet wird. */
 static void fetch_images(const char *layout_json)
 {
     cJSON *root = cJSON_Parse(layout_json);
@@ -619,10 +611,6 @@ static void fetch_images(const char *layout_json)
     images_missing = 0;
     cJSON *page = NULL;
     cJSON_ArrayForEach(page, cJSON_GetObjectItem(root, "pages")) {
-        fetch_one_image(
-            cJSON_GetStringValue(cJSON_GetObjectItem(page, "backgroundId")),
-            cJSON_GetStringValue(cJSON_GetObjectItem(page, "backgroundFile")),
-            NULL);
         cJSON *tile = NULL;
         cJSON_ArrayForEach(tile, cJSON_GetObjectItem(page, "tiles")) {
             const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "kind"));
@@ -643,14 +631,8 @@ static void retry_missing_images(char *response, size_t length)
     if (!read_cache(LAYOUT_CACHE, response, length)) return;
     image_retry_round++;
     image_retrying = true;
-    image_background_loaded = false;
     fetch_images(response);
     image_retrying = false;
-    if (image_background_loaded && read_cache(LAYOUT_CACHE, response, length)) {
-        /* Ein Hintergrund lässt sich nur durch erneutes Aufbauen der Seite zeigen. */
-        homedisplay_ui_apply_layout(response);
-        last_seq = -1;
-    }
 }
 
 #define CAM_STAMP_MAX 16

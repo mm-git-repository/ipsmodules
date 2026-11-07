@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 /**
  * Vertrag einer Kachel: Seite, Rasterzelle, Art, Symbol, Variable und freigegebene Aktion.
- * Freie Pixelkoordinaten und Skriptaufrufe nimmt das Schema nicht an.
+ * Eine Kachel kann das Raster verlassen: dann gelten x und y in Pixeln der Inhaltsfläche.
  */
 final class HomeDisplayPanelSchema
 {
@@ -27,8 +27,8 @@ final class HomeDisplayPanelSchema
 
     public const ICONS = [
         'bathtub', 'armchair', 'floorLamp', 'book', 'power',
-        'energy', 'temperature', 'light', 'shutter', 'pump', 'valve', 'alarm', 'home', 'clock', 'info',
-        'lightOn', 'lightOff', 'humidity', 'sun', 'moon', 'water', 'heat', 'cool', 'fan', 'door', 'lock', 'plug', 'batteryIcon', 'wifi', 'car',
+        'energy', 'temperature', 'light', 'shutter', 'pump', 'circulation', 'circulationOff', 'valve', 'alarm', 'home', 'clock', 'info',
+        'lightOn', 'lightOff', 'humidity', 'sun', 'moon', 'water', 'heat', 'cool', 'fan', 'door', 'lock', 'plug', 'batteryIcon', 'batteryEmpty', 'battery20', 'battery40', 'battery60', 'battery80', 'batteryFull', 'boiler', 'solarModules', 'wifi', 'car',
         'motion', 'window', 'garage', 'smoke', 'thermostat', 'solar', 'camera', 'tv', 'speaker', 'washing', 'bed', 'bell', 'leaf', 'fire', 'kitchen', 'pool', 'hall', 'kids',
         'bubbles', 'bubbleChart', 'waves', 'shutterOpen', 'valveOpen', 'valveClosed', 'pumpOff', 'doorOpen', 'doorClosed',
         'garageOpen', 'lockOpen', 'fanOff', 'plugOff', 'bellOff', 'wifiOff', 'speakerOff', 'tvOff', 'waterOff', 'coolOff',
@@ -68,7 +68,7 @@ final class HomeDisplayPanelSchema
     ];
 
     /** system: Diagnosekachel, die das Panel selbst mit Firmware, WLAN, Laufzeit und Datenalter füllt. */
-    public const KINDS = ['value', 'display', 'chart', 'energyflow', 'nav', 'label', 'image', 'camera', 'separator', 'scene', 'weather', 'presence', 'multi', 'contacts', 'gauge', 'countdown', 'appointment'];
+    public const KINDS = ['value', 'display', 'chart', 'energyflow', 'nav', 'label', 'image', 'camera', 'separator', 'scene', 'weather', 'presence', 'multi', 'contacts', 'gauge', 'countdown', 'appointment', 'schedule'];
 
     public const FONT_PX = [16, 20, 24, 28, 32, 36, 40, 48];
 
@@ -203,16 +203,6 @@ final class HomeDisplayPanelSchema
             if ($grid['rows'] < 1 || $grid['rows'] > $maxRows) {
                 throw new InvalidArgumentException('Seite „' . $pageId . '“ hat zu viele Zeilen für das Display-Profil.');
             }
-            $background = (string) ($page['backgroundId'] ?? '');
-            if ($background === '') {
-                continue;
-            }
-            if (!preg_match('/^[a-f0-9]{16}$/', $background)) {
-                throw new InvalidArgumentException('Ungültiges Hintergrundbild.');
-            }
-            if ($publish && !HomeDisplayCatalogStore::imageExists($background)) {
-                throw new InvalidArgumentException('Das Hintergrundbild einer Seite wurde gelöscht.');
-            }
         }
         $seen = [];
         foreach ($pages as $page) {
@@ -257,20 +247,31 @@ final class HomeDisplayPanelSchema
                 if ($col + $colSpan > $columns || $row + $rowSpan > $rows) {
                     throw new InvalidArgumentException('Kachel liegt außerhalb des Rasters.');
                 }
+                $floats = self::tileFloats($tile);
+                if ($floats) {
+                    $bounds = self::contentSize($profile);
+                    $originX = (int) ($tile['x'] ?? 0);
+                    $originY = (int) ($tile['y'] ?? 0);
+                    if ($originX < 0 || $originY < 0 || $originX >= $bounds['width'] || $originY >= $bounds['height']) {
+                        throw new InvalidArgumentException('Freie Kachel liegt außerhalb der Fläche.');
+                    }
+                }
                 $backdrop = $kind === 'image' && !empty($tile['imageBackground']);
-                for ($x = $col; $x < $col + $colSpan; $x++) {
-                    for ($y = $row; $y < $row + $rowSpan; $y++) {
-                        $key = $pageId . ':' . $x . ':' . $y;
-                        $cells = $backdrop ? $backdropCells : $occupied;
-                        if (isset($cells[$key])) {
-                            throw new InvalidArgumentException('Kacheln überlappen sich.');
-                        }
-                        if ($backdrop) {
-                            $backdropCells[$key] = true;
-                        } else {
-                            $occupied[$key] = true;
-                            if ($kind !== 'value') {
-                                $coverCells[$key] = true;
+                if (!$floats) {
+                    for ($x = $col; $x < $col + $colSpan; $x++) {
+                        for ($y = $row; $y < $row + $rowSpan; $y++) {
+                            $key = $pageId . ':' . $x . ':' . $y;
+                            $cells = $backdrop ? $backdropCells : $occupied;
+                            if (isset($cells[$key])) {
+                                throw new InvalidArgumentException('Kacheln überlappen sich.');
+                            }
+                            if ($backdrop) {
+                                $backdropCells[$key] = true;
+                            } else {
+                                $occupied[$key] = true;
+                                if ($kind !== 'value') {
+                                    $coverCells[$key] = true;
+                                }
                             }
                         }
                     }
@@ -343,6 +344,11 @@ final class HomeDisplayPanelSchema
                     'rowSpan' => max(1, (int) ($tile['rowSpan'] ?? 1)),
                 ];
                 self::publishTileChrome($public, $tile);
+                if (self::tileFloats($tile)) {
+                    $public['snapToGrid'] = false;
+                    $public['x'] = max(0, (int) ($tile['x'] ?? 0));
+                    $public['y'] = max(0, (int) ($tile['y'] ?? 0));
+                }
                 $group = trim((string) ($tile['group'] ?? ''));
                 if ($group !== '') {
                     $public['group'] = mb_substr($group, 0, 40);
@@ -462,7 +468,9 @@ final class HomeDisplayPanelSchema
 
                 if ($kind === 'image') {
                     $source = (string) ($tile['imageSource'] ?? 'catalog');
-                    if ($source === 'media') {
+                    if ($source === 'icon') {
+                        $public['imageSource'] = 'icon';
+                    } elseif ($source === 'media') {
                         $public['imageSource'] = 'media';
                         $public['mediaFile'] = self::mediaFileName((string) $tile['tileId']);
                     } else {
@@ -663,6 +671,9 @@ final class HomeDisplayPanelSchema
                 if ($kind === 'appointment') {
                     $public['variableId'] = (int) ($tile['variableId'] ?? 0);
                 }
+                if ($kind === 'schedule') {
+                    $public['eventId'] = (int) ($tile['eventId'] ?? 0);
+                }
                 $tiles[] = $public;
             }
             $publicPage = [
@@ -675,16 +686,11 @@ final class HomeDisplayPanelSchema
             if ($pageIcon !== '' && in_array($pageIcon, self::ICONS, true)) {
                 $publicPage['icon'] = $pageIcon;
             }
-            $background = (string) ($page['backgroundId'] ?? '');
-            if ($background !== '') {
-                $publicPage['backgroundId'] = $background;
-                $publicPage['backgroundFile'] = HomeDisplayCatalogStore::imageFileName($background);
-            }
             $pages[] = $publicPage;
         }
         $profileId = (string) ($layout['displayProfile'] ?? self::defaultProfileId());
         $profile = self::profile($profileId);
-        return [
+        $public = [
             'id' => (string) ($layout['id'] ?? ''),
             'name' => (string) ($layout['name'] ?? ''),
             'version' => (int) ($layout['version'] ?? 0),
@@ -696,6 +702,10 @@ final class HomeDisplayPanelSchema
             'targetHeight' => (int) $profile['height'],
             'pages' => $pages,
         ];
+        if (!empty($layout['tabBold'])) {
+            $public['tabBold'] = true;
+        }
+        return $public;
     }
 
     /** @param array<string, mixed> $public @param array<string, mixed> $tile */
@@ -741,7 +751,7 @@ final class HomeDisplayPanelSchema
         if (!empty($tile['showAge'])) {
             $public['showAge'] = true;
         }
-        foreach (['bgColor', 'onColor'] as $key) {
+        foreach (['bgColor', 'onColor', 'titleColor', 'iconOffColor', 'iconOnColor'] as $key) {
             $value = strtolower(trim((string) ($tile[$key] ?? '')));
             if (preg_match('/^#[0-9a-f]{6}$/', $value)) {
                 $public[$key] = $value;
@@ -790,10 +800,6 @@ final class HomeDisplayPanelSchema
         foreach ($layout['pages'] ?? [] as $page) {
             if (!is_array($page)) {
                 continue;
-            }
-            $background = (string) ($page['backgroundId'] ?? '');
-            if ($background !== '') {
-                $ids[$background] = true;
             }
             foreach ($page['tiles'] ?? [] as $tile) {
                 if (is_array($tile) && ($tile['kind'] ?? '') === 'image' && (string) ($tile['imageId'] ?? '') !== '') {
@@ -1027,14 +1033,27 @@ final class HomeDisplayPanelSchema
     /** @param array<string, mixed> $tile */
     private static function rejectForeignKeys(array $tile): void
     {
-        foreach (['x', 'y', 'scriptId', 'script', 'entityId', 'item', 'objectId', 'url'] as $key) {
+        foreach (['scriptId', 'script', 'entityId', 'item', 'objectId', 'url'] as $key) {
             if (array_key_exists($key, $tile)) {
                 throw new InvalidArgumentException('Dieses Feld gehört nicht ins Layout: ' . $key);
             }
         }
     }
 
+    /** Inhaltsfläche unter der Kopfzeile. x und y einer freien Kachel liegen in diesem Rechteck. */
+    private static function contentSize(array $profile): array
+    {
+        $width = max(1, (int) ($profile['width'] ?? 1024));
+        $height = max(1, (int) ($profile['height'] ?? 600) - 68);
+        return ['width' => $width, 'height' => $height];
+    }
+
     /** @param array<string, mixed> $tile */
+    private static function tileFloats(array $tile): bool
+    {
+        return array_key_exists('snapToGrid', $tile) && $tile['snapToGrid'] === false;
+    }
+
     private static function cell(array $tile, string $key): int
     {
         if (!isset($tile[$key]) || (int) $tile[$key] < 0) {
@@ -1382,6 +1401,13 @@ final class HomeDisplayPanelSchema
         }
         if ($kind === 'image') {
             $source = (string) ($tile['imageSource'] ?? 'catalog');
+            if ($source === 'icon') {
+                $icon = (string) ($tile['icon'] ?? '');
+                if (!in_array($icon, self::ICONS, true)) {
+                    throw new InvalidArgumentException('Bildkachel ohne bekanntes Symbol.');
+                }
+                return;
+            }
             if ($source === 'media') {
                 $variableId = (int) ($tile['variableId'] ?? 0);
                 $mediaObjectId = (int) ($tile['mediaObjectId'] ?? 0);
@@ -1414,6 +1440,19 @@ final class HomeDisplayPanelSchema
                 $vid = (int) ($row['variableId'] ?? 0);
                 if ($publish && ($vid <= 0 || !IPS_VariableExists($vid))) {
                     throw new InvalidArgumentException('Zeile ohne Variable.');
+                }
+            }
+            return;
+        }
+        if ($kind === 'schedule') {
+            $eventId = (int) ($tile['eventId'] ?? 0);
+            if ($publish && ($eventId <= 0 || !function_exists('IPS_EventExists') || !IPS_EventExists($eventId))) {
+                throw new InvalidArgumentException('Zeitplan-Kachel ohne Wochenplan.');
+            }
+            if ($publish && function_exists('IPS_GetEvent')) {
+                $event = IPS_GetEvent($eventId);
+                if (!is_array($event) || (int) ($event['EventType'] ?? -1) !== 2) {
+                    throw new InvalidArgumentException('Das Ereignis ist kein Wochenplan.');
                 }
             }
             return;

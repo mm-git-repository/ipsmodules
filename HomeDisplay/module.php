@@ -267,10 +267,33 @@ class HomeDisplay extends IPSModuleStrict
     public function ListVariables(): string
     {
         $rows = [];
+        $scheduleRows = [];
         $names = [];
         foreach (IPS_GetObjectList() as $id) {
             $object = @IPS_GetObject((int) $id);
-            if (!is_array($object) || (int) ($object['ObjectType'] ?? -1) !== 2) {
+            if (!is_array($object)) {
+                continue;
+            }
+            if ((int) ($object['ObjectType'] ?? -1) === 4) {
+                $event = @IPS_GetEvent((int) $id);
+                if (is_array($event) && (int) ($event['EventType'] ?? -1) === 2) {
+                    $scheduleRows[] = [
+                        'objectKind' => 'schedule',
+                        'id' => (int) $id,
+                        'name' => (string) ($object['ObjectName'] ?? ''),
+                        'path' => $this->objectPath((int) ($object['ParentID'] ?? 0), $names),
+                        'category' => $this->categoryName((int) ($object['ParentID'] ?? 0)),
+                        'profile' => 'Wochenplan',
+                        'type' => 2,
+                        'mediaRole' => '',
+                        'action' => false,
+                        'actionKind' => '',
+                        'archived' => false,
+                    ];
+                }
+                continue;
+            }
+            if ((int) ($object['ObjectType'] ?? -1) !== 2) {
                 continue;
             }
             $variable = @IPS_GetVariable((int) $id);
@@ -319,6 +342,9 @@ class HomeDisplay extends IPSModuleStrict
             $byPath = strcasecmp((string) ($left['path'] ?? ''), (string) ($right['path'] ?? ''));
             return $byPath !== 0 ? $byPath : strcasecmp((string) ($left['name'] ?? ''), (string) ($right['name'] ?? ''));
         });
+        foreach ($scheduleRows as $scheduleRow) {
+            $rows[] = $scheduleRow;
+        }
         return $this->encode(['variables' => $rows]);
     }
 
@@ -376,6 +402,15 @@ class HomeDisplay extends IPSModuleStrict
                 throw new InvalidArgumentException('Bilddaten konnten nicht gelesen werden.');
             }
             return $this->encode(['ok' => true, 'image' => HomeDisplayCatalogStore::saveImage($Name, $binary)]);
+        } catch (Throwable $e) {
+            return $this->encode(['ok' => false, 'error' => $e->getMessage()]);
+        }
+    }
+
+    public function RenameImage(string $Id, string $Name): string
+    {
+        try {
+            return $this->encode(['ok' => true, 'image' => HomeDisplayCatalogStore::renameImage($Id, $Name)]);
         } catch (Throwable $e) {
             return $this->encode(['ok' => false, 'error' => $e->getMessage()]);
         }
@@ -1172,6 +1207,10 @@ class HomeDisplay extends IPSModuleStrict
                     $tiles[] = $this->appointmentStateTile($tile, $tileId);
                     continue;
                 }
+                if ($kind === 'schedule') {
+                    $tiles[] = $this->scheduleStateTile($tile, $tileId);
+                    continue;
+                }
                 if ($kind !== 'value' && $kind !== 'display') {
                     continue;
                 }
@@ -1560,6 +1599,208 @@ class HomeDisplay extends IPSModuleStrict
             $quality = 'ok';
         }
         return ['tileId' => $tileId, 'text' => $text, 'sub' => $sub, 'quality' => $quality];
+    }
+
+    /** @param array<string, mixed> $tile @return array<string, mixed> */
+    private function scheduleStateTile(array $tile, string $tileId): array
+    {
+        $eventId = (int) ($tile['eventId'] ?? 0);
+        $empty = ['tileId' => $tileId, 'text' => 'Wochenplan wählen', 'quality' => 'empty'];
+        if ($eventId <= 0 || !function_exists('IPS_EventExists') || !IPS_EventExists($eventId) || !function_exists('IPS_GetEvent')) {
+            return $empty;
+        }
+        $event = @IPS_GetEvent($eventId);
+        if (!is_array($event) || (int) ($event['EventType'] ?? -1) !== 2) {
+            return $empty;
+        }
+        $actions = [];
+        foreach ($event['ScheduleActions'] ?? [] as $action) {
+            if (!is_array($action)) {
+                continue;
+            }
+            $actionId = (int) ($action['ID'] ?? 0);
+            if ($actionId <= 0) {
+                continue;
+            }
+            $name = trim((string) ($action['Name'] ?? ''));
+            $color = ((int) ($action['Color'] ?? 0)) & 0xFFFFFF;
+            if ($color === 0) {
+                $color = $this->scheduleFallbackColor($name, $action['ActionParameters'] ?? []);
+            }
+            $actions[$actionId] = ['name' => $this->scheduleClip($name, 28), 'color' => $color];
+        }
+        $groups = [];
+        $legendIds = [];
+        foreach ($event['ScheduleGroups'] ?? [] as $group) {
+            if (!is_array($group)) {
+                continue;
+            }
+            $days = (int) ($group['Days'] ?? 0);
+            if ($days <= 0) {
+                continue;
+            }
+            $segments = $this->scheduleSegments(is_array($group['Points'] ?? null) ? $group['Points'] : [], $actions, $legendIds);
+            $groups[] = [
+                'days' => $days,
+                'label' => $this->scheduleDayLabel($days),
+                'segs' => $segments,
+            ];
+        }
+        usort($groups, static function (array $left, array $right): int {
+            return $left['days'] <=> $right['days'];
+        });
+        $groups = array_slice($groups, 0, 7);
+        $legend = [];
+        foreach ($legendIds as $actionId) {
+            if (!isset($actions[$actionId]) || count($legend) >= 4) {
+                continue;
+            }
+            $legend[] = ['name' => $actions[$actionId]['name'], 'color' => $actions[$actionId]['color']];
+        }
+        $weekday = (int) date('N');
+        $today = $weekday >= 1 && $weekday <= 7 ? (1 << ($weekday - 1)) : 0;
+        $now = ((int) date('G')) * 60 + (int) date('i');
+        if ($now < 0) {
+            $now = 0;
+        }
+        if ($now > 1439) {
+            $now = 1439;
+        }
+        $name = trim((string) IPS_GetName($eventId));
+
+        return [
+            'tileId' => $tileId,
+            'text' => $name !== '' ? $name : 'Zeitplan',
+            'quality' => 'ok',
+            'schedule' => [
+                'now' => $now,
+                'today' => $today,
+                'legend' => $legend,
+                'groups' => $groups,
+            ],
+        ];
+    }
+
+    /** @param array<string, mixed> $actions @param array<int, int> $legendIds @param list<array<string, mixed>> $points @return list<array{0:int,1:int,2:int}> */
+    private function scheduleSegments(array $points, array $actions, array &$legendIds): array
+    {
+        $marks = [];
+        foreach ($points as $point) {
+            if (!is_array($point)) {
+                continue;
+            }
+            $start = $point['Start'] ?? null;
+            if (!is_array($start)) {
+                continue;
+            }
+            $minute = ((int) ($start['Hour'] ?? 0)) * 60 + (int) ($start['Minute'] ?? 0);
+            if ($minute < 0 || $minute >= 1440) {
+                continue;
+            }
+            $actionId = (int) ($point['ActionID'] ?? 0);
+            $marks[$minute] = $actionId;
+        }
+        if ($marks === []) {
+            return [[0, 1440, 0x3A4556]];
+        }
+        ksort($marks);
+        $minutes = array_keys($marks);
+        $ids = array_values($marks);
+        $count = count($minutes);
+        $raw = [];
+        if ($minutes[0] > 0) {
+            $raw[] = [0, (int) $minutes[0], (int) $ids[$count - 1]];
+        }
+        for ($index = 0; $index < $count; $index++) {
+            $end = $index + 1 < $count ? (int) $minutes[$index + 1] : 1440;
+            if ($end > (int) $minutes[$index]) {
+                $raw[] = [(int) $minutes[$index], $end, (int) $ids[$index]];
+            }
+        }
+        $merged = [];
+        foreach ($raw as $segment) {
+            $last = count($merged) - 1;
+            if ($last >= 0 && $merged[$last][2] === $segment[2] && $merged[$last][1] === $segment[0]) {
+                $merged[$last][1] = $segment[1];
+                continue;
+            }
+            $merged[] = $segment;
+        }
+        $colored = [];
+        foreach ($merged as $segment) {
+            $actionId = $segment[2];
+            if ($actionId > 0 && !in_array($actionId, $legendIds, true)) {
+                $legendIds[] = $actionId;
+            }
+            $color = $actions[$actionId]['color'] ?? 0x3A4556;
+            $colored[] = [$segment[0], $segment[1], $color];
+        }
+
+        return array_slice($colored, 0, 32);
+    }
+
+    /** @param mixed $parameters */
+    private function scheduleFallbackColor(string $name, $parameters): int
+    {
+        if (is_array($parameters) && array_key_exists('VALUE', $parameters)) {
+            $flag = filter_var($parameters['VALUE'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            if ($flag === true) {
+                return 0x2E9B4F;
+            }
+            if ($flag === false) {
+                return 0xD32F2F;
+            }
+        }
+        $folded = function_exists('mb_strtolower') ? mb_strtolower($name) : strtolower($name);
+        if (str_contains($folded, 'aus') || str_contains($folded, 'off')) {
+            return 0xD32F2F;
+        }
+
+        return 0x2E9B4F;
+    }
+
+    private function scheduleDayLabel(int $days): string
+    {
+        if ($days === 31) {
+            return 'Montag - Freitag';
+        }
+        if ($days === 96) {
+            return 'Samstag - Sonntag';
+        }
+        if ($days === 127) {
+            return 'Jeden Tag';
+        }
+        $full = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+        $short = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+        $picked = [];
+        for ($index = 0; $index < 7; $index++) {
+            if ($days & (1 << $index)) {
+                $picked[] = $index;
+            }
+        }
+        if (count($picked) === 1) {
+            return $full[$picked[0]];
+        }
+        if ($picked === []) {
+            return 'Ohne Tag';
+        }
+
+        return implode(' ', array_map(static function (int $index) use ($short): string {
+            return $short[$index];
+        }, $picked));
+    }
+
+    private function scheduleClip(string $text, int $length): string
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return 'Aktion';
+        }
+        if (function_exists('mb_substr')) {
+            return mb_substr($text, 0, $length);
+        }
+
+        return strlen($text) > $length ? substr($text, 0, $length) : $text;
     }
 
     /** @param mixed $raw */
@@ -2971,6 +3212,13 @@ PHP;
         if (!HomeDisplayCatalogStore::imageExists($id)) {
             http_response_code(404);
             $this->json(['error' => 'image']);
+            return;
+        }
+        if (HomeDisplayCatalogStore::imageHasAlpha($id)) {
+            $path = HomeDisplayCatalogStore::imagePath($id);
+            header('Content-Type: image/png');
+            header('Content-Length: ' . (string) filesize($path));
+            readfile($path);
             return;
         }
         $jpeg = HomeDisplayCatalogStore::panelImageJpeg($id);

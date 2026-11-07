@@ -199,13 +199,65 @@ final class HomeDisplayCatalogStore
         return $id . '.' . $ext;
     }
 
-    /** Dateiname auf der Anzeige. Mit GD bekommt sie JPEG, weil ihr Speicher für große PNG nicht reicht. */
+    /** Dateiname auf der Anzeige. Transparenz bleibt PNG, alles andere wird mit GD zu JPEG. */
     public static function panelImageFileName(string $id): string
     {
+        if (self::imageHasAlpha($id)) {
+            return $id . '.png';
+        }
         if (function_exists('imagejpeg') && function_exists('imagecreatefromstring')) {
             return $id . '.jpg';
         }
         return self::imageFileName($id);
+    }
+
+    /** PNG-Farbtyp mit Alpha oder ein tRNS-Block. JPEG hat keine Transparenz. */
+    public static function imageHasAlpha(string $id): bool
+    {
+        if (!self::imageExists($id)) {
+            return false;
+        }
+        $binary = @file_get_contents(self::imagePath($id));
+        if (!is_string($binary) || strncmp($binary, "\x89PNG\r\n\x1a\n", 8) !== 0 || strlen($binary) < 26) {
+            return false;
+        }
+        $colorType = ord($binary[25]);
+        if ($colorType === 4 || $colorType === 6) {
+            return true;
+        }
+        $offset = 8;
+        $length = strlen($binary);
+        while ($offset + 8 <= $length) {
+            $chunkLength = unpack('N', substr($binary, $offset, 4));
+            $size = is_array($chunkLength) ? (int) $chunkLength[1] : 0;
+            $type = substr($binary, $offset + 4, 4);
+            if ($type === 'tRNS') {
+                return true;
+            }
+            if ($type === 'IDAT' || $type === 'IEND') {
+                break;
+            }
+            $offset += 12 + $size;
+        }
+        return false;
+    }
+
+    public static function renameImage(string $id, string $name): array
+    {
+        if (!self::imageExists($id)) {
+            throw new InvalidArgumentException('Bild nicht gefunden.');
+        }
+        $name = trim($name);
+        if ($name === '') {
+            throw new InvalidArgumentException('Der Bildname darf nicht leer sein.');
+        }
+        if (mb_strlen($name) > 60) {
+            throw new InvalidArgumentException('Der Bildname hat höchstens 60 Zeichen.');
+        }
+        $index = self::imageIndex();
+        $index[$id]['name'] = $name;
+        self::saveImageIndex($index);
+        return ['id' => $id] + $index[$id];
     }
 
     /** Baseline-JPEG für die Anzeige; Transparenz wird auf Schwarz gelegt. Leer, wenn GD fehlt. */

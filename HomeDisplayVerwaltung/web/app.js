@@ -11,10 +11,14 @@ const PAGES = [
 const CAMERA_LIVE_URL_DEFAULT = "https://display:Starten01!@172.18.1.120/ISAPI/Streaming/channels/102/picture";
 const ICONS = [
   ["energy", "Energie", 0xF140B], ["temperature", "Temperatur", 0xF050F], ["light", "Licht", 0xF0335], ["shutter", "Rollladen", 0xF111C],
-  ["pump", "Pumpe", 0xF1402], ["valve", "Ventil", 0xF1066], ["alarm", "Alarm", 0xF078F], ["home", "Haus", 0xF02DC], ["clock", "Uhr", 0xF0150], ["info", "Info", 0xF02FD],
+  ["pump", "Pumpe", 0xF1402], ["circulation", "Zirkulation", 0xF058F], ["circulationOff", "Zirkulation aus", 0xF0F93], ["valve", "Ventil", 0xF1066], ["alarm", "Alarm", 0xF078F], ["home", "Haus", 0xF02DC], ["clock", "Uhr", 0xF0150], ["info", "Info", 0xF02FD],
   ["lightOn", "Lampe an", 0xF0335], ["lightOff", "Lampe aus", 0xF0336], ["humidity", "Feuchte", 0xF058E], ["sun", "Sonne", 0xF0599], ["moon", "Nacht", 0xF0594],
   ["water", "Wasser", 0xF058C], ["heat", "Heizung", 0xF0438], ["cool", "Kühlen", 0xF0717], ["fan", "Lüftung", 0xF0210], ["door", "Tür", 0xF081A], ["lock", "Schloss", 0xF033E],
-  ["plug", "Steckdose", 0xF06A5], ["batteryIcon", "Akku", 0xF0079], ["wifi", "WLAN", 0xF05A9], ["car", "Auto", 0xF010B],
+  ["plug", "Steckdose", 0xF06A5], ["batteryIcon", "Akku", 0xF0079],
+  ["batteryEmpty", "Akku leer", 0xF008E], ["battery20", "Akku 20 %", 0xF007B], ["battery40", "Akku 40 %", 0xF007D],
+  ["battery60", "Akku 60 %", 0xF007F], ["battery80", "Akku 80 %", 0xF0081], ["batteryFull", "Akku voll", 0xF0079],
+  ["boiler", "Heizkessel", 0xF0F92], ["solarModules", "Solarmodule", 0xF0D9C],
+  ["wifi", "WLAN", 0xF05A9], ["car", "Auto", 0xF010B],
   ["motion", "Bewegung", 0xF0D91], ["window", "Fenster", 0xF05AE], ["garage", "Garage", 0xF06D9], ["smoke", "Rauch", 0xF0392], ["thermostat", "Thermostat", 0xF0393],
   ["solar", "Solar", 0xF0A72], ["camera", "Kamera", 0xF07AE], ["tv", "Fernseher", 0xF0502], ["speaker", "Lautsprecher", 0xF04C3], ["washing", "Waschmaschine", 0xF072A],
   ["bed", "Bett", 0xF02E3], ["bell", "Klingel", 0xF009A], ["leaf", "Blatt", 0xF032A], ["fire", "Feuer", 0xF0238],
@@ -42,6 +46,8 @@ const DISPLAY_PROFILES = {
 function migrateLayoutKinds(layout) {
   if (!layout || !Array.isArray(layout.pages)) return;
   for (const page of layout.pages) {
+    delete page.backgroundId;
+    delete page.backgroundFile;
     if (!Array.isArray(page.tiles)) continue;
     page.tiles = page.tiles.filter((t) => (t.kind || "value") !== "system").map((t) => {
       if (t.kind === "display") {
@@ -57,10 +63,10 @@ function migrateLayoutKinds(layout) {
   }
 }
 
-const KIND_NAMES = { value: "Wert", display: "Wert", chart: "Diagramm", energyflow: "Energiefluss", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", scene: "Szene", weather: "Wetter", presence: "Anwesenheit", multi: "Mehrwert", contacts: "Kontakte", gauge: "Bogen", countdown: "Countdown", appointment: "Termin" };
+const KIND_NAMES = { value: "Wert", display: "Wert", chart: "Diagramm", energyflow: "Energiefluss", nav: "Seitenwechsler", label: "Text", image: "Bild", camera: "Kamera", separator: "Trennlinie", scene: "Szene", weather: "Wetter", presence: "Anwesenheit", multi: "Mehrwert", contacts: "Kontakte", gauge: "Bogen", countdown: "Countdown", appointment: "Termin", schedule: "Zeitplan" };
 const FONT_PX = [16, 20, 24, 28, 32, 36, 40, 48];
 const NAMED_PX = { small: 20, normal: 28, large: 36, xlarge: 48 };
-const TITLE_FONT_KINDS = ["value", "display", "chart", "scene", "weather", "presence", "camera", "nav", "multi", "contacts", "gauge", "countdown", "appointment"];
+const TITLE_FONT_KINDS = ["value", "display", "chart", "scene", "weather", "presence", "camera", "nav", "multi", "contacts", "gauge", "countdown", "appointment", "schedule"];
 const BODY_FONT_KINDS = ["value", "display", "chart", "scene", "weather", "presence", "label", "multi", "contacts", "gauge", "countdown", "appointment"];
 const AGE_KINDS = ["value", "display", "weather", "gauge"];
 
@@ -88,6 +94,18 @@ function cssFont(px, bold, italic, underline) {
   if (italic) bits.push("font-style:italic");
   if (underline) bits.push("text-decoration:underline");
   return bits.length ? ` style="${bits.join(";")}"` : "";
+}
+
+function titleColorOf(tile) {
+  return tile && /^#[0-9a-fA-F]{6}$/.test(tile.titleColor || "") ? tile.titleColor : "";
+}
+
+function titleCss(tile) {
+  const color = titleColorOf(tile);
+  const base = cssFont(titlePxOf(tile), tile && tile.titleBold, tile && tile.titleItalic);
+  if (!color) return base;
+  if (!base) return ` style="color:${color}"`;
+  return base.replace('style="', `style="color:${color};`);
 }
 const CHART_PERIOD_LABELS = { "1h": "1 Stunde", "6h": "6 Stunden", "24h": "24 Stunden", "7d": "7 Tage" };
 const FLOW_SLOT_LABELS = {
@@ -297,9 +315,10 @@ function panelSwitchHtml(tile, title, on, iconId, showIcon) {
   const align = tile && tile.titleAlign === "center" ? "align-center" : (tile && tile.titleAlign === "right" ? "align-right" : "");
   const headingId = tile && titleIconShown(tile) ? titleIconId(tile) : "";
   const headingIcon = headingId ? `<span class="panel-title-icon">${iconVisual(headingId)}</span>` : "";
-  const titleHtml = tile && tile.showTitle === false ? "" : `<div class="panel-title ${align}"${cssFont(titlePxOf(tile), tile && tile.titleBold, tile && tile.titleItalic)}>${headingIcon}<span class="panel-title-text">${escapeHtml(title || "")}</span></div>`;
+  const titleHtml = tile && tile.showTitle === false ? "" : `<div class="panel-title ${align}"${titleCss(tile)}>${headingIcon}<span class="panel-title-text">${escapeHtml(title || "")}</span></div>`;
+  const ink = iconStateColor(tile, on);
   const iconHtml = showIcon
-    ? `<button type="button" class="panel-icon-btn" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile && tile.onColor)}</button>`
+    ? `<button type="button" class="panel-icon-btn${ink ? " icon-colored" : ""}" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, ink)}</button>`
     : "";
   const stateHtml = tile && tile.showStateText ? `<div class="panel-state"${cssFont(textPxOf(tile), tile.textBold, tile.textItalic, tile.textUnderline)}>${on ? "Ein" : "Aus"}</div>` : "";
   return `<div class="panel-switch">${titleHtml}<div class="panel-icon">${iconHtml}</div>${stateHtml}</div>`;
@@ -345,7 +364,7 @@ function ohCardMarkup(label, stateHtml, bodyHtml, footHtml, tile) {
   if (tile && tile.textItalic) bits.push("font-style:italic");
   if (tile && tile.textUnderline) bits.push("text-decoration:underline");
   const style = bits.length ? ` style="${bits.join(";")}"` : "";
-  const titleStyle = tile ? cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic) : "";
+  const titleStyle = tile ? titleCss(tile) : "";
   const state = stateHtml ? `<span class="oh-card-state"${style}>${stateHtml}</span>` : "";
   const age = tile && tile.showAge ? `<div class="age-line">vor 4 min</div>` : "";
   return `<div class="oh-card"><div class="oh-card-head ${align}"${titleStyle}><span class="oh-card-label">${headingIcon}${title}</span>${state}</div><div class="oh-card-body">${bodyHtml || ""}</div>${age}${foot}</div>`;
@@ -699,7 +718,6 @@ function syncInteractionPropertyPanels() {
   if (actionLabel) actionLabel.classList.toggle("hidden", mode === "" || mode === "battery");
   $("p-confirm")?.closest("label")?.classList.toggle("hidden", mode === "");
   if ($("p-value-icon")) $("p-value-icon").disabled = ($("p-icon-place")?.value || "") === "none";
-  if ($("p-title-icon")) $("p-title-icon").disabled = !$("p-show-title-icon")?.checked;
   if (DIM_CONTROLS.includes(mode)) {
     const variable = variableById(tile.variableId);
     if (variable && variable.action && $("p-action")) $("p-action").checked = true;
@@ -909,6 +927,79 @@ function trackIndexAt(position, length, weights) {
   return weights.length - 1;
 }
 
+function tileSnaps(tile) {
+  return !tile || tile.snapToGrid !== false;
+}
+
+function contentSize() {
+  const profile = layoutProfile(state.layout);
+  return { width: profile.width, height: Math.max(1, profile.height - 68) };
+}
+
+function trackEdges(weights, length) {
+  const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+  const edges = [0];
+  let sum = 0;
+  for (const weight of weights) {
+    sum += weight;
+    edges.push(Math.round((length * sum) / total));
+  }
+  return edges;
+}
+
+function spanPixels(edges, index, span) {
+  const start = edges[Math.max(0, index)] || 0;
+  const end = edges[Math.min(edges.length - 1, index + span)] ?? start;
+  return Math.max(0, end - start);
+}
+
+function tilePixelBox(tile) {
+  const grid = currentGrid();
+  const content = contentSize();
+  const width = Math.max(16, spanPixels(trackEdges(grid.columnWeights, content.width), tile.col, tile.colSpan || 1) - 8);
+  const height = Math.max(16, spanPixels(trackEdges(grid.rowWeights, content.height), tile.row, tile.rowSpan || 1) - 8);
+  return { width, height };
+}
+
+function cellOrigin(col, row) {
+  const grid = currentGrid();
+  const content = contentSize();
+  return {
+    x: spanPixels(trackEdges(grid.columnWeights, content.width), 0, col),
+    y: spanPixels(trackEdges(grid.rowWeights, content.height), 0, row)
+  };
+}
+
+function editorScale() {
+  const screen = $("editor-screen");
+  const profile = layoutProfile(state.layout);
+  const width = screen ? screen.getBoundingClientRect().width : 0;
+  return width > 0 && profile.width ? width / profile.width : 1;
+}
+
+function clampFreeOrigin(tile) {
+  const content = contentSize();
+  const box = tilePixelBox(tile);
+  const maxX = Math.max(0, content.width - box.width);
+  const maxY = Math.max(0, content.height - box.height);
+  tile.x = Math.min(maxX, Math.max(0, Math.round(Number(tile.x) || 0)));
+  tile.y = Math.min(maxY, Math.max(0, Math.round(Number(tile.y) || 0)));
+}
+
+function contentPointFromTile(tile) {
+  const grid = $("grid");
+  const element = grid && grid.querySelector(`.tile[data-tile-id="${tile.tileId}"]`);
+  const content = contentSize();
+  if (!grid || !element || !grid.clientWidth || !grid.clientHeight) {
+    const origin = cellOrigin(tile.col, tile.row);
+    return { x: origin.x + 4, y: origin.y + 4 };
+  }
+  return {
+    x: Math.round(element.offsetLeft * content.width / grid.clientWidth),
+    y: Math.round(element.offsetTop * content.height / grid.clientHeight)
+  };
+}
+
 function newPageId(pages) {
   const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -1077,7 +1168,10 @@ function fillTabButton(button, page, fallback) {
     icon.innerHTML = iconVisual(page.icon);
     button.appendChild(icon);
   }
-  button.appendChild(document.createTextNode((page && (page.title || fallback)) || fallback || ""));
+  const title = document.createElement("span");
+  title.className = "tab-title";
+  title.textContent = (page && (page.title || fallback)) || fallback || "";
+  button.appendChild(title);
 }
 
 /* ---------- Menüs ---------- */
@@ -1168,6 +1262,7 @@ function newLayout(name) {
 function renderPageTabs() {
   const bar = $("page-tabs");
   bar.innerHTML = "";
+  bar.classList.toggle("tabs-bold", Boolean(state.layout && state.layout.tabBold));
   if (!state.layout) return;
   for (const page of state.layout.pages) {
     const button = document.createElement("button");
@@ -1194,6 +1289,13 @@ function renderPageTabs() {
   }
   const menu = $("menu-pages");
   menu.innerHTML = "";
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.textContent = "Seiten verwalten …";
+  edit.addEventListener("click", () => openPagesDialog());
+  menu.appendChild(edit);
+  const hr = document.createElement("hr");
+  menu.appendChild(hr);
   for (const page of state.layout.pages) {
     const item = document.createElement("button");
     item.type = "button";
@@ -1205,68 +1307,9 @@ function renderPageTabs() {
     });
     menu.appendChild(item);
   }
-  const hr = document.createElement("hr");
-  menu.appendChild(hr);
-  const edit = document.createElement("button");
-  edit.type = "button";
-  edit.textContent = "Seiten verwalten …";
-  edit.addEventListener("click", () => openPagesDialog());
-  menu.appendChild(edit);
 }
 
 /* ---------- Raster ---------- */
-
-function pageBackgroundImageUrl(page) {
-  if (!page || !page.backgroundId) return "";
-  const fromCatalog = state.images.find((item) => item.id === page.backgroundId);
-  if (fromCatalog) return `images/${fromCatalog.id}.${fromCatalog.ext}`;
-  if (page.backgroundFile) return `images/${page.backgroundFile}`;
-  return "";
-}
-
-function applyPageBackground(element, page) {
-  if (!element) return;
-  const url = pageBackgroundImageUrl(page);
-  if (url) {
-    element.style.backgroundImage = `url("${url}")`;
-    element.style.backgroundSize = "cover";
-    element.style.backgroundPosition = "center";
-  } else {
-    element.style.backgroundImage = "";
-    element.style.backgroundSize = "";
-    element.style.backgroundPosition = "";
-  }
-}
-
-function clearEditorGridBackground() {
-  const grid = $("grid");
-  if (!grid) return;
-  grid.style.backgroundImage = "";
-  grid.style.backgroundSize = "";
-  grid.style.backgroundPosition = "";
-}
-
-function renderPageBackground() {
-  const select = $("page-background");
-  if (!select) return;
-  const page = currentPage();
-  fillImageSelect(select);
-  select.value = page && page.backgroundId ? page.backgroundId : "";
-  select.disabled = !page;
-  const iconSel = $("page-icon");
-  if (iconSel) {
-    const cur = page && page.icon ? page.icon : "";
-    iconSel.innerHTML = '<option value="">(kein Symbol)</option>';
-    for (const icon of ICONS) {
-      const o = document.createElement("option");
-      o.value = icon;
-      o.textContent = icon;
-      iconSel.appendChild(o);
-    }
-    iconSel.value = cur;
-    iconSel.disabled = !page;
-  }
-}
 
 function isBackgroundImage(tile) {
   return Boolean(tile && tile.kind === "image" && tile.imageBackground === true);
@@ -1298,9 +1341,10 @@ function fits(tile, col, row, colSpan, rowSpan, ignoreId) {
   const page = currentPage();
   const grid = pageGridOf(page);
   if (col < 0 || row < 0 || col + colSpan > grid.columns || row + rowSpan > grid.rows) return false;
+  if (tile && !tileSnaps(tile)) return true;
   const moving = tile || { col, row, colSpan, rowSpan, kind: "" };
   for (const other of page.tiles) {
-    if (other.tileId === ignoreId) continue;
+    if (other.tileId === ignoreId || !tileSnaps(other)) continue;
     const overlapX = col < other.col + (other.colSpan || 1) && other.col < col + colSpan;
     const overlapY = row < other.row + (other.rowSpan || 1) && other.row < row + rowSpan;
     if (!overlapX || !overlapY) continue;
@@ -1378,7 +1422,7 @@ function groupOuterSides(tile, tiles) {
 }
 
 function paintGroupFrames(grid, tiles) {
-  for (const block of groupBlocks(tiles)) {
+  for (const block of groupBlocks((tiles || []).filter(tileSnaps))) {
     const cells = [];
     for (const tile of block) {
       for (let row = tile.row; row < tile.row + (tile.rowSpan || 1); row += 1) {
@@ -1430,6 +1474,10 @@ function valueOverBackground(tile, tiles) {
 }
 
 function applyTileLayer(element, tile, tiles) {
+  if (!tileSnaps(tile)) {
+    if (isBackgroundImage(tile)) element.classList.add("as-background");
+    return;
+  }
   const sides = groupOuterSides(tile, tiles);
   if (sides) {
     if (sides.left) element.style.marginLeft = "8px";
@@ -1459,9 +1507,9 @@ function renderGrid() {
   const pageGrid = pageGridOf(page);
   grid.style.gridTemplateColumns = gridTemplateOf(pageGrid.columnWeights);
   grid.style.gridTemplateRows = gridTemplateOf(pageGrid.rowWeights);
-  clearEditorGridBackground();
   const covered = new Set();
   for (const tile of page.tiles) {
+    if (!tileSnaps(tile)) continue;
     for (let x = tile.col; x < tile.col + (tile.colSpan || 1); x += 1) {
       for (let y = tile.row; y < tile.row + (tile.rowSpan || 1); y += 1) covered.add(`${x}:${y}`);
     }
@@ -1484,7 +1532,8 @@ function renderGrid() {
     }
   }
   paintGroupFrames(grid, page.tiles);
-  const ordered = [...page.tiles].sort((a, b) => (isBackgroundImage(a) ? 0 : 1) - (isBackgroundImage(b) ? 0 : 1));
+  const layerRank = (tile) => (tileSnaps(tile) ? (isBackgroundImage(tile) ? 0 : 1) : 2);
+  const ordered = [...page.tiles].sort((a, b) => layerRank(a) - layerRank(b));
   for (const tile of ordered) grid.appendChild(renderTile(tile));
   scheduleEditorTilePreviews();
   observeTileFitRoot(grid);
@@ -1641,8 +1690,23 @@ function buildTileElement(tile, context) {
   const spanW = tile.colSpan || 1;
   const spanH = tile.rowSpan || 1;
   element.className = `tile ${tile.kind}${mode === "edit" && state.selected === tile.tileId ? " selected" : ""}`;
-  element.style.gridColumn = `${tile.col + 1} / span ${spanW}`;
-  element.style.gridRow = `${tile.row + 1} / span ${spanH}`;
+  if (tileSnaps(tile)) {
+    element.style.gridColumn = `${tile.col + 1} / span ${spanW}`;
+    element.style.gridRow = `${tile.row + 1} / span ${spanH}`;
+  } else {
+    const grid = $("grid");
+    const content = contentSize();
+    const box = tilePixelBox(tile);
+    clampFreeOrigin(tile);
+    const viewW = grid && grid.clientWidth ? grid.clientWidth : content.width;
+    const viewH = grid && grid.clientHeight ? grid.clientHeight : content.height;
+    element.classList.add("tile-free");
+    element.style.position = "absolute";
+    element.style.left = `${Math.round(tile.x * viewW / content.width)}px`;
+    element.style.top = `${Math.round(tile.y * viewH / content.height)}px`;
+    element.style.width = `${Math.round(box.width * viewW / content.width)}px`;
+    element.style.height = `${Math.round(box.height * viewH / content.height)}px`;
+  }
   element.dataset.spanW = String(spanW);
   element.dataset.spanH = String(spanH);
   element.dataset.tileId = tile.tileId;
@@ -1684,7 +1748,8 @@ function buildTileElement(tile, context) {
       const stateLine = dimmerStateLine(tile, live, interaction, displayText, body);
       let cardBody;
       if (showIcon) {
-        cardBody = `<button type="button" class="oh-icon-toggle" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, tile.onColor)}</button>`;
+        const ink = iconStateColor(tile, on);
+        cardBody = `<button type="button" class="oh-icon-toggle${ink ? " icon-colored" : ""}" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, ink)}</button>`;
       } else if (interaction === "") {
         const align = tile.titleAlign === "center" ? "align-center" : (tile.titleAlign === "right" ? "align-right" : "align-left");
         const core = live && live.text ? live.text : (!variable ? "—" : ((variable.type === 1 || variable.type === 2) ? "12,3" : "Ein"));
@@ -1700,7 +1765,7 @@ function buildTileElement(tile, context) {
         const place = tile.iconPlace === "after" ? "after" : (tile.iconPlace === "none" || !iconId ? "none" : "before");
         const headingId = titleIconShown(tile) ? titleIconId(tile) : "";
         const headingIcon = headingId ? `<span class="value-title-icon">${iconVisual(headingId)}</span>` : "";
-        const titleHtml = tile.showTitle === false ? "" : `<div class="value-badge-title ${align}"${cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic)}>${headingIcon}<span class="value-title-text">${escapeHtml(label)}</span></div>`;
+        const titleHtml = tile.showTitle === false ? "" : `<div class="value-badge-title ${align}"${titleCss(tile)}>${headingIcon}<span class="value-title-text">${escapeHtml(label)}</span></div>`;
         const valueIcon = place === "none" ? "" : `<span class="value-inline-icon"${iconStyle}>${iconVisual(iconId)}</span>`;
         const readoutInner = place === "after"
           ? `<span class="value-readout-text">${escapeHtml(readout)}</span>${valueIcon}`
@@ -1724,6 +1789,7 @@ function buildTileElement(tile, context) {
     navName.style.fontSize = `${titlePxOf(tile)}px`;
     if (tile.titleBold) navName.style.fontWeight = "700";
     if (tile.titleItalic) navName.style.fontStyle = "italic";
+    if (titleColorOf(tile)) navName.style.color = titleColorOf(tile);
   } else if (tile.kind === "label") {
     const textClass = labelTextClass(tile);
     const text = escapeHtml(tile.text || "Text");
@@ -1799,6 +1865,12 @@ function buildTileElement(tile, context) {
       const detail = context.probeImageErrorDetails && context.probeImageErrorDetails[tile.tileId];
       element.innerHTML = `<div class="media-placeholder">${escapeHtml(probeImageErrorText(context.probeImageErrors[tile.tileId], detail))}</div>`;
     }
+    } else if ((tile.imageSource || "catalog") === "icon") {
+      const code = iconCode(tile.icon);
+      const ink = /^#[0-9a-fA-F]{6}$/.test(tile.textColor || "") ? tile.textColor : "#ffffff";
+      element.innerHTML = code
+        ? `<span class="image-icon mdi" style="color:${ink}">&#x${code.toString(16)};</span>`
+        : `<div class="missing">Symbol wählen</div>`;
     } else {
       const image = state.images.find((item) => item.id === tile.imageId);
       element.innerHTML = image ? `<img src="images/${image.id}.${image.ext}" alt="">` : `<div class="missing">Bild wählen</div>`;
@@ -1842,6 +1914,7 @@ function buildTileElement(tile, context) {
         camTitle.style.fontSize = `${titlePxOf(tile)}px`;
         if (tile.titleBold) camTitle.style.fontWeight = "700";
         if (tile.titleItalic) camTitle.style.fontStyle = "italic";
+        if (titleColorOf(tile)) camTitle.style.color = titleColorOf(tile);
       }
     }
   } else if (tile.kind === "multi" || tile.kind === "contacts") {
@@ -1854,7 +1927,7 @@ function buildTileElement(tile, context) {
       }
       return `<div class="multi-row"><span>${escapeHtml(row.title || "Wert")}</span><strong${cssFont(textPxOf(tile), tile.textBold, tile.textItalic)}>${escapeHtml(line.text || "—")}</strong></div>`;
     }).join("") || `<div class="hint">Zeilen wählen</div>`;
-    const head = tile.showTitle === false ? "" : `<div class="value-badge-title"${cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic)}>${escapeHtml(tile.title || KIND_NAMES[tile.kind])}</div>`;
+    const head = tile.showTitle === false ? "" : `<div class="value-badge-title"${titleCss(tile)}>${escapeHtml(tile.title || KIND_NAMES[tile.kind])}</div>`;
     element.innerHTML = `${editorKicker(mode, KIND_NAMES[tile.kind])}<div class="value-badge">${head}<div class="row-list">${body}</div></div>`;
   } else if (tile.kind === "gauge") {
     const min = Number(tile.valueMin ?? 0);
@@ -1863,12 +1936,42 @@ function buildTileElement(tile, context) {
     const span = max === min ? 1 : max - min;
     const pct = Math.max(0, Math.min(100, ((raw - min) / span) * 100));
     const text = live && live.text ? live.text : "—";
-    const head = tile.showTitle === false ? "" : `<div class="value-badge-title"${cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic)}>${escapeHtml(tile.title || "Bogen")}</div>`;
+    const head = tile.showTitle === false ? "" : `<div class="value-badge-title"${titleCss(tile)}>${escapeHtml(tile.title || "Bogen")}</div>`;
     element.innerHTML = `${editorKicker(mode, "Bogen")}<div class="gauge-tile">${head}<div class="gauge-arc" style="--gauge:${pct.toFixed(1)}"></div><div class="gauge-readout"${cssFont(textPxOf(tile), tile.textBold, tile.textItalic)}>${escapeHtml(text)}</div>${tile.showAge ? `<div class="age-line">${escapeHtml((live && live.age) || "vor 4 min")}</div>` : ""}</div>`;
+  } else if (tile.kind === "schedule") {
+    const schedule = live && live.schedule;
+    const groups = schedule && Array.isArray(schedule.groups) ? schedule.groups : [];
+    const now = schedule ? Number(schedule.now) : -1;
+    const today = schedule ? Number(schedule.today) : 0;
+    const head = tile.showTitle === false ? "" : `<div class="value-badge-title"${titleCss(tile)}>${escapeHtml(tile.title || "Zeitplan")}</div>`;
+    let body;
+    if (!groups.length) {
+      const named = (state.variables || []).find((item) => item.objectKind === "schedule" && Number(item.id) === Number(tile.eventId));
+      body = `<div class="missing">${escapeHtml(named ? named.name : "Wochenplan wählen")}</div>`;
+    } else {
+      const rows = groups.map((group) => {
+        const segs = (Array.isArray(group.segs) ? group.segs : []).map((seg) => {
+          const start = Number(seg[0]) || 0;
+          const end = Number(seg[1]) || 0;
+          const left = (start / 1440) * 100;
+          const width = Math.max(0.4, ((end - start) / 1440) * 100);
+          return `<span class="schedule-seg" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%;background:${scheduleHex(seg[2])}"></span>`;
+        }).join("");
+        const marker = now >= 0 && (Number(group.days) & today)
+          ? `<span class="schedule-now" style="left:${((now / 1440) * 100).toFixed(2)}%"></span>`
+          : "";
+        return `<div class="schedule-row"><span>${escapeHtml(group.label || "")}</span><div class="schedule-bar">${segs}${marker}</div></div>`;
+      }).join("");
+      const legend = (Array.isArray(schedule.legend) ? schedule.legend : []).map((item) => (
+        `<span class="schedule-key"><i style="background:${scheduleHex(item.color)}"></i>${escapeHtml(item.name || "")}</span>`
+      )).join("");
+      body = `${rows}${legend ? `<div class="schedule-legend">${legend}</div>` : ""}`;
+    }
+    element.innerHTML = `${editorKicker(mode, "Zeitplan")}<div class="schedule-tile">${head}${body}</div>`;
   } else if (tile.kind === "countdown" || tile.kind === "appointment") {
     const text = live && live.text ? live.text : (tile.kind === "countdown" ? "0 min" : "Termin");
     const sub = live && live.sub ? live.sub : "";
-    const head = tile.showTitle === false ? "" : `<div class="value-badge-title"${cssFont(titlePxOf(tile), tile.titleBold, tile.titleItalic)}>${escapeHtml(tile.title || KIND_NAMES[tile.kind])}</div>`;
+    const head = tile.showTitle === false ? "" : `<div class="value-badge-title"${titleCss(tile)}>${escapeHtml(tile.title || KIND_NAMES[tile.kind])}</div>`;
     element.innerHTML = `${editorKicker(mode, KIND_NAMES[tile.kind])}<div class="value-badge">${head}<div class="value-readout"${cssFont(textPxOf(tile), tile.textBold, tile.textItalic)}>${escapeHtml(text)}</div>${sub ? `<div class="age-line">${escapeHtml(sub)}</div>` : ""}</div>`;
   }
   if (mode === "edit") {
@@ -1894,11 +1997,16 @@ function buildTileElement(tile, context) {
       renderVariableTree();
       openTileDialog(tile);
     });
-    element.addEventListener("dragstart", (event) => {
-      event.dataTransfer.setData("text/homedisplay-tile", tile.tileId);
-      event.dataTransfer.effectAllowed = "move";
-    });
-    bindDrop(element, tile.col, tile.row, tile);
+    if (tileSnaps(tile)) {
+      element.addEventListener("dragstart", (event) => {
+        event.dataTransfer.setData("text/homedisplay-tile", tile.tileId);
+        event.dataTransfer.effectAllowed = "move";
+      });
+      bindDrop(element, tile.col, tile.row, tile);
+    } else {
+      element.draggable = false;
+      bindFreeDrag(element, tile);
+    }
     if (state.selected === tile.tileId) bindResizeHandles(element, tile);
   }
   if (spanW > 1 || spanH > 1) {
@@ -1988,6 +2096,35 @@ function controlMarkup(control, tile, live, demoOn) {
     return `<div class="ctl setpoint"><button type="button" class="sp-btn" data-setpoint="down">−</button><span class="sp-val">${escapeHtml(displayText)}</span><button type="button" class="sp-btn" data-setpoint="up">+</button></div>`;
   }
   return "";
+}
+
+function bindFreeDrag(element, tile) {
+  element.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || (event.target.closest && event.target.closest(".resize-handle"))) return;
+    const originX = Number(tile.x) || 0;
+    const originY = Number(tile.y) || 0;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const move = (moveEvent) => {
+      const grid = $("grid");
+      const content = contentSize();
+      const scale = editorScale() || 1;
+      const viewW = grid && grid.clientWidth ? grid.clientWidth : content.width;
+      const viewH = grid && grid.clientHeight ? grid.clientHeight : content.height;
+      tile.x = originX + ((moveEvent.clientX - startX) / scale) * content.width / viewW;
+      tile.y = originY + ((moveEvent.clientY - startY) / scale) * content.height / viewH;
+      clampFreeOrigin(tile);
+      element.style.left = `${Math.round(tile.x * viewW / content.width)}px`;
+      element.style.top = `${Math.round(tile.y * viewH / content.height)}px`;
+    };
+    const end = () => {
+      element.removeEventListener("pointermove", move);
+      element.removeEventListener("pointerup", end);
+      markDirty();
+    };
+    element.addEventListener("pointermove", move);
+    element.addEventListener("pointerup", end);
+  });
 }
 
 function bindDrop(target, col, row, existing) {
@@ -2181,6 +2318,11 @@ function addTile(kind, col, row, variable, control) {
   } else if (kind === "appointment") {
     tile.variableId = variable ? variable.id : 0;
     tile.title = tile.title || "Termin";
+  } else if (kind === "schedule") {
+    tile.eventId = 0;
+    tile.title = "Zeitplan";
+    tile.colSpan = Math.min(4, currentGrid().columns);
+    tile.rowSpan = Math.min(2, currentGrid().rows);
   } else if (kind === "separator") {
     tile.orientation = "horizontal";
     tile.thickness = 2;
@@ -2228,7 +2370,7 @@ function addTile(kind, col, row, variable, control) {
   renderGrid();
   renderProperties();
   renderVariableTree();
-  if (kind === "image" && tile.imageSource !== "media" && !tile.imageId) openImages();
+  if (kind === "image" && (tile.imageSource || "catalog") === "catalog" && !tile.imageId) openImages();
 }
 
 function assignCameraMedia(tile, item, silent) {
@@ -2443,7 +2585,7 @@ function tileById(id) {
 }
 
 function applyTileStyle(source, target) {
-  const keys = ["bgColor", "onColor", "textColor", "titlePx", "titleBold", "titleItalic", "textPx", "textBold", "textItalic", "textUnderline", "icon", "iconPlace", "titleAlign", "titleIcon", "showTitleIcon"];
+  const keys = ["bgColor", "onColor", "textColor", "titleColor", "titlePx", "titleBold", "titleItalic", "textPx", "textBold", "textItalic", "textUnderline", "icon", "iconPlace", "titleAlign", "titleIcon", "showTitleIcon"];
   for (const key of keys) {
     if (source[key] == null || source[key] === "") delete target[key];
     else target[key] = source[key];
@@ -2477,6 +2619,9 @@ function syncFontPreview(select, preview) {
   if ($("p-title-bold")?.checked && preview.id === "p-title-preview") preview.style.fontWeight = "700";
   else if (preview.id === "p-title-preview") preview.style.fontWeight = "600";
   preview.style.fontStyle = (($("p-title-italic")?.checked && preview.id === "p-title-preview") || ($("p-text-italic")?.checked && preview.id === "p-text-preview")) ? "italic" : "normal";
+  if (preview.id === "p-title-preview") {
+    preview.style.color = $("p-title-color-on")?.checked ? ($("p-title-color")?.value || "") : "";
+  }
 }
 
 function syncFontProperties(tile) {
@@ -2500,6 +2645,8 @@ function syncFontProperties(tile) {
   }
   if ($("p-title-bold")) $("p-title-bold").checked = Boolean(tile.titleBold);
   if ($("p-title-italic")) $("p-title-italic").checked = Boolean(tile.titleItalic);
+  if ($("p-title-color-on")) $("p-title-color-on").checked = Boolean(titleColorOf(tile));
+  if ($("p-title-color") && titleColorOf(tile)) $("p-title-color").value = titleColorOf(tile);
   if ($("p-text-bold")) $("p-text-bold").checked = Boolean(tile.textBold);
   if ($("p-text-italic")) $("p-text-italic").checked = Boolean(tile.textItalic);
   if ($("p-text-underline")) $("p-text-underline").checked = Boolean(tile.textUnderline);
@@ -2512,6 +2659,7 @@ function syncFontProperties(tile) {
   if ($("p-gauge-unit")) $("p-gauge-unit").value = tile.unit || "";
   if ($("p-gauge-decimals")) $("p-gauge-decimals").value = tile.decimals ?? 0;
   if ($("p-countdown-mode")) $("p-countdown-mode").value = tile.countdownMode === "seconds" ? "seconds" : "until";
+  if (tile.kind === "schedule") fillScheduleSelect(tile.eventId || 0);
 }
 
 function applyFontFields(tile) {
@@ -2536,6 +2684,9 @@ function applyFontFields(tile) {
   else delete tile.titleBold;
   if ($("p-title-italic")?.checked) tile.titleItalic = true;
   else delete tile.titleItalic;
+  if ($("p-title-color-on")?.checked && $("p-title-color") && !$("p-title-font")?.classList.contains("hidden")) {
+    tile.titleColor = $("p-title-color").value;
+  } else delete tile.titleColor;
   if ($("p-text-bold")?.checked) tile.textBold = true;
   else delete tile.textBold;
   if ($("p-text-italic")?.checked) tile.textItalic = true;
@@ -2558,6 +2709,30 @@ function applyExtraTileFields(tile) {
   if (tile.kind === "countdown") {
     tile.countdownMode = $("p-countdown-mode")?.value === "seconds" ? "seconds" : "until";
   }
+  if (tile.kind === "schedule") {
+    tile.eventId = Number($("p-schedule")?.value) || 0;
+  }
+}
+
+function scheduleHex(value) {
+  const color = (Number(value) >>> 0) & 0xffffff;
+  return `#${color.toString(16).padStart(6, "0")}`;
+}
+
+function fillScheduleSelect(current) {
+  const select = $("p-schedule");
+  if (!select) return;
+  const items = (state.variables || []).filter((item) => item.objectKind === "schedule");
+  const options = [`<option value="0">Wochenplan wählen</option>`];
+  for (const item of items) {
+    const path = item.path ? `${item.path} / ` : "";
+    options.push(`<option value="${Number(item.id)}">${escapeHtml(path + item.name)}</option>`);
+  }
+  if (current && !items.some((item) => Number(item.id) === Number(current))) {
+    options.push(`<option value="${Number(current)}">Ereignis ${Number(current)}</option>`);
+  }
+  select.innerHTML = options.join("");
+  select.value = String(current || 0);
 }
 
 function renderRowEditor(tile) {
@@ -2745,18 +2920,16 @@ function renderProperties() {
   $("p-title").value = tile.title || "";
   if ($("p-show-title")) $("p-show-title").checked = tile.showTitle !== false;
   if ($("p-title-align")) $("p-title-align").value = tile.titleAlign || "left";
-  if ($("p-show-title-icon")) $("p-show-title-icon").checked = titleIconEnabled(tile);
   if ($("p-title-icon")) {
     fillIconSelect($("p-title-icon"), true);
-    const heading = titleIconId(tile);
-    $("p-title-icon").value = heading;
-    $("p-title-icon").disabled = !$("p-show-title-icon")?.checked;
+    $("p-title-icon").value = titleIconEnabled(tile) ? (titleIconId(tile) || "") : "";
   }
   if ($("p-own-bg")) $("p-own-bg").checked = Boolean(tile.bgColor);
   if ($("p-bg-color") && tile.bgColor) $("p-bg-color").value = tile.bgColor;
   if ($("p-own-on")) $("p-own-on").checked = Boolean(tile.onColor);
   if ($("p-on-color") && tile.onColor) $("p-on-color").value = tile.onColor;
   if ($("p-group")) $("p-group").value = tile.group || "";
+  if ($("p-snap")) $("p-snap").checked = tile.snapToGrid !== false;
   $("p-col").value = tile.col + 1;
   $("p-row").value = tile.row + 1;
   if (tile.kind === "nav") {
@@ -2775,6 +2948,9 @@ function renderProperties() {
     fillIconSelect($("p-iconoff"));
     if ($("p-iconon")) $("p-iconon").value = tile.iconOn || "lightOn";
     if ($("p-iconoff")) $("p-iconoff").value = tile.iconOff || "lightOff";
+    if ($("p-icon-colors")) $("p-icon-colors").checked = Boolean(tile.iconOffColor || tile.iconOnColor);
+    if ($("p-icon-off-color")) $("p-icon-off-color").value = tile.iconOffColor || "#1a1a1a";
+    if ($("p-icon-on-color")) $("p-icon-on-color").value = tile.iconOnColor || "#ff9f1a";
     if ($("p-show-icon")) $("p-show-icon").checked = tile.showIcon !== false;
     if ($("p-show-state-text")) $("p-show-state-text").checked = tile.showStateText === true;
     if ($("p-interaction")) $("p-interaction").value = tileInteractionMode(tile);
@@ -2873,6 +3049,9 @@ function renderProperties() {
     fillIconSelect($("p-scene-iconoff"));
     if ($("p-scene-iconon")) $("p-scene-iconon").value = tile.iconOn || "lightOn";
     if ($("p-scene-iconoff")) $("p-scene-iconoff").value = tile.iconOff || "lightOff";
+    if ($("p-scene-icon-colors")) $("p-scene-icon-colors").checked = Boolean(tile.iconOffColor || tile.iconOnColor);
+    if ($("p-scene-icon-off-color")) $("p-scene-icon-off-color").value = tile.iconOffColor || "#1a1a1a";
+    if ($("p-scene-icon-on-color")) $("p-scene-icon-on-color").value = tile.iconOnColor || "#ff9f1a";
     if ($("p-scene-show-icon")) $("p-scene-show-icon").checked = tile.showIcon !== false;
     $("p-scene-icon-toggle")?.classList.toggle("hidden", !($("p-scene-show-icon")?.checked));
     if ($("p-scene-show-state-text")) $("p-scene-show-state-text").checked = tile.showStateText === true;
@@ -2922,8 +3101,14 @@ function renderProperties() {
   const imgSource = tile.imageSource || "catalog";
   if ($("p-imagesource")) {
     $("p-imagesource").value = imgSource;
-    $("p-image-catalog").classList.toggle("hidden", imgSource === "media");
+    $("p-image-catalog").classList.toggle("hidden", imgSource !== "catalog");
     $("p-image-media").classList.toggle("hidden", imgSource !== "media");
+    $("p-image-icon")?.classList.toggle("hidden", imgSource !== "icon");
+    $("p-image-background-wrap")?.classList.toggle("hidden", imgSource === "icon");
+  }
+  if ($("p-image-icon-id")) {
+    fillIconSelect($("p-image-icon-id"), false);
+    $("p-image-icon-id").value = tile.icon || "energy";
   }
   if ($("p-image")) {
     fillImageSelect($("p-image"));
@@ -2972,17 +3157,16 @@ function applyProperties() {
   tile.title = $("p-title").value;
   if ($("p-show-title") && !$("p-show-title").checked) tile.showTitle = false;
   else delete tile.showTitle;
-  if ($("p-show-title-icon")) tile.showTitleIcon = $("p-show-title-icon").checked;
   const headingIcon = $("p-title-icon") ? $("p-title-icon").value : "";
   const plainValue = tile.kind === "value" && (($("p-interaction") && $("p-interaction").value) || "") === "";
-  if (plainValue) {
-    if (headingIcon) tile.titleIcon = headingIcon;
-    else delete tile.titleIcon;
-  } else if ($("p-title-icon")) {
-    if (headingIcon) tile.titleIcon = headingIcon;
-    else delete tile.titleIcon;
-    if (tile.kind !== "value") tile.icon = headingIcon;
+  if (headingIcon) {
+    tile.titleIcon = headingIcon;
+    tile.showTitleIcon = true;
+  } else {
+    delete tile.titleIcon;
+    tile.showTitleIcon = false;
   }
+  if (!plainValue && tile.kind !== "value" && $("p-title-icon")) tile.icon = headingIcon;
   const titleAlign = $("p-title-align") ? $("p-title-align").value : "left";
   if (titleAlign === "center" || titleAlign === "right") tile.titleAlign = titleAlign;
   else delete tile.titleAlign;
@@ -2993,6 +3177,33 @@ function applyProperties() {
   const group = ($("p-group") && $("p-group").value.trim()) || "";
   if (group) tile.group = group;
   else delete tile.group;
+  if ($("p-snap")) {
+    const snap = $("p-snap").checked;
+    const was = tile.snapToGrid !== false;
+    if (snap && !was) {
+      const probe = Object.assign({}, tile, { snapToGrid: true });
+      const spanW = tile.colSpan || 1;
+      const spanH = tile.rowSpan || 1;
+      if (!fits(probe, tile.col, tile.row, spanW, spanH, tile.tileId)) {
+        const spot = freeCell(spanW, spanH);
+        if (spot) {
+          tile.col = spot.col;
+          tile.row = spot.row;
+        }
+      }
+      delete tile.snapToGrid;
+      delete tile.x;
+      delete tile.y;
+    } else if (!snap) {
+      if (was) {
+        const origin = contentPointFromTile(tile);
+        tile.x = origin.x;
+        tile.y = origin.y;
+      }
+      tile.snapToGrid = false;
+      clampFreeOrigin(tile);
+    }
+  }
   const col = Math.max(0, Number($("p-col").value) - 1);
   const row = Math.max(0, Number($("p-row").value) - 1);
   const colSpan = Math.max(1, tile.colSpan || 1);
@@ -3017,6 +3228,8 @@ function applyProperties() {
     delete tile.iconMode;
     delete tile.iconOn;
     delete tile.iconOff;
+    delete tile.iconOffColor;
+    delete tile.iconOnColor;
     delete tile.showIcon;
     delete tile.showStateText;
     delete tile.control;
@@ -3028,6 +3241,7 @@ function applyProperties() {
         tile.iconMode = "toggle";
         tile.iconOn = $("p-iconon").value || "lightOn";
         tile.iconOff = $("p-iconoff").value || "lightOff";
+        writeIconColors(tile, $("p-icon-colors")?.checked, $("p-icon-off-color"), $("p-icon-on-color"));
       } else {
         tile.showIcon = false;
       }
@@ -3213,12 +3427,15 @@ function applyProperties() {
       tile.iconMode = "toggle";
       tile.iconOn = $("p-scene-iconon")?.value || "lightOn";
       tile.iconOff = $("p-scene-iconoff")?.value || "lightOff";
+      writeIconColors(tile, $("p-scene-icon-colors")?.checked, $("p-scene-icon-off-color"), $("p-scene-icon-on-color"));
       if (!tile.icon) tile.icon = tile.iconOn;
     } else {
       tile.showIcon = false;
       delete tile.iconMode;
       delete tile.iconOn;
       delete tile.iconOff;
+      delete tile.iconOffColor;
+      delete tile.iconOnColor;
     }
     if ($("p-scene-show-state-text")?.checked) tile.showStateText = true;
     else delete tile.showStateText;
@@ -3256,7 +3473,14 @@ function applyProperties() {
   }
   if (tile.kind === "image") {
     const source = $("p-imagesource").value || "catalog";
-    if (source === "media") {
+    if (source === "icon") {
+      tile.imageSource = "icon";
+      tile.icon = $("p-image-icon-id") ? $("p-image-icon-id").value : (tile.icon || "energy");
+      delete tile.imageId;
+      delete tile.variableId;
+      delete tile.mediaObjectId;
+      delete tile.imageBackground;
+    } else if (source === "media") {
       tile.imageSource = "media";
       delete tile.imageId;
     } else {
@@ -3264,8 +3488,10 @@ function applyProperties() {
       tile.imageId = $("p-image").value;
       delete tile.variableId;
     }
-    tile.imageBackground = $("p-image-background") ? $("p-image-background").checked : false;
-    if (!tile.imageBackground) delete tile.imageBackground;
+    if (source !== "icon") {
+      tile.imageBackground = $("p-image-background") ? $("p-image-background").checked : false;
+      if (!tile.imageBackground) delete tile.imageBackground;
+    }
   }
   if (tile.kind === "camera" && $("p-camerasource")) {
     const source = $("p-camerasource").value || "url";
@@ -3305,13 +3531,13 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-show-title-icon", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-snap", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-icon-colors", "p-icon-off-color", "p-icon-on-color", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-icon-colors", "p-scene-icon-off-color", "p-scene-icon-on-color", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-image-icon-id", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
   $("p-flow-home-override").addEventListener("change", applyProperties);
 }
-for (const id of ["p-title-px", "p-text-px", "p-title-bold", "p-title-italic", "p-text-bold", "p-text-italic", "p-text-underline", "p-show-age", "p-gauge-min", "p-gauge-max", "p-gauge-unit", "p-gauge-decimals", "p-countdown-mode"]) {
+for (const id of ["p-title-px", "p-text-px", "p-title-bold", "p-title-italic", "p-title-color-on", "p-title-color", "p-text-bold", "p-text-italic", "p-text-underline", "p-show-age", "p-gauge-min", "p-gauge-max", "p-gauge-unit", "p-gauge-decimals", "p-countdown-mode", "p-schedule"]) {
   if ($(id)) $(id).addEventListener("change", () => {
     syncFontPreview($("p-title-px"), $("p-title-preview"));
     syncFontPreview($("p-text-px"), $("p-text-preview"));
@@ -3337,8 +3563,11 @@ if ($("p-camerasource")) {
 }
 if ($("p-imagesource")) {
   $("p-imagesource").addEventListener("change", () => {
-    $("p-image-catalog").classList.toggle("hidden", $("p-imagesource").value === "media");
-    $("p-image-media").classList.toggle("hidden", $("p-imagesource").value !== "media");
+    const source = $("p-imagesource").value;
+    $("p-image-catalog").classList.toggle("hidden", source !== "catalog");
+    $("p-image-media").classList.toggle("hidden", source !== "media");
+    $("p-image-icon")?.classList.toggle("hidden", source !== "icon");
+    $("p-image-background-wrap")?.classList.toggle("hidden", source === "icon");
     applyProperties();
   });
 }
@@ -3533,8 +3762,8 @@ function writeDisplayBehavior(layout, behavior) {
 
 function fillDisplayBehavior(behavior) {
   if ($("l-night-dim")) $("l-night-dim").checked = behavior.nightDim;
-  if ($("l-day-brightness")) $("l-day-brightness").value = behavior.dayBrightness;
-  if ($("l-night-brightness")) $("l-night-brightness").value = behavior.nightBrightness;
+  if ($("l-day-brightness")) $("l-day-brightness").checked = behavior.dayBrightness > 0;
+  if ($("l-night-brightness")) $("l-night-brightness").checked = behavior.nightBrightness > 0;
   if ($("l-night-from")) $("l-night-from").value = behavior.nightFrom;
   if ($("l-night-to")) $("l-night-to").value = behavior.nightTo;
   if ($("l-idle-mode")) $("l-idle-mode").value = String(behavior.idleMode);
@@ -3545,8 +3774,8 @@ function fillDisplayBehavior(behavior) {
 function collectDisplayBehavior() {
   return readDisplayBehavior({
     nightDim: Boolean($("l-night-dim")?.checked),
-    dayBrightness: $("l-day-brightness")?.value,
-    nightBrightness: $("l-night-brightness")?.value,
+    dayBrightness: $("l-day-brightness")?.checked ? 100 : 0,
+    nightBrightness: $("l-night-brightness")?.checked ? 100 : 0,
     nightFrom: $("l-night-from")?.value,
     nightTo: $("l-night-to")?.value,
     idleMode: Number($("l-idle-mode")?.value),
@@ -3564,9 +3793,11 @@ function openPagesDialog(addPage) {
     colorMode: state.layout.colorMode,
     theme: { ...state.layout.theme },
     behavior: readDisplayBehavior(state.layout),
+    tabBold: state.layout.tabBold === true,
     dirty: state.dirty
   };
   fillDisplayBehavior(pagesDialog.general.behavior);
+  if ($("l-tab-bold")) $("l-tab-bold").checked = pagesDialog.general.tabBold;
   if (addPage && pagesDialog.draft.length < MAX_PAGES) pagesDialog.draft.push(newPage(state.layout, pagesDialog.draft));
   renderPagesDialog();
   dialog.returnValue = "";
@@ -3593,13 +3824,6 @@ function renderPagesDialog() {
     icon.addEventListener("change", () => {
       if (icon.value) page.icon = icon.value;
       else delete page.icon;
-    });
-    const background = document.createElement("select");
-    fillImageSelect(background);
-    background.value = page.backgroundId || "";
-    background.addEventListener("change", () => {
-      if (background.value) page.backgroundId = background.value;
-      else delete page.backgroundId;
     });
     const columns = Object.assign(document.createElement("input"), { type: "number", min: 1, max: prof.maxColumns, value: page.columns });
     columns.addEventListener("change", () => {
@@ -3628,8 +3852,8 @@ function renderPagesDialog() {
     const rowsButton = document.createElement("button");
     rowsButton.type = "button";
     rowsButton.className = "icon-btn";
-    rowsButton.setAttribute("aria-label", "Zeilen");
-    rowsButton.title = "Zeilenhöhen";
+    rowsButton.setAttribute("aria-label", "Raster");
+    rowsButton.title = "Raster";
     rowsButton.innerHTML = '<span class="mdi">&#xf04f2;</span>';
     rowsButton.addEventListener("click", () => openPageRowsDialog(page));
     const lost = pageTileLoss(page);
@@ -3646,33 +3870,12 @@ function renderPagesDialog() {
     fields.append(
       pageField("Titel", title),
       pageField("Symbol", icon),
-      pageField("Hintergrund", background),
       pageField("Spalten", columns),
       pageField("Zeilen", rows),
       removeCell
     );
 
-    const weightRow = (label, weights, key, prefix) => {
-      const heading = document.createElement("div");
-      heading.className = "page-weights-label";
-      heading.textContent = label;
-      const grid = document.createElement("div");
-      grid.className = "page-grid page-grid-weights";
-      weights.forEach((weight, position) => {
-        const input = Object.assign(document.createElement("input"), { type: "number", min: 1, max: 3, step: 1, value: weight });
-        input.addEventListener("change", () => {
-          const next = Math.min(3, Math.max(1, Math.round(Number(input.value)) || 2));
-          input.value = next;
-          page[key][position] = next;
-        });
-        grid.appendChild(pageField(`${prefix} ${position + 1}`, input));
-      });
-      return [heading, grid];
-    };
-    card.append(
-      fields,
-      ...weightRow("Breite je Spalte (1 schmal, 2 normal, 3 breit)", page.columnWeights, "columnWeights", "Spalte")
-    );
+    card.append(fields);
     list.appendChild(card);
   });
   $("pages-add").disabled = pages.length >= MAX_PAGES;
@@ -3684,16 +3887,24 @@ function openPageRowsDialog(page) {
   $("page-rows-title").textContent = page.title || "Seite";
   const grid = $("page-rows-grid");
   grid.innerHTML = "";
-  page.rowWeights = normalizeWeights(page.rowWeights, page.rows);
-  page.rowWeights.forEach((weight, position) => {
-    const input = Object.assign(document.createElement("input"), { type: "number", min: 1, max: 3, step: 1, value: weight });
-    input.addEventListener("change", () => {
-      const next = Math.min(3, Math.max(1, Math.round(Number(input.value)) || 2));
-      input.value = next;
-      page.rowWeights[position] = next;
+  const addWeights = (label, key, count, prefix) => {
+    page[key] = normalizeWeights(page[key], count);
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = label;
+    grid.appendChild(hint);
+    page[key].forEach((weight, position) => {
+      const input = Object.assign(document.createElement("input"), { type: "number", min: 1, max: 3, step: 1, value: weight });
+      input.addEventListener("change", () => {
+        const next = Math.min(3, Math.max(1, Math.round(Number(input.value)) || 2));
+        input.value = next;
+        page[key][position] = next;
+      });
+      grid.appendChild(pageField(`${prefix} ${position + 1}`, input));
     });
-    grid.appendChild(pageField(`Zeile ${position + 1}`, input));
-  });
+  };
+  addWeights("Breite je Spalte: 1 schmal, 2 normal, 3 breit.", "columnWeights", page.columns, "Spalte");
+  addWeights("Höhe je Zeile: 1 flach, 2 normal, 3 hoch.", "rowWeights", page.rows, "Zeile");
   dialog.returnValue = "";
   dialog.showModal();
 }
@@ -3704,11 +3915,15 @@ function restorePagesGeneral() {
   state.layout.displayProfile = saved.displayProfile;
   state.layout.colorMode = saved.colorMode;
   state.layout.theme = applyTheme(saved.theme);
+  state.layout.tabBold = saved.tabBold === true;
+  if (!state.layout.tabBold) delete state.layout.tabBold;
+  if ($("l-tab-bold")) $("l-tab-bold").checked = saved.tabBold === true;
   writeDisplayBehavior(state.layout, saved.behavior);
   fillDisplayBehavior(saved.behavior || readDisplayBehavior(state.layout));
   fillProfileSelect($("display-profile"), saved.displayProfile);
   $("color-mono").checked = saved.colorMode === "mono";
   document.getElementById("editor-screen")?.classList.toggle("mono", saved.colorMode === "mono");
+  renderPageTabs();
   applyGridAspect();
   state.dirty = saved.dirty;
   updateTitle();
@@ -3741,6 +3956,8 @@ $("pages-dialog").addEventListener("close", () => {
     }
   }
   writeDisplayBehavior(state.layout, collectDisplayBehavior());
+  state.layout.tabBold = Boolean($("l-tab-bold")?.checked);
+  if (!state.layout.tabBold) delete state.layout.tabBold;
   state.layout.pages = pages;
   if (!pages.some((page) => page.id === state.page)) state.page = pages[0].id;
   if (state.selected && !currentPage().tiles.some((tile) => tile.tileId === state.selected)) state.selected = null;
@@ -3774,10 +3991,28 @@ function iconCode(icon, on) {
   return found && found[2] ? found[2] : 0;
 }
 
-function iconVisual(icon, on) {
+function iconStateColor(tile, on) {
+  if (!tile) return "";
+  const color = on ? tile.iconOnColor : tile.iconOffColor;
+  return /^#[0-9a-fA-F]{6}$/.test(color || "") ? color : "";
+}
+
+function writeIconColors(tile, enabled, offInput, onInput) {
+  if (enabled && offInput && onInput) {
+    tile.iconOffColor = offInput.value || "#1a1a1a";
+    tile.iconOnColor = onInput.value || "#ff9f1a";
+  } else {
+    delete tile.iconOffColor;
+    delete tile.iconOnColor;
+  }
+}
+
+function iconVisual(icon, on, color) {
   const code = iconCode(icon, on);
+  const ink = /^#[0-9a-fA-F]{6}$/.test(color || "") ? color : "";
+  const style = ink ? ` style="color:${ink}"` : "";
   if (!code) return escapeHtml(iconName(icon));
-  return `<span class="mdi">&#x${code.toString(16)};</span>`;
+  return `<span class="mdi"${style}>&#x${code.toString(16)};</span>`;
 }
 
 function labelTextClass(tile) {
@@ -3811,6 +4046,7 @@ function renderVariableTree() {
   const onlyActions = $("only-actions").checked;
   const groups = new Map();
   for (const variable of state.variables) {
+    if (variable.objectKind === "schedule") continue;
     if (onlyActions && !variable.action && !isMediaPick(variable) && !isImageUrlRef(variable)) continue;
     if (!isMediaObject(variable) && !variable.mediaRole && Number(variable.type) > 3) continue;
     if (!variableMatches(variable, needle)) continue;
@@ -3906,6 +4142,7 @@ function fillVariablePickerList() {
   const onlyActions = $("var-picker-actions").checked;
   list.innerHTML = "";
   const matches = state.variables.filter((variable) => {
+    if (variable.objectKind === "schedule") return false;
     if (onlyActions && !variable.action) return false;
     if (!pickerFilter(pickerState.kind, variable)) return false;
     return variableMatches(variable, needle);
@@ -4064,13 +4301,13 @@ function validateLayout(layout) {
         throw new Error(`Energiefluss „${tile.title || tile.tileId}“: alle Pflicht-Variablen zuweisen (siehe Eigenschaften).`);
       }
       if (tile.kind === "image") {
-        if ((tile.imageSource || "catalog") === "media") {
+        const source = tile.imageSource || "catalog";
+        if (source === "media") {
           if (!tile.variableId && !tile.mediaObjectId) throw new Error("Eine Bildkachel (Medien) braucht eine Medien-Variable oder ein Medienobjekt.");
+        } else if (source === "icon") {
+          if (!tile.icon) throw new Error("Eine Bildkachel (Symbol) braucht ein Symbol.");
         } else if (!tile.imageId) throw new Error("Eine Bildkachel hat kein Bild.");
       }
-    }
-    if (page.backgroundId && !state.images.some((image) => image.id === page.backgroundId)) {
-      throw new Error(`Die Seite „${page.title || page.id}“ verweist auf ein gelöschtes Hintergrundbild.`);
     }
   }
 }
@@ -4195,6 +4432,12 @@ $("layout-name").addEventListener("input", () => {
   state.layout.name = $("layout-name").value;
   markDirty();
 });
+$("l-tab-bold")?.addEventListener("change", () => {
+  if (!state.layout) return;
+  state.layout.tabBold = $("l-tab-bold").checked;
+  if (!state.layout.tabBold) delete state.layout.tabBold;
+  renderPageTabs();
+});
 $("color-mono")?.addEventListener("change", () => {
   if (!state.layout) return;
   state.layout.colorMode = $("color-mono").checked ? "mono" : "color";
@@ -4299,8 +4542,32 @@ function renderImageList() {
   for (const image of state.images) {
     const card = document.createElement("div");
     card.className = "image-card";
-    card.innerHTML = `<img src="images/${image.id}.${image.ext}" alt=""><div></div><small>${image.width}×${image.height}</small><br>`;
-    card.querySelector("div").textContent = image.name;
+    card.innerHTML = `<img src="images/${image.id}.${image.ext}" alt=""><small>${image.width}×${image.height}</small><br>`;
+    const name = document.createElement("input");
+    name.type = "text";
+    name.maxLength = 60;
+    name.value = image.name || "";
+    name.addEventListener("change", async () => {
+      const next = name.value.trim();
+      if (!next) {
+        name.value = image.name || "";
+        setStatus("Der Bildname darf nicht leer sein.");
+        return;
+      }
+      if (next === image.name) return;
+      try {
+        const result = await call("renameImage", { id: image.id, name: next });
+        if (!result.ok) throw new Error(result.error || "Name konnte nicht gespeichert werden.");
+        image.name = (result.image && result.image.name) || next;
+        name.value = image.name;
+        if ($("p-image")) fillImageSelect($("p-image"));
+        setStatus(`Bild heißt jetzt „${image.name}“.`);
+      } catch (error) {
+        name.value = image.name || "";
+        setStatus(error.message);
+      }
+    });
+    card.appendChild(name);
     const use = document.createElement("button");
     use.type = "button";
     use.textContent = "Verwenden";
