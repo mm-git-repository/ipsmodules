@@ -2623,6 +2623,9 @@ function syncFontPreview(select, preview) {
   if (preview.id === "p-title-preview") {
     preview.style.color = $("p-title-color-on")?.checked ? ($("p-title-color")?.value || "") : "";
   }
+  if (preview.id === "p-text-preview") {
+    preview.style.color = $("p-own-text")?.checked ? ($("p-text-color")?.value || "") : "";
+  }
 }
 
 function syncFontProperties(tile) {
@@ -2648,6 +2651,8 @@ function syncFontProperties(tile) {
   if ($("p-title-italic")) $("p-title-italic").checked = Boolean(tile.titleItalic);
   if ($("p-title-color-on")) $("p-title-color-on").checked = Boolean(titleColorOf(tile));
   if ($("p-title-color") && titleColorOf(tile)) $("p-title-color").value = titleColorOf(tile);
+  if ($("p-own-text")) $("p-own-text").checked = Boolean(tile.textColor);
+  if ($("p-text-color") && tile.textColor) $("p-text-color").value = tile.textColor;
   if ($("p-text-bold")) $("p-text-bold").checked = Boolean(tile.textBold);
   if ($("p-text-italic")) $("p-text-italic").checked = Boolean(tile.textItalic);
   if ($("p-text-underline")) $("p-text-underline").checked = Boolean(tile.textUnderline);
@@ -2688,6 +2693,10 @@ function applyFontFields(tile) {
   if ($("p-title-color-on")?.checked && $("p-title-color") && !$("p-title-font")?.classList.contains("hidden")) {
     tile.titleColor = $("p-title-color").value;
   } else delete tile.titleColor;
+  if (!$("p-body-font")?.classList.contains("hidden")) {
+    if ($("p-own-text")?.checked && $("p-text-color")) tile.textColor = $("p-text-color").value;
+    else delete tile.textColor;
+  }
   if ($("p-text-bold")?.checked) tile.textBold = true;
   else delete tile.textBold;
   if ($("p-text-italic")?.checked) tile.textItalic = true;
@@ -2926,6 +2935,7 @@ function renderProperties() {
     $("p-title-icon").value = titleIconEnabled(tile) ? (titleIconId(tile) || "") : "";
   }
   if ($("p-own-bg")) $("p-own-bg").checked = Boolean(tile.bgColor);
+  if ($("p-own-bg-label") && tile.kind !== "value") $("p-own-bg-label").textContent = tile.kind === "image" ? "Hintergrundfarbe" : "Eigene Farbe";
   if ($("p-bg-color") && tile.bgColor) $("p-bg-color").value = tile.bgColor;
   if ($("p-own-on")) $("p-own-on").checked = Boolean(tile.onColor);
   if ($("p-on-color") && tile.onColor) $("p-on-color").value = tile.onColor;
@@ -2961,8 +2971,6 @@ function renderProperties() {
     syncInteractionPropertyPanels();
     if ($("p-dim-show-percent")) $("p-dim-show-percent").checked = tile.dimShowPercent !== false;
     if ($("p-dim-layout")) $("p-dim-layout").value = tile.dimLayout || "horizontal";
-    if ($("p-own-text")) $("p-own-text").checked = Boolean(tile.textColor);
-    if ($("p-text-color") && tile.textColor) $("p-text-color").value = tile.textColor;
     if ($("p-threshold")) $("p-threshold").value = tile.threshold != null ? String(tile.threshold) : "";
     if ($("p-status-color")) $("p-status-color").value = tile.color || "neutral";
     if ($("p-dim-tap")) {
@@ -3262,8 +3270,6 @@ function applyProperties() {
     } else {
       delete tile.iconPlace;
     }
-    if ($("p-own-text")?.checked && $("p-text-color") && mode === "") tile.textColor = $("p-text-color").value;
-    else delete tile.textColor;
     const thresholdRaw = ($("p-threshold")?.value || "").trim();
     if (mode === "" && thresholdRaw !== "" && !Number.isNaN(Number(thresholdRaw))) {
       tile.threshold = Number(thresholdRaw);
@@ -3532,13 +3538,13 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-snap", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-icon-colors", "p-icon-off-color", "p-icon-on-color", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-icon-colors", "p-scene-icon-off-color", "p-scene-icon-on-color", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-image-icon-id", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-own-text", "p-text-color", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-snap", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-icon-colors", "p-icon-off-color", "p-icon-on-color", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-icon-colors", "p-scene-icon-off-color", "p-scene-icon-on-color", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-image-icon-id", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
   $("p-flow-home-override").addEventListener("change", applyProperties);
 }
-for (const id of ["p-title-px", "p-text-px", "p-title-bold", "p-title-italic", "p-title-color-on", "p-title-color", "p-text-bold", "p-text-italic", "p-text-underline", "p-show-age", "p-gauge-min", "p-gauge-max", "p-gauge-unit", "p-gauge-decimals", "p-countdown-mode", "p-schedule"]) {
+for (const id of ["p-title-px", "p-text-px", "p-title-bold", "p-title-italic", "p-title-color-on", "p-title-color", "p-own-text", "p-text-color", "p-text-bold", "p-text-italic", "p-text-underline", "p-show-age", "p-gauge-min", "p-gauge-max", "p-gauge-unit", "p-gauge-decimals", "p-countdown-mode", "p-schedule"]) {
   if ($(id)) $(id).addEventListener("change", () => {
     syncFontPreview($("p-title-px"), $("p-title-preview"));
     syncFontPreview($("p-text-px"), $("p-text-preview"));

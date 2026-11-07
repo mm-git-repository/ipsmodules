@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "miniz.h"
 #include "src/extra/libs/png/lodepng.h"
 
 #include <math.h>
@@ -112,6 +113,7 @@ typedef struct {
     int battery_pad;
     uint32_t base_bg;
     uint32_t on_bg;
+    bool own_bg;
     uint32_t text_color;
     bool own_on;
     bool own_text;
@@ -1504,8 +1506,8 @@ static void publish_fit_image(tile_view_t *view, int out_w, int out_h, bool alph
 
 /* PNG mit Alpha randlos auf die Kachel. Leerer Alphakanal (Fotos aus der Bildbibliothek) bleibt deckend.
  * Wirklich durchsichtige Pixel lassen die Kachel durch. Der volle Puffer wird danach freigegeben. */
-static bool publish_png_cover(tile_view_t *view, const uint8_t *data, size_t length, int box_w, int box_h,
-                              int *full_w, int *full_h)
+static bool publish_png_lodepng(tile_view_t *view, const uint8_t *data, size_t length, int box_w, int box_h,
+                                int *full_w, int *full_h)
 {
     unsigned char *rgba = NULL;
     unsigned w = 0;
@@ -1566,11 +1568,15 @@ static bool publish_png_cover(tile_view_t *view, const uint8_t *data, size_t len
     }
     if (crop_w < 1) crop_w = 1;
     if (crop_h < 1) crop_h = 1;
-    if (!image_bytes_fit(view, (size_t) out_w * (size_t) out_h * 3u)) {
+    /* Ohne gesetzte Hintergrundfarbe bleibt das Alpha stehen. Eine gewählte Farbe wird deckend daruntergelegt. */
+    bool keep_alpha = !force_opaque && (view->image_backdrop || !view->own_bg);
+    size_t bpp = keep_alpha ? 3u : 2u;
+    if (!image_bytes_fit(view, (size_t) out_w * (size_t) out_h * bpp)) {
         lv_mem_free(rgba);
         ESP_LOGW(TAG_UI, "PNG verworfen (kein Speicher für %dx%d)", out_w, out_h);
         return false;
     }
+    lv_color_t flat = lv_color_hex(view->base_bg);
     for (int row = 0; row < out_h; row++) {
         int sy = crop_y + (int) ((long) row * crop_h / out_h);
         if (sy >= (int) h) sy = (int) h - 1;
@@ -1580,15 +1586,385 @@ static bool publish_png_cover(tile_view_t *view, const uint8_t *data, size_t len
             if (sx >= (int) w) sx = (int) w - 1;
             const unsigned char *p = line + (size_t) sx * 4u;
             uint8_t alpha = force_opaque ? 255 : p[3];
-            put_alpha_px(view->image_px + ((size_t) row * (size_t) out_w + (size_t) col) * 3u,
-                         lv_color_make(p[0], p[1], p[2]), alpha);
+            lv_color_t ink = lv_color_make(p[0], p[1], p[2]);
+            uint8_t *dst = view->image_px + ((size_t) row * (size_t) out_w + (size_t) col) * bpp;
+            if (keep_alpha) put_alpha_px(dst, ink, alpha);
+            else put_color_px(dst, lv_color_mix(ink, flat, alpha));
         }
         if ((row & 31) == 0) ui_wdt_kick();
     }
     lv_mem_free(rgba);
-    publish_fit_image(view, out_w, out_h, true);
+    publish_fit_image(view, out_w, out_h, keep_alpha);
     *full_w = (int) w;
     *full_h = (int) h;
+    if (force_opaque) ESP_LOGI(TAG_UI, "PNG ohne nutzbare Transparenz, deckend gezeichnet");
+    return true;
+}
+
+static uint32_t png_u32(const uint8_t *p)
+{
+    return ((uint32_t) p[0] << 24) | ((uint32_t) p[1] << 16) | ((uint32_t) p[2] << 8) | (uint32_t) p[3];
+}
+
+static uint8_t png_paeth(int a, int b, int c)
+{
+    int guess = a + b - c;
+    int pa = guess > a ? guess - a : a - guess;
+    int pb = guess > b ? guess - b : b - guess;
+    int pc = guess > c ? guess - c : c - guess;
+    if (pa <= pb && pa <= pc) return (uint8_t) a;
+    if (pb <= pc) return (uint8_t) b;
+    return (uint8_t) c;
+}
+
+static bool png_unfilter(uint8_t *row, const uint8_t *prev, int count, int bpp)
+{
+    uint8_t filter = row[0];
+    uint8_t *raw = row + 1;
+    if (filter > 4) return false;
+    if (filter == 0) return true;
+    for (int i = 0; i < count; i++) {
+        int left = i >= bpp ? raw[i - bpp] : 0;
+        int up = prev[i];
+        int upper_left = i >= bpp ? prev[i - bpp] : 0;
+        if (filter == 1) raw[i] = (uint8_t) (raw[i] + left);
+        else if (filter == 2) raw[i] = (uint8_t) (raw[i] + up);
+        else if (filter == 3) raw[i] = (uint8_t) (raw[i] + (left + up) / 2);
+        else raw[i] = (uint8_t) (raw[i] + png_paeth(left, up, upper_left));
+    }
+    return true;
+}
+
+typedef void (*png_row_fn)(void *user, int y, const uint8_t *px);
+
+/* Entpackt IDAT zeilenweise. Es bleibt nur die aktuelle Zeile im Speicher, nicht das ganze Bild. */
+static bool png_for_each_row(const uint8_t *idat, size_t idat_len, int width, int height, int bpp,
+                             png_row_fn fn, void *user)
+{
+    int count = width * bpp;
+    int row_bytes = count + 1;
+    if (width < 1 || height < 1 || bpp < 1 || idat_len < 2 || count < 1) return false;
+    tinfl_decompressor *infl = heap_caps_malloc(sizeof(*infl), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t *dict = heap_caps_malloc(TINFL_LZ_DICT_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t *row = heap_caps_malloc((size_t) row_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t *prev = heap_caps_calloc((size_t) count, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!infl || !dict || !row || !prev) {
+        heap_caps_free(infl);
+        heap_caps_free(dict);
+        heap_caps_free(row);
+        heap_caps_free(prev);
+        return false;
+    }
+    memset(infl, 0, sizeof(*infl));
+    tinfl_init(infl);
+    size_t in_ofs = 0;
+    size_t dict_ofs = 0;
+    size_t fill = 0;
+    int y = 0;
+    bool ok = true;
+    while (ok && y < height) {
+        if (in_ofs >= idat_len) {
+            ok = false;
+            break;
+        }
+        size_t in_size = idat_len - in_ofs;
+        size_t out_size = TINFL_LZ_DICT_SIZE - dict_ofs;
+        tinfl_status status = tinfl_decompress(infl, idat + in_ofs, &in_size, dict, dict + dict_ofs, &out_size,
+                                                TINFL_FLAG_PARSE_ZLIB_HEADER);
+        if (in_size == 0 && out_size == 0) {
+            ok = false;
+            break;
+        }
+        in_ofs += in_size;
+        size_t produced = 0;
+        while (produced < out_size && y < height) {
+            size_t need = (size_t) row_bytes - fill;
+            size_t take = out_size - produced < need ? out_size - produced : need;
+            memcpy(row + fill, dict + dict_ofs + produced, take);
+            fill += take;
+            produced += take;
+            if (fill == (size_t) row_bytes) {
+                if (!png_unfilter(row, prev, count, bpp)) {
+                    ok = false;
+                    break;
+                }
+                fn(user, y, row + 1);
+                memcpy(prev, row + 1, (size_t) count);
+                fill = 0;
+                y++;
+                if ((y & 15) == 0) ui_wdt_kick();
+            }
+        }
+        dict_ofs = (dict_ofs + out_size) & (TINFL_LZ_DICT_SIZE - 1);
+        if (!ok) break;
+        if (status == TINFL_STATUS_DONE) break;
+        if (status < TINFL_STATUS_DONE) {
+            ok = false;
+            break;
+        }
+    }
+    bool complete = ok && y == height;
+    heap_caps_free(infl);
+    heap_caps_free(dict);
+    heap_caps_free(row);
+    heap_caps_free(prev);
+    return complete;
+}
+
+typedef struct {
+    int w;
+    int h;
+    int bpp;
+    uint8_t *idat;
+    size_t idat_len;
+    bool owned;
+} png_plain_t;
+
+static bool png_take_idat(const uint8_t *data, size_t length, png_plain_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    static const uint8_t sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+    if (length < 8 || memcmp(data, sig, 8) != 0) return false;
+    size_t off = 8;
+    int parts = 0;
+    size_t bytes = 0;
+    bool ihdr = false;
+    while (off + 12 <= length) {
+        uint32_t chunk = png_u32(data + off);
+        if (chunk > length - off - 12) return false;
+        const uint8_t *type = data + off + 4;
+        const uint8_t *body = data + off + 8;
+        if (memcmp(type, "IHDR", 4) == 0) {
+            if (chunk < 13) return false;
+            out->w = (int) png_u32(body);
+            out->h = (int) png_u32(body + 4);
+            if (body[8] != 8 || body[12] != 0) return false;
+            if (body[9] == 0) out->bpp = 1;
+            else if (body[9] == 2) out->bpp = 3;
+            else if (body[9] == 4) out->bpp = 2;
+            else if (body[9] == 6) out->bpp = 4;
+            else return false;
+            if (out->w < 1 || out->h < 1 || out->w > 8192 || out->h > 8192) return false;
+            ihdr = true;
+        } else if (memcmp(type, "IDAT", 4) == 0) {
+            parts++;
+            bytes += chunk;
+        } else if (memcmp(type, "IEND", 4) == 0) {
+            break;
+        }
+        off += 12u + chunk;
+    }
+    if (!ihdr || bytes == 0) return false;
+    if (parts == 1) {
+        off = 8;
+        while (off + 12 <= length) {
+            uint32_t chunk = png_u32(data + off);
+            if (chunk > length - off - 12) return false;
+            if (memcmp(data + off + 4, "IDAT", 4) == 0) {
+                out->idat = (uint8_t *) (data + off + 8);
+                out->idat_len = chunk;
+                return true;
+            }
+            off += 12u + chunk;
+        }
+        return false;
+    }
+    uint8_t *joined = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!joined) return false;
+    size_t filled = 0;
+    off = 8;
+    while (off + 12 <= length && filled < bytes) {
+        uint32_t chunk = png_u32(data + off);
+        if (chunk > length - off - 12) break;
+        if (memcmp(data + off + 4, "IDAT", 4) == 0) {
+            memcpy(joined + filled, data + off + 8, chunk);
+            filled += chunk;
+        }
+        off += 12u + chunk;
+    }
+    out->idat = joined;
+    out->idat_len = filled;
+    out->owned = true;
+    return filled == bytes;
+}
+
+typedef struct {
+    int w;
+    int bpp;
+    bool any_visible;
+    bool any_clear;
+    int min_x;
+    int min_y;
+    int max_x;
+    int max_y;
+} png_alpha_scan_t;
+
+static void png_scan_alpha(void *user, int y, const uint8_t *px)
+{
+    png_alpha_scan_t *scan = user;
+    for (int x = 0; x < scan->w; x++) {
+        uint8_t alpha = 255;
+        if (scan->bpp == 4) alpha = px[(size_t) x * 4u + 3u];
+        else if (scan->bpp == 2) alpha = px[(size_t) x * 2u + 1u];
+        if (alpha > 8) {
+            scan->any_visible = true;
+            if (x < scan->min_x) scan->min_x = x;
+            if (y < scan->min_y) scan->min_y = y;
+            if (x > scan->max_x) scan->max_x = x;
+            if (y > scan->max_y) scan->max_y = y;
+        }
+        if (alpha < 247) scan->any_clear = true;
+    }
+}
+
+typedef struct {
+    tile_view_t *view;
+    int src_w;
+    int src_bpp;
+    int crop_x;
+    int crop_y;
+    int crop_w;
+    int crop_h;
+    int out_w;
+    int out_h;
+    bool keep_alpha;
+    bool force_opaque;
+    lv_color_t flat;
+    size_t dst_bpp;
+    int next_row;
+} png_paint_t;
+
+static void png_paint_row(void *user, int y, const uint8_t *px)
+{
+    png_paint_t *paint = user;
+    while (paint->next_row < paint->out_h) {
+        int sy = paint->crop_y + (int) ((long) paint->next_row * paint->crop_h / paint->out_h);
+        if (sy > y) return;
+        if (sy < y) {
+            paint->next_row++;
+            continue;
+        }
+        int row = paint->next_row++;
+        for (int col = 0; col < paint->out_w; col++) {
+            int sx = paint->crop_x + (int) ((long) col * paint->crop_w / paint->out_w);
+            if (sx < 0) sx = 0;
+            if (sx >= paint->src_w) sx = paint->src_w - 1;
+            const uint8_t *p = px + (size_t) sx * (size_t) paint->src_bpp;
+            uint8_t red;
+            uint8_t green;
+            uint8_t blue;
+            uint8_t alpha;
+            if (paint->src_bpp == 4) {
+                red = p[0];
+                green = p[1];
+                blue = p[2];
+                alpha = p[3];
+            } else if (paint->src_bpp == 3) {
+                red = p[0];
+                green = p[1];
+                blue = p[2];
+                alpha = 255;
+            } else if (paint->src_bpp == 2) {
+                red = green = blue = p[0];
+                alpha = p[1];
+            } else {
+                red = green = blue = p[0];
+                alpha = 255;
+            }
+            if (paint->force_opaque) alpha = 255;
+            lv_color_t ink = lv_color_make(red, green, blue);
+            uint8_t *dst = paint->view->image_px + ((size_t) row * (size_t) paint->out_w + (size_t) col) * paint->dst_bpp;
+            if (paint->keep_alpha) put_alpha_px(dst, ink, alpha);
+            else put_color_px(dst, lv_color_mix(ink, paint->flat, alpha));
+        }
+    }
+}
+
+static void png_plain_free(png_plain_t *plain)
+{
+    if (plain->owned) heap_caps_free(plain->idat);
+    plain->idat = NULL;
+    plain->owned = false;
+}
+
+/* Große PNG werden zeilenweise entpackt. Der volle RGBA-Puffer passt sonst nicht in den Speicher. */
+static bool publish_png_cover(tile_view_t *view, const uint8_t *data, size_t length, int box_w, int box_h,
+                              int *full_w, int *full_h)
+{
+    png_plain_t plain;
+    if (!png_take_idat(data, length, &plain)) return publish_png_lodepng(view, data, length, box_w, box_h, full_w, full_h);
+    png_alpha_scan_t scan = {
+        .w = plain.w,
+        .bpp = plain.bpp,
+        .min_x = plain.w,
+        .min_y = plain.h,
+        .max_x = -1,
+        .max_y = -1,
+    };
+    if (!png_for_each_row(plain.idat, plain.idat_len, plain.w, plain.h, plain.bpp, png_scan_alpha, &scan)) {
+        png_plain_free(&plain);
+        ESP_LOGW(TAG_UI, "PNG zeilenweise nicht lesbar");
+        return publish_png_lodepng(view, data, length, box_w, box_h, full_w, full_h);
+    }
+    bool force_opaque = !scan.any_visible;
+    bool contain = scan.any_visible && scan.any_clear;
+    if (box_w < 1) box_w = plain.w;
+    if (box_h < 1) box_h = plain.h;
+    int crop_x = 0;
+    int crop_y = 0;
+    int crop_w = plain.w;
+    int crop_h = plain.h;
+    int out_w = box_w;
+    int out_h = box_h;
+    if (contain) {
+        crop_x = scan.min_x;
+        crop_y = scan.min_y;
+        crop_w = scan.max_x - scan.min_x + 1;
+        crop_h = scan.max_y - scan.min_y + 1;
+        contain_size(crop_w, crop_h, box_w, box_h, &out_w, &out_h);
+    } else if ((long) plain.w * box_h > (long) plain.h * box_w) {
+        crop_h = plain.h;
+        crop_w = (int) ((long) plain.h * box_w / box_h);
+        crop_x = (plain.w - crop_w) / 2;
+    } else {
+        crop_w = plain.w;
+        crop_h = (int) ((long) plain.w * box_h / box_w);
+        crop_y = (plain.h - crop_h) / 2;
+    }
+    if (crop_w < 1) crop_w = 1;
+    if (crop_h < 1) crop_h = 1;
+    bool keep_alpha = !force_opaque && (view->image_backdrop || !view->own_bg);
+    size_t dst_bpp = keep_alpha ? 3u : 2u;
+    if (!image_bytes_fit(view, (size_t) out_w * (size_t) out_h * dst_bpp)) {
+        png_plain_free(&plain);
+        ESP_LOGW(TAG_UI, "PNG verworfen (kein Speicher für %dx%d)", out_w, out_h);
+        return false;
+    }
+    png_paint_t paint = {
+        .view = view,
+        .src_w = plain.w,
+        .src_bpp = plain.bpp,
+        .crop_x = crop_x,
+        .crop_y = crop_y,
+        .crop_w = crop_w,
+        .crop_h = crop_h,
+        .out_w = out_w,
+        .out_h = out_h,
+        .keep_alpha = keep_alpha,
+        .force_opaque = force_opaque,
+        .flat = lv_color_hex(view->base_bg),
+        .dst_bpp = dst_bpp,
+        .next_row = 0,
+    };
+    bool painted = png_for_each_row(plain.idat, plain.idat_len, plain.w, plain.h, plain.bpp, png_paint_row, &paint);
+    png_plain_free(&plain);
+    if (!painted || paint.next_row != out_h) {
+        ESP_LOGW(TAG_UI, "PNG nicht vollständig gezeichnet (%dx%d)", plain.w, plain.h);
+        return false;
+    }
+    publish_fit_image(view, out_w, out_h, keep_alpha);
+    *full_w = plain.w;
+    *full_h = plain.h;
     if (force_opaque) ESP_LOGI(TAG_UI, "PNG ohne nutzbare Transparenz, deckend gezeichnet");
     return true;
 }
@@ -1754,18 +2130,24 @@ static bool show_icon_fit(tile_view_t *view, const char *icon, int box_w, int bo
     int out_w = 1;
     int out_h = 1;
     contain_size(glyph.box_w, glyph.box_h, box_w, box_h, &out_w, &out_h);
-    if (!image_bytes_fit(view, (size_t) out_w * (size_t) out_h * 3u)) return false;
+    bool keep_alpha = view->image_backdrop || !view->own_bg;
+    size_t bpp = keep_alpha ? 3u : 2u;
+    if (!image_bytes_fit(view, (size_t) out_w * (size_t) out_h * bpp)) return false;
     lv_color_t color = lv_color_hex(ink);
+    lv_color_t flat = lv_color_hex(view->base_bg);
     for (int y = 0; y < out_h; y++) {
         int sy = (int) ((long) y * glyph.box_h / out_h);
         if (sy >= glyph.box_h) sy = glyph.box_h - 1;
         for (int x = 0; x < out_w; x++) {
             int sx = (int) ((long) x * glyph.box_w / out_w);
             if (sx >= glyph.box_w) sx = glyph.box_w - 1;
-            put_alpha_px(view->image_px + ((size_t) y * (size_t) out_w + (size_t) x) * 3u, color, glyph_alpha_at(&glyph, bitmap, sx, sy));
+            uint8_t alpha = glyph_alpha_at(&glyph, bitmap, sx, sy);
+            uint8_t *dst = view->image_px + ((size_t) y * (size_t) out_w + (size_t) x) * bpp;
+            if (keep_alpha) put_alpha_px(dst, color, alpha);
+            else put_color_px(dst, lv_color_mix(color, flat, alpha));
         }
     }
-    publish_fit_image(view, out_w, out_h, true);
+    publish_fit_image(view, out_w, out_h, keep_alpha);
     return true;
 }
 
@@ -2351,6 +2733,7 @@ static void show_page(int index)
                 view->own_on = true;
             }
         }
+        view->own_bg = own_bg;
         bool show_title = !cJSON_IsFalse(cJSON_GetObjectItem(tile, "showTitle"));
         const char *title_align = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "titleAlign"));
         if (!title_align || !title_align[0]) title_align = "left";
@@ -2438,8 +2821,9 @@ static void show_page(int index)
             if (!file || !file[0]) file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "mediaFile"));
             view->image_backdrop = cJSON_IsTrue(cJSON_GetObjectItem(tile, "imageBackground"));
             lv_obj_set_style_pad_all(view->card, 0, 0);
-            if (view->image_backdrop) lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
+            if (view->image_backdrop || !view->own_bg) lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
             view->image_img = lv_img_create(view->card);
+            lv_obj_set_style_bg_opa(view->image_img, LV_OPA_TRANSP, 0);
             lv_obj_set_size(view->image_img, card_w, card_h);
             lv_obj_center(view->image_img);
             if (source && strcmp(source, "icon") == 0) {
