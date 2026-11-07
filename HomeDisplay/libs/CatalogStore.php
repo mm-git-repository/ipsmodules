@@ -218,7 +218,12 @@ final class HomeDisplayCatalogStore
             return false;
         }
         $binary = @file_get_contents(self::imagePath($id));
-        if (!is_string($binary) || strncmp($binary, "\x89PNG\r\n\x1a\n", 8) !== 0 || strlen($binary) < 26) {
+        return is_string($binary) && self::pngBinaryHasAlpha($binary);
+    }
+
+    private static function pngBinaryHasAlpha(string $binary): bool
+    {
+        if (strncmp($binary, "\x89PNG\r\n\x1a\n", 8) !== 0 || strlen($binary) < 26) {
             return false;
         }
         $colorType = ord($binary[25]);
@@ -317,6 +322,7 @@ final class HomeDisplayCatalogStore
         $width = (int) $info[0];
         $height = (int) $info[1];
         if (function_exists('imagecreatefromstring')) {
+            $keepAlpha = self::pngBinaryHasAlpha($binary);
             $source = @imagecreatefromstring($binary);
             if ($source !== false) {
                 $maxWidth = 1024;
@@ -325,17 +331,25 @@ final class HomeDisplayCatalogStore
                 $targetWidth = max(1, (int) round($width * $scale));
                 $targetHeight = max(1, (int) round($height * $scale));
                 $target = imagecreatetruecolor($targetWidth, $targetHeight);
-                imagealphablending($target, false);
-                imagesavealpha($target, true);
+                if ($keepAlpha) {
+                    imagealphablending($target, false);
+                    imagesavealpha($target, true);
+                    imagefill($target, 0, 0, imagecolorallocatealpha($target, 0, 0, 0, 127));
+                } else {
+                    imagealphablending($target, true);
+                    imagefill($target, 0, 0, imagecolorallocate($target, 0, 0, 0));
+                }
                 imagecopyresampled($target, $source, 0, 0, 0, 0, $targetWidth, $targetHeight, $width, $height);
                 ob_start();
-                imagepng($target, null, 6);
+                $encodedOk = $keepAlpha || !function_exists('imagejpeg')
+                    ? imagepng($target, null, 6)
+                    : imagejpeg($target, null, 85);
                 $encoded = ob_get_clean();
                 imagedestroy($target);
                 imagedestroy($source);
-                if (is_string($encoded) && $encoded !== '') {
+                if ($encodedOk && is_string($encoded) && $encoded !== '') {
                     $binary = $encoded;
-                    $ext = 'png';
+                    $ext = $keepAlpha || !function_exists('imagejpeg') ? 'png' : 'jpg';
                     $width = $targetWidth;
                     $height = $targetHeight;
                 }

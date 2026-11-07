@@ -1500,43 +1500,97 @@ static void put_alpha_px(uint8_t *dst, lv_color_t color, uint8_t alpha)
     dst[2] = alpha;
 }
 
-/* PNG nach RGB565 in den PSRAM. Der volle RGB-Puffer von lodepng wird danach freigegeben. */
-static uint16_t *decode_png_cover(const uint8_t *data, size_t length, int box_w, int box_h,
-                                  int *full_w, int *full_h, int *width, int *height)
+static void publish_fit_image(tile_view_t *view, int out_w, int out_h, bool alpha);
+
+/* PNG mit Alpha randlos auf die Kachel. Leerer Alphakanal (Fotos aus der Bildbibliothek) bleibt deckend.
+ * Wirklich durchsichtige Pixel lassen die Kachel durch. Der volle Puffer wird danach freigegeben. */
+static bool publish_png_cover(tile_view_t *view, const uint8_t *data, size_t length, int box_w, int box_h,
+                              int *full_w, int *full_h)
 {
-    unsigned char *rgb = NULL;
+    unsigned char *rgba = NULL;
     unsigned w = 0;
     unsigned h = 0;
-    unsigned error = lodepng_decode24(&rgb, &w, &h, data, length);
-    if (error || !rgb || w == 0 || h == 0) {
-        if (rgb) lv_mem_free(rgb);
+    unsigned error = lodepng_decode32(&rgba, &w, &h, data, length);
+    if (error || !rgba || w == 0 || h == 0) {
+        if (rgba) lv_mem_free(rgba);
         ESP_LOGW(TAG_UI, "PNG-Fehler %u", error);
-        return NULL;
+        return false;
     }
     ui_wdt_kick();
+    bool any_visible = false;
+    bool any_clear = false;
+    int min_x = (int) w;
+    int min_y = (int) h;
+    int max_x = -1;
+    int max_y = -1;
+    for (int y = 0; y < (int) h; y++) {
+        const unsigned char *line = rgba + (size_t) y * (size_t) w * 4u;
+        for (int x = 0; x < (int) w; x++) {
+            uint8_t alpha = line[(size_t) x * 4u + 3u];
+            if (alpha > 8) {
+                any_visible = true;
+                if (x < min_x) min_x = x;
+                if (y < min_y) min_y = y;
+                if (x > max_x) max_x = x;
+                if (y > max_y) max_y = y;
+            }
+            if (alpha < 247) any_clear = true;
+        }
+        if ((y & 31) == 0) ui_wdt_kick();
+    }
+    bool force_opaque = !any_visible;
+    /* Durchsichtige Bilder ganz zeigen, so groß wie möglich, ohne etwas abzuschneiden. */
+    bool contain = any_visible && any_clear;
     if (box_w < 1) box_w = (int) w;
     if (box_h < 1) box_h = (int) h;
-    int step = 1;
-    while ((int) w / (step + 1) >= box_w && (int) h / (step + 1) >= box_h) step++;
-    int out_w = ((int) w + step - 1) / step;
-    int out_h = ((int) h + step - 1) / step;
-    uint16_t *px = heap_caps_malloc((size_t) out_w * (size_t) out_h * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (px) {
-        for (int y = 0; y < out_h; y++) {
-            const unsigned char *line = rgb + (size_t) (y * step) * w * 3u;
-            for (int x = 0; x < out_w; x++) {
-                const unsigned char *p = line + (size_t) (x * step) * 3u;
-                px[(size_t) y * out_w + x] = lv_color_make(p[0], p[1], p[2]).full;
-            }
-            if ((y & 31) == 0) ui_wdt_kick();
-        }
+    int crop_x = 0;
+    int crop_y = 0;
+    int crop_w = (int) w;
+    int crop_h = (int) h;
+    int out_w = box_w;
+    int out_h = box_h;
+    if (contain) {
+        crop_x = min_x;
+        crop_y = min_y;
+        crop_w = max_x - min_x + 1;
+        crop_h = max_y - min_y + 1;
+        contain_size(crop_w, crop_h, box_w, box_h, &out_w, &out_h);
+    } else if ((long) w * box_h > (long) h * box_w) {
+        crop_h = (int) h;
+        crop_w = (int) ((long) h * box_w / box_h);
+        crop_x = ((int) w - crop_w) / 2;
+    } else {
+        crop_w = (int) w;
+        crop_h = (int) ((long) w * box_h / box_w);
+        crop_y = ((int) h - crop_h) / 2;
     }
-    lv_mem_free(rgb);
+    if (crop_w < 1) crop_w = 1;
+    if (crop_h < 1) crop_h = 1;
+    if (!image_bytes_fit(view, (size_t) out_w * (size_t) out_h * 3u)) {
+        lv_mem_free(rgba);
+        ESP_LOGW(TAG_UI, "PNG verworfen (kein Speicher für %dx%d)", out_w, out_h);
+        return false;
+    }
+    for (int row = 0; row < out_h; row++) {
+        int sy = crop_y + (int) ((long) row * crop_h / out_h);
+        if (sy >= (int) h) sy = (int) h - 1;
+        const unsigned char *line = rgba + (size_t) sy * (size_t) w * 4u;
+        for (int col = 0; col < out_w; col++) {
+            int sx = crop_x + (int) ((long) col * crop_w / out_w);
+            if (sx >= (int) w) sx = (int) w - 1;
+            const unsigned char *p = line + (size_t) sx * 4u;
+            uint8_t alpha = force_opaque ? 255 : p[3];
+            put_alpha_px(view->image_px + ((size_t) row * (size_t) out_w + (size_t) col) * 3u,
+                         lv_color_make(p[0], p[1], p[2]), alpha);
+        }
+        if ((row & 31) == 0) ui_wdt_kick();
+    }
+    lv_mem_free(rgba);
+    publish_fit_image(view, out_w, out_h, true);
     *full_w = (int) w;
     *full_h = (int) h;
-    *width = out_w;
-    *height = out_h;
-    return px;
+    if (force_opaque) ESP_LOGI(TAG_UI, "PNG ohne nutzbare Transparenz, deckend gezeichnet");
+    return true;
 }
 
 static void publish_fit_image(tile_view_t *view, int out_w, int out_h, bool alpha)
@@ -1593,13 +1647,15 @@ static bool show_image_fit(tile_view_t *view, const char *file, int box_w, int b
     uint16_t *decoded = NULL;
     if (is_png) {
         ui_wdt_kick();
-        decoded = decode_png_cover(data, got, box_w, box_h, &full_w, &full_h, &width, &height);
+        bool ok = publish_png_cover(view, data, got, box_w, box_h, &full_w, &full_h);
         heap_caps_free(data);
         ui_wdt_kick();
-        if (!decoded) {
+        if (!ok) {
             ESP_LOGW(TAG_UI, "Bild %s verworfen (PNG nicht lesbar oder kein Speicher)", file);
             return true;
         }
+        ESP_LOGI(TAG_UI, "Bild %s auf Kachel %dx%d skaliert (Quelle %dx%d)", file, box_w, box_h, full_w, full_h);
+        return true;
     } else {
         int scale = 0;
         int result = homedisplay_jpeg_probe(data, got, SIZE_MAX, &full_w, &full_h, &scale);

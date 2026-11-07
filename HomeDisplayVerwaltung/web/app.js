@@ -1873,6 +1873,7 @@ function buildTileElement(tile, context) {
         : `<div class="missing">Symbol wählen</div>`;
     } else {
       const image = state.images.find((item) => item.id === tile.imageId);
+      if (image && String(image.ext || "").toLowerCase() === "png") element.classList.add("fit-contain");
       element.innerHTML = image ? `<img src="images/${image.id}.${image.ext}" alt="">` : `<div class="missing">Bild wählen</div>`;
     }
   } else if (tile.kind === "camera") {
@@ -2937,7 +2938,7 @@ function renderProperties() {
     $("p-icon").value = tile.icon || "";
   }
   if (tile.kind === "value") {
-    fillIconSelect($("p-value-icon"), false);
+    fillIconSelect($("p-value-icon"), true);
     $("p-value-icon").value = tile.icon || "";
     if ($("p-icon-place")) {
       const place = tile.iconPlace === "after" || tile.iconPlace === "none" ? tile.iconPlace : "before";
