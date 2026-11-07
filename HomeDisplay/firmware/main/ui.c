@@ -38,6 +38,14 @@ static bool show_page_may_yield;
 #define CHART_SLOT_MAX 8
 #define CHART_POINT_MAX 56
 #define UI_CLIENT_LOCK_MS 2000
+#define VALUE_RULE_MAX 12
+
+typedef struct {
+    float value;
+    char icon[24];
+    uint32_t color;
+    bool has_color;
+} value_rule_t;
 static lv_point_t chart_point_pool[CHART_SLOT_MAX][CHART_POINT_MAX];
 static lv_point_t chart_yest_pool[CHART_SLOT_MAX][CHART_POINT_MAX];
 static int chart_slot_count;
@@ -114,6 +122,7 @@ typedef struct {
     uint32_t base_bg;
     uint32_t on_bg;
     bool own_bg;
+    bool bg_clear;
     uint32_t text_color;
     bool own_on;
     bool own_text;
@@ -128,6 +137,10 @@ typedef struct {
     char text_size[8];
     char status_color[8];
     float threshold;
+    value_rule_t value_rules[VALUE_RULE_MAX];
+    int value_rule_count;
+    bool have_number;
+    float live_number;
     bool holding;
     int held_value;
     int64_t held_until;
@@ -646,6 +659,33 @@ static lv_coord_t text_width_capped(const char *text, const lv_font_t *font, lv_
     return width;
 }
 
+static const value_rule_t *value_rule_match(const tile_view_t *view)
+{
+    if (!view || !view->have_number) return NULL;
+    for (int i = 0; i < view->value_rule_count; i++) {
+        float delta = view->value_rules[i].value - view->live_number;
+        if (delta < 0) delta = -delta;
+        if (delta < 0.0001f) return &view->value_rules[i];
+    }
+    return NULL;
+}
+
+static void apply_value_rule_icon(tile_view_t *view, lv_coord_t text_h)
+{
+    if (!view || !view->icon_label || !view->value_row) return;
+    const value_rule_t *rule = value_rule_match(view);
+    bool base = view->icon_name[0] && strcmp(view->icon_place, "none") != 0;
+    if (!rule && !base) {
+        lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    const char *icon = (rule && rule->icon[0]) ? rule->icon : view->icon_name;
+    uint32_t ink = (rule && rule->has_color) ? rule->color : icon_ink(view);
+    lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_flex_grow(view->icon_label, 0, 0);
+    paint_icon_label(view->icon_label, icon, false, text_h > 36, ink);
+}
+
 /* Überschrift als Icon-vor-Text-Zeile. Zahl und Symbol darunter vertikal mittig. */
 static void layout_value_row(tile_view_t *view)
 {
@@ -665,40 +705,33 @@ static void layout_value_row(tile_view_t *view)
         title_h = lv_font_get_line_height(title_font);
         lv_obj_set_size(view->title_row, inner_w, title_h);
         lv_obj_align(view->title_row, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_set_flex_align(view->title_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_flex_align_t title_main = LV_FLEX_ALIGN_START;
+        if (strcmp(view->row_align, "center") == 0) title_main = LV_FLEX_ALIGN_CENTER;
+        else if (strcmp(view->row_align, "right") == 0) title_main = LV_FLEX_ALIGN_END;
+        lv_obj_set_flex_align(view->title_row, title_main, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_text_color(view->title_row, lv_color_hex(title_ink(view)), 0);
-        bool title_icon_large = title_h > 36;
         if (view->title_icon && view->title_icon_name[0]) {
-            show_icon_label(view->title_icon, view, view->title_icon_name, false, title_icon_large);
+            show_icon_label(view->title_icon, view, view->title_icon_name, false, false);
             lv_obj_set_style_text_color(view->title_icon, lv_color_hex(title_ink(view)), 0);
             lv_obj_set_style_flex_grow(view->title_icon, 0, 0);
         }
         if (view->title_label) {
             lv_obj_set_style_text_font(view->title_label, title_font, 0);
             lv_obj_set_style_text_color(view->title_label, lv_color_hex(title_ink(view)), 0);
-            lv_coord_t icon_w = view->title_icon ? (title_icon_large ? 48 : 28) + 4 : 0;
+            lv_coord_t icon_w = (view->title_icon && view->title_icon_name[0]) ? 28 + 6 : 0;
             lv_coord_t max_text = inner_w - icon_w;
             if (max_text < 8) max_text = 8;
-            lv_obj_set_width(view->title_label, max_text);
-            lv_text_align_t title_align = LV_TEXT_ALIGN_LEFT;
-            if (strcmp(view->row_align, "center") == 0) title_align = LV_TEXT_ALIGN_CENTER;
-            else if (strcmp(view->row_align, "right") == 0) title_align = LV_TEXT_ALIGN_RIGHT;
-            lv_obj_set_style_text_align(view->title_label, title_align, 0);
+            const char *title_text = lv_label_get_text(view->title_label);
+            lv_obj_set_width(view->title_label, text_width_capped(title_text, title_font, max_text));
+            lv_obj_set_style_text_align(view->title_label, LV_TEXT_ALIGN_LEFT, 0);
             lv_label_set_long_mode(view->title_label, LV_LABEL_LONG_DOT);
         }
         lv_obj_move_foreground(view->title_row);
     }
 
-    bool want_icon = view->icon_label && view->icon_name[0] && strcmp(view->icon_place, "none") != 0;
-    if (view->icon_label) {
-        if (want_icon) {
-            lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
-            show_icon_label(view->icon_label, view, view->icon_name, false, text_h > 36);
-            lv_obj_set_style_flex_grow(view->icon_label, 0, 0);
-        } else {
-            lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
+    const value_rule_t *rule = value_rule_match(view);
+    bool want_icon = view->icon_label && ((view->icon_name[0] && strcmp(view->icon_place, "none") != 0) || rule);
+    apply_value_rule_icon(view, text_h);
 
     lv_coord_t icon_w = want_icon ? text_h + 6 : 0;
     lv_coord_t max_value = inner_w - icon_w;
@@ -1569,7 +1602,7 @@ static bool publish_png_lodepng(tile_view_t *view, const uint8_t *data, size_t l
     if (crop_w < 1) crop_w = 1;
     if (crop_h < 1) crop_h = 1;
     /* Ohne gesetzte Hintergrundfarbe bleibt das Alpha stehen. Eine gewählte Farbe wird deckend daruntergelegt. */
-    bool keep_alpha = !force_opaque && (view->image_backdrop || !view->own_bg);
+    bool keep_alpha = !force_opaque && (view->image_backdrop || !view->own_bg || view->bg_clear);
     size_t bpp = keep_alpha ? 3u : 2u;
     if (!image_bytes_fit(view, (size_t) out_w * (size_t) out_h * bpp)) {
         lv_mem_free(rgba);
@@ -1933,7 +1966,7 @@ static bool publish_png_cover(tile_view_t *view, const uint8_t *data, size_t len
     }
     if (crop_w < 1) crop_w = 1;
     if (crop_h < 1) crop_h = 1;
-    bool keep_alpha = !force_opaque && (view->image_backdrop || !view->own_bg);
+    bool keep_alpha = !force_opaque && (view->image_backdrop || !view->own_bg || view->bg_clear);
     size_t dst_bpp = keep_alpha ? 3u : 2u;
     if (!image_bytes_fit(view, (size_t) out_w * (size_t) out_h * dst_bpp)) {
         png_plain_free(&plain);
@@ -2130,7 +2163,7 @@ static bool show_icon_fit(tile_view_t *view, const char *icon, int box_w, int bo
     int out_w = 1;
     int out_h = 1;
     contain_size(glyph.box_w, glyph.box_h, box_w, box_h, &out_w, &out_h);
-    bool keep_alpha = view->image_backdrop || !view->own_bg;
+    bool keep_alpha = view->image_backdrop || !view->own_bg || view->bg_clear;
     size_t bpp = keep_alpha ? 3u : 2u;
     if (!image_bytes_fit(view, (size_t) out_w * (size_t) out_h * bpp)) return false;
     lv_color_t color = lv_color_hex(ink);
@@ -2734,6 +2767,7 @@ static void show_page(int index)
             }
         }
         view->own_bg = own_bg;
+        view->bg_clear = cJSON_IsTrue(cJSON_GetObjectItem(tile, "bgTransparent"));
         bool show_title = !cJSON_IsFalse(cJSON_GetObjectItem(tile, "showTitle"));
         const char *title_align = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "titleAlign"));
         if (!title_align || !title_align[0]) title_align = "left";
@@ -2757,7 +2791,7 @@ static void show_page(int index)
         lv_obj_set_size(view->card, card_w, card_h);
         lv_obj_set_style_radius(view->card, 8, 0);
         lv_obj_set_style_bg_color(view->card, lv_color_hex(view->base_bg), 0);
-        lv_obj_set_style_bg_opa(view->card, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(view->card, view->bg_clear ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
         lv_obj_set_style_pad_all(view->card, 10, 0);
         lv_obj_set_style_text_color(view->card, lv_color_hex(0xF4F7FB), 0);
         style_flat(view->card);
@@ -2821,7 +2855,7 @@ static void show_page(int index)
             if (!file || !file[0]) file = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "mediaFile"));
             view->image_backdrop = cJSON_IsTrue(cJSON_GetObjectItem(tile, "imageBackground"));
             lv_obj_set_style_pad_all(view->card, 0, 0);
-            if (view->image_backdrop || !view->own_bg) lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
+            if (view->image_backdrop || !view->own_bg || view->bg_clear) lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
             view->image_img = lv_img_create(view->card);
             lv_obj_set_style_bg_opa(view->image_img, LV_OPA_TRANSP, 0);
             lv_obj_set_size(view->image_img, card_w, card_h);
@@ -2952,6 +2986,24 @@ static void show_page(int index)
             const char *status = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "color"));
             snprintf(view->status_color, sizeof(view->status_color), "%s", status ? status : "neutral");
         }
+        cJSON *rules = cJSON_GetObjectItem(tile, "valueRules");
+        if (cJSON_IsArray(rules)) {
+            cJSON *rule = NULL;
+            cJSON_ArrayForEach(rule, rules) {
+                if (view->value_rule_count >= VALUE_RULE_MAX) break;
+                cJSON *rule_value = cJSON_GetObjectItem(rule, "value");
+                const char *rule_icon = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "icon"));
+                if (!cJSON_IsNumber(rule_value) || !rule_icon || !rule_icon[0]) continue;
+                value_rule_t *slot = &view->value_rules[view->value_rule_count++];
+                slot->value = (float) rule_value->valuedouble;
+                snprintf(slot->icon, sizeof(slot->icon), "%s", rule_icon);
+                const char *rule_color = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "color"));
+                if (rule_color && rule_color[0] == '#') {
+                    slot->color = parse_hex_color(rule_color, 0xF4F7FB);
+                    slot->has_color = true;
+                }
+            }
+        }
 
         /* Titelzeile: kleines Icon + Text */
         cJSON *show_title_icon_item = cJSON_GetObjectItem(tile, "showTitleIcon");
@@ -2976,7 +3028,7 @@ static void show_page(int index)
             lv_obj_set_style_pad_all(view->title_row, 0, 0);
             lv_obj_set_flex_flow(view->title_row, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(view->title_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-            lv_obj_set_style_pad_column(view->title_row, 4, 0);
+            lv_obj_set_style_pad_column(view->title_row, 6, 0);
             lv_obj_set_style_text_color(view->title_row, lv_color_hex(title_ink(view)), 0);
             lv_obj_clear_flag(view->title_row, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_align(view->title_row, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -3054,7 +3106,7 @@ static void show_page(int index)
                 lv_obj_set_style_bg_opa(view->title_row, LV_OPA_TRANSP, 0);
                 lv_obj_set_style_pad_all(view->title_row, 0, 0);
                 lv_obj_set_flex_flow(view->title_row, LV_FLEX_FLOW_ROW);
-                lv_obj_set_style_pad_column(view->title_row, 4, 0);
+                lv_obj_set_style_pad_column(view->title_row, 6, 0);
                 lv_obj_set_style_text_color(view->title_row, lv_color_hex(title_ink(view)), 0);
                 lv_obj_clear_flag(view->title_row, LV_OBJ_FLAG_CLICKABLE);
                 if (show_title_icon && title_icon_src && title_icon_src[0]) {
@@ -3340,11 +3392,16 @@ static void show_page(int index)
             lv_obj_set_flex_flow(line, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(line, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
             lv_obj_set_style_pad_column(line, 6, 0);
-            bool before = strcmp(view->icon_place, "before") == 0;
-            bool after = strcmp(view->icon_place, "after") == 0;
-            if (icon && icon[0] && before) make_icon_label(line, view, icon, &view->icon_label, false);
+            bool after = strcmp(view->icon_place, "after") == 0 && icon && icon[0];
+            bool icon_slot = (icon && icon[0] && strcmp(view->icon_place, "none") != 0) || view->value_rule_count > 0;
+            if (icon_slot && !after) {
+                make_icon_label(line, view, (icon && icon[0]) ? icon : "energy", &view->icon_label, false);
+                if (!icon || !icon[0] || strcmp(view->icon_place, "none") == 0) {
+                    lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+                }
+            }
             lv_obj_set_parent(view->label, line);
-            if (icon && icon[0] && after) make_icon_label(line, view, icon, &view->icon_label, false);
+            if (icon_slot && after) make_icon_label(line, view, icon, &view->icon_label, false);
             if (view->show_age) {
                 view->age_label = lv_label_create(view->value_box);
                 lv_label_set_text(view->age_label, "");
@@ -4701,6 +4758,8 @@ static void apply_state_body(cJSON *root)
             }
             tiles[index].applying = true;
             tiles[index].value = number;
+            tiles[index].have_number = true;
+            tiles[index].live_number = cJSON_IsNumber(value) ? (float) value->valuedouble : (float) number;
             bool on = value_is_on(&tiles[index], number);
             if (tiles[index].battery_fill && tiles[index].battery_shell) {
                 place_battery(&tiles[index], number);
@@ -4720,7 +4779,7 @@ static void apply_state_body(cJSON *root)
                 lv_obj_set_style_bg_color(tiles[index].card,
                     lv_color_hex(on ? tile_on_color(&tiles[index]) : tiles[index].base_bg), 0);
             }
-            if (!tiles[index].has_action && tiles[index].has_threshold && tiles[index].card) {
+            if (!tiles[index].bg_clear && !tiles[index].has_action && tiles[index].has_threshold && tiles[index].card) {
                 uint32_t bg = tiles[index].base_bg;
                 if (number >= tiles[index].threshold) {
                     if (strcmp(tiles[index].status_color, "ok") == 0) bg = 0x1E6B3A;
@@ -4728,6 +4787,9 @@ static void apply_state_body(cJSON *root)
                     else if (strcmp(tiles[index].status_color, "alarm") == 0) bg = 0x8A2424;
                 }
                 lv_obj_set_style_bg_color(tiles[index].card, lv_color_hex(bg), 0);
+            }
+            if (tiles[index].bg_clear && tiles[index].card) {
+                lv_obj_set_style_bg_opa(tiles[index].card, LV_OPA_TRANSP, 0);
             }
             tiles[index].applying = false;
         }

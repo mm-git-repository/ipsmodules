@@ -391,7 +391,8 @@ function normalizeTile(tile) {
 }
 
 function applyTileChrome(element, tile) {
-  element.classList.remove("has-own-bg", "has-own-on");
+  element.classList.remove("has-own-bg", "has-own-on", "bg-transparent");
+  if (tile.bgTransparent === true) element.classList.add("bg-transparent");
   if (tile.bgColor && /^#[0-9a-fA-F]{6}$/.test(tile.bgColor)) {
     element.classList.add("has-own-bg");
     element.style.setProperty("--tile-own-bg", tile.bgColor);
@@ -533,6 +534,10 @@ function applyTileStatus(element, live, tile) {
   else if (color === "warn") element.classList.add("status-warn");
   else if (color === "alarm") element.classList.add("status-alarm");
   else element.classList.add("status-neutral");
+  if (tile?.bgTransparent) {
+    element.style.background = "transparent";
+    return;
+  }
   if (color !== "neutral" && color !== undefined) {
     element.style.background = colorForTile(color);
   }
@@ -735,9 +740,80 @@ function syncInteractionPropertyPanels() {
   $("p-own-on-wrap")?.classList.toggle("hidden", mode !== "switch" && mode !== "combo");
   $("p-level-wrap")?.classList.toggle("hidden", mode !== "switch" && mode !== "combo");
   const bgLabel = $("p-own-bg-label");
-  if (bgLabel) bgLabel.textContent = mode === "switch" || mode === "combo" ? "Farbe Aus" : "Eigene Farbe";
+  if (bgLabel) bgLabel.textContent = mode === "switch" || mode === "combo" ? "Farbe Aus" : "Kachel-Farbe";
   if (plain) { /* Anzeige ohne Schaltergrafik */ }
 }
+
+function syncDisplaySourcePanels() {
+  const tile = selectedTile();
+  const text = Boolean(tile && tile.kind === "value" && ($("p-displaysource")?.value || "variable") === "text");
+  $("p-variable-wrap")?.classList.toggle("hidden", text);
+  $("p-display-text-wrap")?.classList.toggle("hidden", !text);
+  $("p-decimals")?.closest("label")?.classList.toggle("hidden", text);
+  $("p-value-rules")?.classList.toggle("hidden", !tile || tile.kind !== "value" || text);
+  if (!text) return;
+  $("p-interaction")?.closest("label")?.classList.add("hidden");
+  $("p-switch-wrap")?.classList.add("hidden");
+  $("p-value-style")?.classList.add("hidden");
+  $("p-setpoint-wrap")?.classList.add("hidden");
+  $("p-dim-wrap")?.classList.add("hidden");
+  $("p-battery-wrap")?.classList.add("hidden");
+  $("p-icon-static")?.classList.add("hidden");
+  $("p-action")?.closest("label")?.classList.add("hidden");
+  $("p-confirm")?.closest("label")?.classList.add("hidden");
+  $("p-level-wrap")?.classList.add("hidden");
+}
+
+function matchingValueRule(tile, live) {
+  if (!tile || (tile.displaySource || "variable") === "text" || !Array.isArray(tile.valueRules)) return null;
+  let number = null;
+  if (live && typeof live.value === "number" && Number.isFinite(live.value)) number = live.value;
+  else if (live && typeof live.value === "boolean") number = live.value ? 1 : 0;
+  if (number === null) return null;
+  for (const rule of tile.valueRules) {
+    const value = Number(rule.value);
+    if (rule.icon && Number.isFinite(value) && Math.abs(value - number) < 0.0001) return rule;
+  }
+  return null;
+}
+
+function collectValueRules() {
+  const rows = [];
+  const host = $("p-value-rules-rows");
+  if (!host) return rows;
+  for (const row of host.querySelectorAll(".rule-row")) {
+    const raw = row.querySelector("[data-rule-value]")?.value ?? "";
+    const icon = row.querySelector("[data-rule-icon]")?.value || "";
+    const color = (row.querySelector("[data-rule-color]")?.value || "#f4f7fb").toLowerCase();
+    if (raw.trim() === "" && !icon) continue;
+    const value = raw.trim() === "" ? 0 : Number(raw);
+    if (!Number.isFinite(value)) continue;
+    const item = { value, icon };
+    if (/^#[0-9a-f]{6}$/.test(color)) item.color = color;
+    rows.push(item);
+    if (rows.length >= 12) break;
+  }
+  return rows;
+}
+
+function renderValueRules(tile) {
+  const host = $("p-value-rules-rows");
+  if (!host) return;
+  host.innerHTML = "";
+  const rules = Array.isArray(tile?.valueRules) ? tile.valueRules.slice(0, 12) : [];
+  for (const rule of rules) {
+    const row = document.createElement("div");
+    row.className = "rule-row";
+    row.innerHTML = `<input data-rule-value type="number" step="any"><select data-rule-icon></select><input data-rule-color type="color" value="#f4f7fb"><button type="button" data-rule-remove>Entfernen</button>`;
+    const select = row.querySelector("[data-rule-icon]");
+    fillIconSelect(select, true);
+    row.querySelector("[data-rule-value]").value = rule.value != null ? String(rule.value) : "0";
+    select.value = rule.icon || "";
+    if (rule.color) row.querySelector("[data-rule-color]").value = rule.color;
+    host.appendChild(row);
+  }
+}
+
 const TYPE_NAMES = ["Ja/Nein", "Ganzzahl", "Dezimalzahl", "Text"];
 const MEDIA_ROLES = {
   mediaId: "Medien-ID",
@@ -1752,8 +1828,13 @@ function buildTileElement(tile, context) {
         cardBody = `<button type="button" class="oh-icon-toggle${ink ? " icon-colored" : ""}" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, ink)}</button>`;
       } else if (interaction === "") {
         const align = tile.titleAlign === "center" ? "align-center" : (tile.titleAlign === "right" ? "align-right" : "align-left");
-        const core = live && live.text ? live.text : (!variable ? "—" : ((variable.type === 1 || variable.type === 2) ? "12,3" : "Ein"));
-        const readout = live && live.text ? core : `${tile.prefix ? tile.prefix + " " : ""}${core}${tile.unit ? " " + tile.unit : ""}`;
+        const textSource = (tile.displaySource || "variable") === "text";
+        const core = textSource
+          ? displayMainText(tile, live)
+          : (live && live.text ? live.text : (!variable ? "—" : ((variable.type === 1 || variable.type === 2) ? "12,3" : "Ein")));
+        const readout = textSource || !(live && live.text)
+          ? `${tile.prefix ? tile.prefix + " " : ""}${core}${tile.unit ? " " + tile.unit : ""}`
+          : core;
         const bits = [];
         if (tile.textColor) bits.push(`color:${tile.textColor}`);
         if (tile.textItalic) bits.push("font-style:italic");
@@ -1761,12 +1842,19 @@ function buildTileElement(tile, context) {
         if (textPxOf(tile)) bits.push(`font-size:${textPxOf(tile)}px`);
         if (tile.textBold) bits.push("font-weight:700");
         const readoutStyle = bits.length ? ` style="${bits.join(";")}"` : "";
-        const iconStyle = tile.textColor ? ` style="color:${tile.textColor}"` : "";
-        const place = tile.iconPlace === "after" ? "after" : (tile.iconPlace === "none" || !iconId ? "none" : "before");
+        const rule = textSource ? null : matchingValueRule(tile, live);
+        let place = tile.iconPlace === "after" ? "after" : (tile.iconPlace === "none" || !iconId ? "none" : "before");
+        let shownIcon = iconId;
+        if (rule && rule.icon) {
+          shownIcon = rule.icon;
+          if (place === "none") place = "before";
+        }
+        const iconColor = (rule && rule.color) || tile.textColor || "";
+        const iconStyle = iconColor ? ` style="color:${iconColor}"` : "";
         const headingId = titleIconShown(tile) ? titleIconId(tile) : "";
         const headingIcon = headingId ? `<span class="value-title-icon">${iconVisual(headingId)}</span>` : "";
         const titleHtml = tile.showTitle === false ? "" : `<div class="value-badge-title ${align}"${titleCss(tile)}>${headingIcon}<span class="value-title-text">${escapeHtml(label)}</span></div>`;
-        const valueIcon = place === "none" ? "" : `<span class="value-inline-icon"${iconStyle}>${iconVisual(iconId)}</span>`;
+        const valueIcon = place === "none" ? "" : `<span class="value-inline-icon"${iconStyle}>${iconVisual(shownIcon)}</span>`;
         const readoutInner = place === "after"
           ? `<span class="value-readout-text">${escapeHtml(readout)}</span>${valueIcon}`
           : `${valueIcon}<span class="value-readout-text">${escapeHtml(readout)}</span>`;
@@ -2613,19 +2701,16 @@ function fillFontSelect(select, includeAuto) {
   select.dataset.ready = includeAuto ? "auto" : "px";
 }
 
-function syncFontPreview(select, preview) {
-  if (!select || !preview) return;
-  const px = select.value === "auto" ? 20 : Number(select.value) || 20;
-  preview.style.fontSize = `${px}px`;
-  if ($("p-title-bold")?.checked && preview.id === "p-title-preview") preview.style.fontWeight = "700";
-  else if (preview.id === "p-title-preview") preview.style.fontWeight = "600";
-  preview.style.fontStyle = (($("p-title-italic")?.checked && preview.id === "p-title-preview") || ($("p-text-italic")?.checked && preview.id === "p-text-preview")) ? "italic" : "normal";
-  if (preview.id === "p-title-preview") {
-    preview.style.color = $("p-title-color-on")?.checked ? ($("p-title-color")?.value || "") : "";
-  }
-  if (preview.id === "p-text-preview") {
-    preview.style.color = $("p-own-text")?.checked ? ($("p-text-color")?.value || "") : "";
-  }
+const DEFAULT_INK = "#f4f7fb";
+const DEFAULT_BG = "#2a4f7c";
+
+function chosenColor(input, defaultColor) {
+  const value = (input?.value || "").toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(value) && value !== defaultColor ? value : "";
+}
+
+function chosenInk(input) {
+  return chosenColor(input, DEFAULT_INK);
 }
 
 function syncFontProperties(tile) {
@@ -2649,16 +2734,12 @@ function syncFontProperties(tile) {
   }
   if ($("p-title-bold")) $("p-title-bold").checked = Boolean(tile.titleBold);
   if ($("p-title-italic")) $("p-title-italic").checked = Boolean(tile.titleItalic);
-  if ($("p-title-color-on")) $("p-title-color-on").checked = Boolean(titleColorOf(tile));
-  if ($("p-title-color") && titleColorOf(tile)) $("p-title-color").value = titleColorOf(tile);
-  if ($("p-own-text")) $("p-own-text").checked = Boolean(tile.textColor);
-  if ($("p-text-color") && tile.textColor) $("p-text-color").value = tile.textColor;
+  if ($("p-title-color")) $("p-title-color").value = titleColorOf(tile) || DEFAULT_INK;
+  if ($("p-text-color")) $("p-text-color").value = tile.textColor || DEFAULT_INK;
   if ($("p-text-bold")) $("p-text-bold").checked = Boolean(tile.textBold);
   if ($("p-text-italic")) $("p-text-italic").checked = Boolean(tile.textItalic);
   if ($("p-text-underline")) $("p-text-underline").checked = Boolean(tile.textUnderline);
   if ($("p-show-age")) $("p-show-age").checked = Boolean(tile.showAge);
-  syncFontPreview($("p-title-px"), $("p-title-preview"));
-  syncFontPreview($("p-text-px"), $("p-text-preview"));
   if (tile.kind === "multi" || tile.kind === "contacts") renderRowEditor(tile);
   if ($("p-gauge-min")) $("p-gauge-min").value = tile.valueMin ?? 0;
   if ($("p-gauge-max")) $("p-gauge-max").value = tile.valueMax ?? 100;
@@ -2690,11 +2771,14 @@ function applyFontFields(tile) {
   else delete tile.titleBold;
   if ($("p-title-italic")?.checked) tile.titleItalic = true;
   else delete tile.titleItalic;
-  if ($("p-title-color-on")?.checked && $("p-title-color") && !$("p-title-font")?.classList.contains("hidden")) {
-    tile.titleColor = $("p-title-color").value;
-  } else delete tile.titleColor;
-  if (!$("p-body-font")?.classList.contains("hidden")) {
-    if ($("p-own-text")?.checked && $("p-text-color")) tile.textColor = $("p-text-color").value;
+  if ($("p-title-color") && !$("p-title-font")?.classList.contains("hidden")) {
+    const color = chosenInk($("p-title-color"));
+    if (color) tile.titleColor = color;
+    else delete tile.titleColor;
+  }
+  if ($("p-text-color") && !$("p-body-font")?.classList.contains("hidden")) {
+    const color = chosenInk($("p-text-color"));
+    if (color) tile.textColor = color;
     else delete tile.textColor;
   }
   if ($("p-text-bold")?.checked) tile.textBold = true;
@@ -2934,9 +3018,9 @@ function renderProperties() {
     fillIconSelect($("p-title-icon"), true);
     $("p-title-icon").value = titleIconEnabled(tile) ? (titleIconId(tile) || "") : "";
   }
-  if ($("p-own-bg")) $("p-own-bg").checked = Boolean(tile.bgColor);
-  if ($("p-own-bg-label") && tile.kind !== "value") $("p-own-bg-label").textContent = tile.kind === "image" ? "Hintergrundfarbe" : "Eigene Farbe";
-  if ($("p-bg-color") && tile.bgColor) $("p-bg-color").value = tile.bgColor;
+  if ($("p-bg-transparent")) $("p-bg-transparent").checked = tile.bgTransparent === true;
+  if ($("p-own-bg-label") && tile.kind !== "value") $("p-own-bg-label").textContent = tile.kind === "image" ? "Hintergrundfarbe" : "Kachel-Farbe";
+  if ($("p-bg-color")) $("p-bg-color").value = tile.bgColor || DEFAULT_BG;
   if ($("p-own-on")) $("p-own-on").checked = Boolean(tile.onColor);
   if ($("p-on-color") && tile.onColor) $("p-on-color").value = tile.onColor;
   if ($("p-group")) $("p-group").value = tile.group || "";
@@ -2965,6 +3049,7 @@ function renderProperties() {
     if ($("p-show-icon")) $("p-show-icon").checked = tile.showIcon !== false;
     if ($("p-show-state-text")) $("p-show-state-text").checked = tile.showStateText === true;
     if ($("p-interaction")) $("p-interaction").value = tileInteractionMode(tile);
+    renderValueRules(tile);
     if ($("p-dim-show-switch")) $("p-dim-show-switch").checked = tile.dimShowSwitch !== false;
     if ($("p-dim-show-bar")) $("p-dim-show-bar").checked = tile.dimShowBar !== false;
     if ($("p-dim-show-state-text")) $("p-dim-show-state-text").checked = tile.dimShowStateText === true;
@@ -3005,10 +3090,8 @@ function renderProperties() {
   $("p-target").value = tile.targetPage || "";
   $("p-text").value = tile.text || "";
   const displaySource = tile.displaySource || "variable";
-  if ($("p-displaysource")) {
-    $("p-displaysource").value = displaySource;
-    $("p-display-text")?.classList.toggle("hidden", displaySource !== "text");
-  }
+  if ($("p-displaysource")) $("p-displaysource").value = displaySource;
+  if ($("p-display-text-input")) $("p-display-text-input").value = tile.text || "";
   if ($("p-display-varpick")) {
     const dv = variableById(tile.variableId);
     $("p-display-varpick").value = dv ? `${dv.path ? dv.path + " / " : ""}${dv.name} (${dv.id})` : "";
@@ -3016,7 +3099,7 @@ function renderProperties() {
   if ($("p-prefix")) $("p-prefix").value = tile.prefix || "";
   if ($("p-display-unit")) $("p-display-unit").value = tile.unit || "";
   if ($("p-display-decimals")) $("p-display-decimals").value = tile.decimals || 0;
-  if ($("p-display-textarea")) $("p-display-textarea").value = tile.text || "";
+  syncDisplaySourcePanels();
   if ($("p-display-icon")) {
     fillIconSelect($("p-display-icon"), false);
     $("p-display-icon").value = tile.icon || "";
@@ -3179,8 +3262,13 @@ function applyProperties() {
   const titleAlign = $("p-title-align") ? $("p-title-align").value : "left";
   if (titleAlign === "center" || titleAlign === "right") tile.titleAlign = titleAlign;
   else delete tile.titleAlign;
-  if ($("p-own-bg")?.checked && $("p-bg-color")) tile.bgColor = $("p-bg-color").value;
-  else delete tile.bgColor;
+  if ($("p-bg-transparent")?.checked) tile.bgTransparent = true;
+  else delete tile.bgTransparent;
+  if ($("p-bg-color")) {
+    const bg = chosenColor($("p-bg-color"), DEFAULT_BG);
+    if (bg) tile.bgColor = bg;
+    else delete tile.bgColor;
+  } else delete tile.bgColor;
   if ($("p-own-on")?.checked && $("p-on-color") && !$("p-own-on-wrap")?.classList.contains("hidden")) tile.onColor = $("p-on-color").value;
   else delete tile.onColor;
   const group = ($("p-group") && $("p-group").value.trim()) || "";
@@ -3231,7 +3319,28 @@ function applyProperties() {
     if (prefix) tile.prefix = prefix;
     else delete tile.prefix;
     tile.unit = $("p-unit") ? $("p-unit").value : (tile.unit || "");
-    tile.decimals = Number($("p-decimals")?.value) || 0;
+    const source = ($("p-displaysource") && $("p-displaysource").value) || "variable";
+    if (source === "text") {
+      tile.displaySource = "text";
+      tile.text = $("p-display-text-input") ? $("p-display-text-input").value : "";
+      delete tile.actionId;
+      delete tile.control;
+      delete tile.iconMode;
+      delete tile.iconOn;
+      delete tile.iconOff;
+      delete tile.iconOffColor;
+      delete tile.iconOnColor;
+      delete tile.showIcon;
+      delete tile.showStateText;
+      delete tile.threshold;
+      delete tile.color;
+      delete tile.actionKind;
+      delete tile.valueRules;
+      tile.confirm = false;
+    } else {
+      tile.displaySource = "variable";
+      delete tile.text;
+      tile.decimals = Number($("p-decimals")?.value) || 0;
     const variable = variableById(tile.variableId);
     const mode = ($("p-interaction") && $("p-interaction").value) || "";
     delete tile.iconMode;
@@ -3359,6 +3468,10 @@ function applyProperties() {
       if (!DIM_CONTROLS.includes(mode)) delete tile.actionKind;
       tile.confirm = false;
     }
+      const rules = collectValueRules();
+      if (rules.length) tile.valueRules = rules;
+      else delete tile.valueRules;
+    }
   }
   if (tile.kind === "nav") tile.targetPage = $("p-target").value;
   if (tile.kind === "label") {
@@ -3460,7 +3573,7 @@ function applyProperties() {
     tile.displaySource = source;
     tile.icon = $("p-display-icon") ? $("p-display-icon").value : "";
     if (source === "text") {
-      tile.text = $("p-display-textarea") ? $("p-display-textarea").value : "";
+      tile.text = $("p-display-text-input") ? $("p-display-text-input").value : "";
       delete tile.variableId;
       delete tile.unit;
       delete tile.decimals;
@@ -3538,29 +3651,43 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-title-icon", "p-title-align", "p-icon-place", "p-own-bg", "p-bg-color", "p-own-on", "p-on-color", "p-group", "p-snap", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-icon-colors", "p-icon-off-color", "p-icon-on-color", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-icon-colors", "p-scene-icon-off-color", "p-scene-icon-on-color", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-image-icon-id", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-title-icon", "p-title-align", "p-icon-place", "p-bg-color", "p-bg-transparent", "p-own-on", "p-on-color", "p-group", "p-snap", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-icon-colors", "p-icon-off-color", "p-icon-on-color", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-icon-colors", "p-scene-icon-off-color", "p-scene-icon-on-color", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-image-icon-id", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
   $("p-flow-home-override").addEventListener("change", applyProperties);
 }
-for (const id of ["p-title-px", "p-text-px", "p-title-bold", "p-title-italic", "p-title-color-on", "p-title-color", "p-own-text", "p-text-color", "p-text-bold", "p-text-italic", "p-text-underline", "p-show-age", "p-gauge-min", "p-gauge-max", "p-gauge-unit", "p-gauge-decimals", "p-countdown-mode", "p-schedule"]) {
-  if ($(id)) $(id).addEventListener("change", () => {
-    syncFontPreview($("p-title-px"), $("p-title-preview"));
-    syncFontPreview($("p-text-px"), $("p-text-preview"));
-    applyProperties();
-  });
+for (const id of ["p-title-px", "p-text-px", "p-title-bold", "p-title-italic", "p-title-color", "p-text-color", "p-text-bold", "p-text-italic", "p-text-underline", "p-show-age", "p-gauge-min", "p-gauge-max", "p-gauge-unit", "p-gauge-decimals", "p-countdown-mode", "p-schedule"]) {
+  if ($(id)) $(id).addEventListener("change", applyProperties);
 }
-for (const id of ["p-display-textarea"]) {
-  if ($(id)) $(id).addEventListener("input", applyProperties);
-}
+if ($("p-display-text-input")) $("p-display-text-input").addEventListener("input", applyProperties);
 if ($("p-displaysource")) {
   $("p-displaysource").addEventListener("change", () => {
-    const source = $("p-displaysource").value;
-    $("p-display-text")?.classList.toggle("hidden", source !== "text");
+    syncDisplaySourcePanels();
     applyProperties();
   });
 }
+const valueRuleRows = $("p-value-rules-rows");
+if (valueRuleRows) {
+  valueRuleRows.addEventListener("input", applyProperties);
+  valueRuleRows.addEventListener("change", applyProperties);
+  valueRuleRows.addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-rule-remove]");
+    if (!remove) return;
+    remove.closest(".rule-row")?.remove();
+    applyProperties();
+  });
+}
+bindClick("p-value-rules-add", () => {
+  const host = $("p-value-rules-rows");
+  if (!host || host.querySelectorAll(".rule-row").length >= 12) return;
+  const row = document.createElement("div");
+  row.className = "rule-row";
+  row.innerHTML = `<input data-rule-value type="number" step="any" value="0"><select data-rule-icon></select><input data-rule-color type="color" value="#f4f7fb"><button type="button" data-rule-remove>Entfernen</button>`;
+  fillIconSelect(row.querySelector("[data-rule-icon]"), true);
+  host.appendChild(row);
+  applyProperties();
+});
 if ($("p-camerasource")) {
   $("p-camerasource").addEventListener("change", () => {
     $("p-camera-url").classList.toggle("hidden", $("p-camerasource").value === "media");
@@ -4279,6 +4406,11 @@ function validateLayout(layout) {
       }
       if (tile.kind === "nav" && !layout.pages.some((item) => item.id === tile.targetPage)) throw new Error(`Der Seitenwechsler „${tile.title || tile.tileId}“ zeigt auf eine fehlende Seite.`);
       if (tile.kind === "label" && !(tile.text || "").trim()) throw new Error("Eine Textkachel ist leer.");
+      if (tile.kind === "value") {
+        const src = tile.displaySource || "variable";
+        if (src === "text" && !(tile.text || "").trim()) throw new Error(`Die Wertkachel „${tile.title || tile.tileId}“ braucht Text.`);
+        if (src !== "text" && !tile.variableId) throw new Error(`Die Wertkachel „${tile.title || tile.tileId}“ braucht eine Variable.`);
+      }
       if (tile.kind === "display") {
         const src = tile.displaySource || "variable";
         if (src === "text" && !(tile.text || "").trim()) throw new Error(`Die Anzeigekachel „${tile.title || tile.tileId}“ braucht Text.`);

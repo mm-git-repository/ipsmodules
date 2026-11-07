@@ -580,6 +580,27 @@ final class HomeDisplayPanelSchema
                         $public['threshold'] = (float) $tile['threshold'];
                         $public['color'] = (string) $tile['color'];
                     }
+                    if ($public['displaySource'] !== 'text' && is_array($tile['valueRules'] ?? null)) {
+                        $rules = [];
+                        foreach (array_slice($tile['valueRules'], 0, 12) as $rule) {
+                            if (!is_array($rule) || !isset($rule['value']) || !is_numeric($rule['value'])) {
+                                continue;
+                            }
+                            $ruleIcon = (string) ($rule['icon'] ?? '');
+                            if ($ruleIcon === '' || !in_array($ruleIcon, self::ICONS, true)) {
+                                continue;
+                            }
+                            $item = ['value' => (float) $rule['value'], 'icon' => $ruleIcon];
+                            $ruleColor = strtolower(trim((string) ($rule['color'] ?? '')));
+                            if (preg_match('/^#[0-9a-f]{6}$/', $ruleColor)) {
+                                $item['color'] = $ruleColor;
+                            }
+                            $rules[] = $item;
+                        }
+                        if ($rules !== []) {
+                            $public['valueRules'] = $rules;
+                        }
+                    }
                     if ($control === 'battery') {
                         $public['valueMin'] = (float) ($tile['valueMin'] ?? 0);
                         $public['valueMax'] = (float) ($tile['valueMax'] ?? 100);
@@ -750,6 +771,9 @@ final class HomeDisplayPanelSchema
         }
         if (!empty($tile['showAge'])) {
             $public['showAge'] = true;
+        }
+        if (!empty($tile['bgTransparent'])) {
+            $public['bgTransparent'] = true;
         }
         foreach (['bgColor', 'onColor', 'titleColor', 'iconOffColor', 'iconOnColor'] as $key) {
             $value = strtolower(trim((string) ($tile[$key] ?? '')));

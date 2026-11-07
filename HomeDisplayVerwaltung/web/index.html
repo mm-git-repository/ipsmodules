@@ -121,38 +121,43 @@
             </select>
           </label>
           <label class="switch" title="Titel anzeigen">Anzeigen <input id="p-show-title" type="checkbox" checked></label>
-          <label class="title-symbol">Symbol <select id="p-title-icon"></select></label>
         </div>
         <label>Gruppe (Frame)
           <input id="p-group" placeholder="z. B. Wohnzimmer" maxlength="40">
         </label>
-        <label class="switch"><input id="p-snap" type="checkbox" checked> Am Raster ausrichten</label>
         <div class="row hidden">
           <label>Spalte <input id="p-col" type="number" min="1"></label>
           <label>Zeile <input id="p-row" type="number" min="1"></label>
         </div>
+        <div class="title-line">
+          <label class="switch"><input id="p-snap" type="checkbox" checked> Am Raster ausrichten</label>
+          <label class="switch"><input id="p-bg-transparent" type="checkbox"> Transparent</label>
+          <label id="p-own-bg-wrap"><span id="p-own-bg-label">Kachel-Farbe</span> <input id="p-bg-color" type="color" value="#2a4f7c"></label>
+        </div>
         <div class="row">
-          <label id="p-own-bg-wrap"><input id="p-own-bg" type="checkbox"> <span id="p-own-bg-label">Eigene Farbe</span> <input id="p-bg-color" type="color" value="#2a4f7c"></label>
           <label id="p-own-on-wrap"><input id="p-own-on" type="checkbox"> Farbe Ein <input id="p-on-color" type="color" value="#ffb547"></label>
         </div>
         <div id="p-font-wrap">
-          <div id="p-title-font" class="font-row">
-            <label>Überschrift <select id="p-title-px"></select></label>
-            <span id="p-title-preview" class="font-sample">Aa</span>
-            <label class="switch"><input id="p-title-bold" type="checkbox"> Fett</label>
-            <label class="switch"><input id="p-title-italic" type="checkbox"> Kursiv</label>
-            <label class="switch"><input id="p-title-color-on" type="checkbox"> Farbe</label>
-            <input id="p-title-color" type="color" value="#f4f7fb">
-          </div>
-          <div id="p-body-font" class="font-row">
-            <label>Inhalt <select id="p-text-px"></select></label>
-            <span id="p-text-preview" class="font-sample">12,3</span>
-            <label class="switch"><input id="p-text-bold" type="checkbox"> Fett</label>
-            <label class="switch"><input id="p-text-italic" type="checkbox"> Kursiv</label>
-            <label class="switch" id="p-text-underline-wrap"><input id="p-text-underline" type="checkbox"> Unterstrichen</label>
-            <label class="switch"><input id="p-own-text" type="checkbox"> Farbe</label>
-            <input id="p-text-color" type="color" value="#f4f7fb">
-          </div>
+          <fieldset id="p-title-font" class="font-box">
+            <legend>Überschrift</legend>
+            <div class="font-row">
+              <label>Größe <select id="p-title-px"></select></label>
+              <label>Farbe <input id="p-title-color" type="color" value="#f4f7fb"></label>
+              <label class="switch">Fett<input id="p-title-bold" type="checkbox"></label>
+              <label class="switch">Kursiv<input id="p-title-italic" type="checkbox"></label>
+              <label>Symbol <select id="p-title-icon"></select></label>
+            </div>
+          </fieldset>
+          <fieldset id="p-body-font" class="font-box">
+            <legend>Inhalt</legend>
+            <div class="font-row">
+              <label>Größe <select id="p-text-px"></select></label>
+              <label>Farbe <input id="p-text-color" type="color" value="#f4f7fb"></label>
+              <label class="switch">Fett<input id="p-text-bold" type="checkbox"></label>
+              <label class="switch">Kursiv<input id="p-text-italic" type="checkbox"></label>
+              <label class="switch" id="p-text-underline-wrap">Unterstrichen<input id="p-text-underline" type="checkbox"></label>
+            </div>
+          </fieldset>
           <label class="switch" id="p-show-age-wrap"><input id="p-show-age" type="checkbox"> Alter anzeigen</label>
         </div>
         <div data-for="nav">
@@ -160,8 +165,15 @@
             <select id="p-icon"></select>
           </label>
         </div>
-        <div data-for="value camera chart gauge countdown appointment">
-          <label>Variable <span class="pick-row"><input id="p-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="variable">Auswählen</button></span></label>
+        <div class="source-line" data-for="value camera chart gauge countdown appointment">
+          <label data-for="value">Quelle
+            <select id="p-displaysource">
+              <option value="variable">Variable</option>
+              <option value="text">Fester Text</option>
+            </select>
+          </label>
+          <label id="p-variable-wrap" class="grow">Variable <span class="pick-row"><input id="p-variable" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="variable">Auswählen</button></span></label>
+          <label id="p-display-text-wrap" class="grow hidden">Text <input id="p-display-text-input"></label>
         </div>
         <div data-for="chart">
           <label>Zeitraum
@@ -265,15 +277,6 @@
           <p class="hint">Der Strich liegt auf der Zellenmitte und reicht bis zum Rand, damit aneinandergrenzende Linien wie eine aussehen.</p>
         </div>
         <div data-for="value">
-          <label>Quelle
-            <select id="p-displaysource">
-              <option value="variable">Variable</option>
-              <option value="text">Fester Text</option>
-            </select>
-          </label>
-          <div id="p-display-text" class="hidden">
-            <label>Text <textarea id="p-display-textarea" rows="3"></textarea></label>
-          </div>
           <div class="row" id="p-value-format">
             <label>Prefix <input id="p-prefix"></label>
             <label>Suffix / Einheit <input id="p-unit"></label>
@@ -313,6 +316,11 @@
                 </select>
               </label>
             </div>
+          </div>
+          <div id="p-value-rules">
+            <label>Werte</label>
+            <div id="p-value-rules-rows"></div>
+            <button type="button" id="p-value-rules-add">Zeile hinzufügen</button>
           </div>
           <div id="p-setpoint-wrap" class="hidden">
             <label>Sollwert-Variable <span class="pick-row"><input id="p-setpoint-var" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="setpoint">Auswählen</button></span></label>
