@@ -46,7 +46,7 @@ final class HomeDisplayPanelSchema
         'bubbles', 'bubbleChart', 'waves', 'shutterOpen', 'valveOpen', 'valveClosed', 'pumpOff', 'doorOpen', 'doorClosed',
         'garageOpen', 'lockOpen', 'fanOff', 'plugOff', 'bellOff', 'wifiOff', 'speakerOff', 'tvOff', 'waterOff', 'coolOff',
         'fireOff', 'motionOff', 'smokeOff', 'windowOpen', 'blindsOpen', 'blindsClosed',
-        'desk', 'hammerWrench',
+        'desk', 'hammerWrench', 'check', 'close', 'transmissionTower',
     ];
 
     public const BATTERY_LABELS = ['inside', 'left', 'right', 'top', 'bottom'];
@@ -518,22 +518,12 @@ final class HomeDisplayPanelSchema
                     }
                 }
                 if ($kind === 'energyflow') {
-                    $mode = (string) ($tile['flowMode'] ?? 'signed');
-                    $public['flowMode'] = in_array($mode, HomeDisplayEnergyFlow::MODES, true) ? $mode : 'signed';
-                    $public['homeOverride'] = !array_key_exists('homeOverride', $tile) || (bool) $tile['homeOverride'];
-                    foreach ([
-                        'gridVariableId', 'pvVariableId', 'loadVariableId', 'batteryVariableId',
-                        'gridImportVariableId', 'gridExportVariableId', 'batteryChargeVariableId', 'batteryDischargeVariableId',
-                        'batterySocVariableId',
-                    ] as $flowKey) {
-                        if (isset($tile[$flowKey])) {
-                            $public[$flowKey] = (int) $tile[$flowKey];
-                        }
-                    }
+                    $public['flowNodes'] = HomeDisplayEnergyFlow::nodes($tile);
+                    // Quellen und Verbraucher bleiben im Layout: das Modul rechnet damit, das Gerät liest die Verbrauchernamen.
+                    $public['flowSources'] = HomeDisplayEnergyFlow::sources($tile);
+                    $public['flowConsumers'] = HomeDisplayEnergyFlow::consumers($tile);
                     $public['unit'] = (string) ($tile['unit'] ?? 'W');
                     $public['decimals'] = max(0, min(3, (int) ($tile['decimals'] ?? 0)));
-                    $public['flowThreshold'] = max(0, (float) ($tile['flowThreshold'] ?? 15));
-                    $public['socDecimals'] = max(0, min(1, (int) ($tile['socDecimals'] ?? 0)));
                 }
                 if ($kind === 'value') {
                     $source = (string) ($tile['displaySource'] ?? 'variable');
@@ -634,6 +624,10 @@ final class HomeDisplayPanelSchema
                             $ruleText = trim((string) ($rule['text'] ?? ''));
                             if ($ruleText !== '') {
                                 $item['text'] = mb_substr($ruleText, 0, 16);
+                            }
+                            $ruleAlign = (string) ($rule['align'] ?? '');
+                            if (in_array($ruleAlign, ['left', 'right'], true)) {
+                                $item['align'] = $ruleAlign;
                             }
                             $imageId = strtolower(trim((string) ($rule['imageId'] ?? '')));
                             if (preg_match('/^[a-f0-9]{16}$/', $imageId)) {
@@ -1269,35 +1263,37 @@ final class HomeDisplayPanelSchema
             return;
         }
         if ($kind === 'energyflow') {
-            $mode = HomeDisplayEnergyFlow::mode($tile);
             $decimals = (int) ($tile['decimals'] ?? 0);
             if ($decimals < 0 || $decimals > 3) {
                 throw new InvalidArgumentException('Nachkommastellen liegen zwischen 0 und 3.');
             }
-            $threshold = (float) ($tile['flowThreshold'] ?? 15);
-            if ($threshold < 0 || $threshold > 50000) {
-                throw new InvalidArgumentException('Fluss-Schwellwert liegt zwischen 0 und 50000.');
+            if (is_array($tile['flowSources'] ?? null) && count($tile['flowSources']) > HomeDisplayEnergyFlow::MAX_SOURCES) {
+                throw new InvalidArgumentException('Höchstens ' . HomeDisplayEnergyFlow::MAX_SOURCES . ' Messwerte je Energiefluss-Kachel.');
+            }
+            if (is_array($tile['flowConsumers'] ?? null) && count($tile['flowConsumers']) > HomeDisplayEnergyFlow::MAX_CONSUMERS) {
+                throw new InvalidArgumentException('Höchstens ' . HomeDisplayEnergyFlow::MAX_CONSUMERS . ' Verbraucher je Energiefluss-Kachel.');
+            }
+            foreach ((array) ($tile['flowSources'] ?? []) as $row) {
+                if (is_array($row) && !isset(HomeDisplayEnergyFlow::TYPES[(string) ($row['type'] ?? '')])) {
+                    throw new InvalidArgumentException('Unbekannter Messwert-Typ im Energiefluss.');
+                }
             }
             if ($publish) {
-                $required = ['gridImportVariableId', 'gridExportVariableId', 'pvVariableId'];
-                if ($mode === 'split') {
-                    $required[] = 'batteryChargeVariableId';
-                    $required[] = 'batteryDischargeVariableId';
-                } else {
-                    $required[] = 'batteryVariableId';
-                }
-                if (HomeDisplayEnergyFlow::homeOverride($tile)) {
-                    $required[] = 'loadVariableId';
-                }
-                foreach ($required as $flowKey) {
-                    $vid = (int) ($tile[$flowKey] ?? 0);
-                    if ($vid <= 0 || !IPS_VariableExists($vid)) {
-                        self::failTile($page, $tile, 'Pflicht-Variable fehlt oder existiert nicht (' . $flowKey . ').');
+                $sources = HomeDisplayEnergyFlow::sources($tile);
+                $hasAny = false;
+                foreach ($sources as $row) {
+                    if ($row['variableId'] <= 0 || !IPS_VariableExists($row['variableId'])) {
+                        self::failTile($page, $tile, 'Messwert-Variable fehlt oder existiert nicht (' . (HomeDisplayEnergyFlow::TYPES[$row['type']] ?? $row['type']) . ').');
                     }
+                    $hasAny = true;
                 }
-                $soc = (int) ($tile['batterySocVariableId'] ?? 0);
-                if ($soc > 0 && !IPS_VariableExists($soc)) {
-                    self::failTile($page, $tile, 'SOC-Variable existiert nicht.');
+                if (!$hasAny) {
+                    self::failTile($page, $tile, 'braucht mindestens einen Messwert.');
+                }
+                foreach (HomeDisplayEnergyFlow::consumers($tile) as $row) {
+                    if ($row['variableId'] <= 0 || !IPS_VariableExists($row['variableId'])) {
+                        self::failTile($page, $tile, 'Verbraucher-Variable fehlt oder existiert nicht (' . $row['title'] . ').');
+                    }
                 }
             }
             return;
@@ -1616,11 +1612,8 @@ final class HomeDisplayPanelSchema
         $kind = (string) ($tile['kind'] ?? 'value');
         $ids = [];
         if ($kind === 'energyflow') {
-            foreach (HomeDisplayEnergyFlow::variablePropertyKeys($tile) as $prop) {
-                $id = (int) ($tile[$prop] ?? 0);
-                if ($id > 0) {
-                    $ids[] = $id;
-                }
+            foreach (HomeDisplayEnergyFlow::variableIds($tile) as $id) {
+                $ids[] = $id;
             }
 
             return $ids;

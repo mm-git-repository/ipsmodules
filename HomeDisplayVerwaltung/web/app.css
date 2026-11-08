@@ -219,7 +219,7 @@ label.small { font-size: 12px; color: var(--muted); }
 .oh-chart-yesterday { stroke: #5a7391; stroke-dasharray: 3 4; opacity: 0.75; }
 .oh-chart-area { fill: rgba(255, 181, 71, 0.28); stroke: none; fill-opacity: 0.28; }
 .oh-chart-grid { stroke: rgba(244, 247, 251, 0.35); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.oh-chart-frame { display: flex; flex: 1 1 auto; min-height: 0; width: 100%; height: 100%; }
+.oh-chart-frame { display: flex; flex: 1 1 auto; min-height: 0; width: 100%; overflow: hidden; }
 .oh-chart-frame.with-axes { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
 .oh-chart-y { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; justify-content: space-between; font-size: 11px; line-height: 1; opacity: 0.8; padding-right: 4px; text-align: right; }
 .oh-chart-frame.with-axes .oh-chart-plot { grid-column: 2; grid-row: 1; }
@@ -320,16 +320,12 @@ label.small { font-size: 12px; color: var(--muted); }
 .tile-fit-icon { font-weight: 600; opacity: .85; line-height: 1; white-space: nowrap; max-width: 100%; font-size: 2.6em; flex: none; }
 .tile-fit-text { font-weight: 700; line-height: 1.05; white-space: pre-wrap; word-break: break-word; max-width: 100%; font-size: 2em; width: 100%; }
 .tile.display { background: #243a58; }
-.tile.energyflow { padding: 4px 6px; background: #152238; justify-content: stretch; }
-.tile.energyflow .energy-flow { flex: 1; display: flex; flex-direction: column; min-height: 0; width: 100%; }
-.tile.energyflow .flow-svg { flex: 1; width: 100%; min-height: 0; }
-.tile.energyflow .flow-path { fill: none; stroke: #35506f; stroke-width: 1.8; stroke-linecap: round; opacity: .35; }
-.tile.energyflow .flow-path.active { opacity: 1; stroke: #7cf0a8; stroke-dasharray: 5 7; animation: energy-flow-dash 0.9s linear infinite; }
-.tile.energyflow .flow-path.active.export { stroke: #ffb547; }
-.tile.energyflow .flow-path.active.battery { stroke: #6eb5ff; }
-.tile.energyflow .flow-node { font-size: clamp(8px, 5cqmin, 22px); fill: #dce8f5; font-weight: 600; }
-.tile.energyflow .flow-value { font-size: clamp(7px, 4.2cqmin, 18px); fill: #9fb2c8; font-weight: 500; }
-@keyframes energy-flow-dash { to { stroke-dashoffset: -24; } }
+.tile.energyflow { background: #152238; padding: 6px; justify-content: stretch; }
+.tile.energyflow .energy-flow { flex: 1; display: flex; flex-direction: column; min-height: 0; width: 100%; overflow: hidden; }
+.tile.energyflow .flow-svg { flex: 1; width: 100%; min-height: 0; font-family: Montserrat, "Segoe UI", sans-serif; font-weight: 500; }
+.tile.energyflow .flow-icon { font-family: "Material Design Icons"; fill: #f4f7fb; }
+.tile.energyflow .flow-caption { font-size: 16px; fill: #f4f7fb; opacity: .7; }
+.tile.energyflow .flow-consumer { font-size: 16px; fill: #f4f7fb; }
 .tile-fit-sub { font-size: 1.05em; opacity: .75; line-height: 1.1; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .tile.selected { border-color: #ffb547; }
 .tile.over { outline: 2px solid #ffb547; }
@@ -450,7 +446,7 @@ label.small { font-size: 12px; color: var(--muted); }
 .tile.value .value-badge-title .value-title-icon .mdi { font-size: 1em; line-height: 1; }
 .rule-head, .rule-row { display: grid; gap: 6px; align-items: center; }
 #p-value-rules.mode-value .rule-head,
-#p-value-rules.mode-value .rule-row { grid-template-columns: 72px 72px minmax(0, 1fr) 84px 42px 42px 42px 30px; }
+#p-value-rules.mode-value .rule-row { grid-template-columns: 64px 64px minmax(90px, 1fr) 78px 42px minmax(80px, 1.2fr) 78px 42px 42px 30px; }
 #p-value-rules.mode-switch .rule-head,
 #p-value-rules.mode-switch .rule-row { grid-template-columns: 64px 64px minmax(0, 1fr) 96px minmax(72px, 1fr) 84px 64px 30px; }
 #p-value-rules.mode-image .rule-head,
@@ -470,6 +466,8 @@ label.small { font-size: 12px; color: var(--muted); }
   align-items: center;
   justify-content: center;
 }
+.tile.value .value-badge-body.align-left { justify-content: flex-start; }
+.tile.value .value-badge-body.align-right { justify-content: flex-end; }
 .tile.value .value-readout-row {
   display: flex;
   flex-direction: column;
@@ -478,6 +476,8 @@ label.small { font-size: 12px; color: var(--muted); }
   max-width: 100%;
   min-width: 0;
 }
+.tile.value .value-readout-row.align-left { align-items: flex-start; }
+.tile.value .value-readout-row.align-right { align-items: flex-end; }
 .tile.value .value-readout {
   flex: none;
   display: flex;
@@ -492,6 +492,8 @@ label.small { font-size: 12px; color: var(--muted); }
   font-weight: 700;
   line-height: 1.1;
 }
+.tile.value .value-readout.align-left { justify-content: flex-start; text-align: left; }
+.tile.value .value-readout.align-right { justify-content: flex-end; text-align: right; }
 .tile.value .value-readout-text {
   min-width: 0;
   overflow: hidden;
@@ -695,8 +697,17 @@ dialog { border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; 
 #tile-dialog .row.right { padding: 8px 20px 16px; margin: 0; border-top: 1px solid var(--line); flex: none; }
 .scene-step { border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin: 8px 0; }
 .scene-step .row { align-items: end; }
+.flow-head, .flow-edit-row { display: grid; gap: 6px; align-items: center; }
+.flow-head { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.flow-source-head, .flow-source-row { grid-template-columns: minmax(150px, 1fr) minmax(0, 1.6fr) 34px 30px; }
+.flow-consumer-head, .flow-consumer-row { grid-template-columns: minmax(110px, 1fr) minmax(0, 1.6fr) 30px; }
+.flow-edit-row { margin: 4px 0; }
+.flow-edit-row > input, .flow-edit-row select { width: 100%; min-width: 0; margin: 0; padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px; }
+.flow-edit-row .pick-row input { min-width: 0; margin: 0; padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px; }
+.flow-edit-row .pick-row button { white-space: nowrap; }
+.flow-edit-row .flow-invert { display: flex; justify-content: center; margin: 0; }
+.flow-edit-row > button { height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: white; }
 .variable.bound { outline: 2px solid var(--accent); cursor: default; }
-#d-body .flow-section { margin: 10px 0; padding: 8px 0; border-top: 1px solid var(--line); }
 dialog::backdrop { background: rgba(16, 32, 51, .45); }
 dialog button { padding: 6px 14px; border: 1px solid var(--line); background: white; border-radius: 4px; }
 dialog button[value=ok], dialog button[value=publish] { background: var(--accent); color: white; border-color: var(--accent); }

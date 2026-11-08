@@ -34,7 +34,8 @@ const ICONS = [
   ["blindsOpen", "Jalousie offen", 0xF1011], ["blindsClosed", "Jalousie zu", 0xF00AC],
   ["bathtub", "Badewanne", 0xF1818], ["armchair", "Sessel", 0xF156E],
   ["floorLamp", "Stehlampe", 0xF08DD], ["book", "Buch", 0xF00BA], ["power", "Ein/Aus", 0xF0425],
-  ["desk", "Büro", 0xF1239], ["hammerWrench", "Hobbyraum", 0xF188D]
+  ["desk", "Büro", 0xF1239], ["hammerWrench", "Hobbyraum", 0xF188D],
+  ["check", "Haken", 0xF012C], ["close", "Kreuz", 0xF0156], ["transmissionTower", "Strommast", 0xF0D3E]
 ];
 /* Auswahllisten zeigen die Symbole nach dem deutschen Namen sortiert. */
 const ICONS_SORTED = [...ICONS].sort((a, b) => a[1].localeCompare(b[1], "de"));
@@ -109,136 +110,222 @@ function titleCss(tile) {
   return base.replace('style="', `style="color:${color};`);
 }
 const CHART_PERIOD_LABELS = { "1h": "1 Stunde", "6h": "6 Stunden", "24h": "24 Stunden", "7d": "7 Tage" };
-const FLOW_SLOT_LABELS = {
-  signed: {
-    gridImport: "Netz Bezug",
-    gridExport: "Netz Einspeisung",
-    pv: "PV-Erzeugung",
-    load: "Hausverbrauch",
-    battery: "Batterie (±)",
-    soc: "SOC (optional)"
-  },
-  split: {
-    gridImport: "Netz Bezug",
-    gridExport: "Netz Einspeisung",
-    pv: "PV-Erzeugung",
-    batteryCharge: "Batterie Laden",
-    batteryDischarge: "Batterie Entladen",
-    load: "Hausverbrauch",
-    soc: "SOC (optional)"
-  }
-};
-
 function editorKicker() {
   return "";
 }
 
-function flowAnimSeconds(w) {
-  const a = Math.abs(Number(w) || 0);
-  if (a < 30) return 2.4;
-  return Math.max(0.35, Math.min(2.4, 3500 / a));
+const FLOW_TYPE_LABELS = {
+  gridImport: "Netzbezug",
+  gridExport: "Netzeinspeisung",
+  grid: "Netz (+ Bezug / − Einspeisung)",
+  pv: "PV-Erzeugung",
+  batteryCharge: "Batterie laden",
+  batteryDischarge: "Batterie entladen",
+  battery: "Batterie (+ laden / − entladen)",
+  soc: "Batterie-Ladestand (%)"
+};
+const FLOW_MAX_SOURCES = 16;
+const FLOW_MAX_CONSUMERS = 8;
+const FLOW_LEGACY_KEYS = ["flowMode", "homeOverride", "flowThreshold", "socDecimals", "gridVariableId", "pvVariableId", "loadVariableId", "batteryVariableId", "gridImportVariableId", "gridExportVariableId", "batteryChargeVariableId", "batteryDischargeVariableId", "batterySocVariableId"];
+
+/* Ältere Kacheln hatten feste Variablenfelder. Daraus wird die Tabelle aufgebaut. */
+function flowLegacySources(tile) {
+  const out = [];
+  const add = (type, key) => {
+    if (tile[key]) out.push({ type, variableId: Number(tile[key]), invert: false });
+  };
+  add("gridImport", "gridImportVariableId");
+  add("gridExport", "gridExportVariableId");
+  if (!tile.gridImportVariableId && !tile.gridExportVariableId) add("grid", "gridVariableId");
+  add("pv", "pvVariableId");
+  if ((tile.flowMode || "signed") === "split") {
+    add("batteryCharge", "batteryChargeVariableId");
+    add("batteryDischarge", "batteryDischargeVariableId");
+  } else {
+    add("battery", "batteryVariableId");
+  }
+  add("soc", "batterySocVariableId");
+  return out;
 }
 
-function flowSlotMap(tile) {
-  const mode = (tile && tile.flowMode) || "signed";
-  if (mode === "split") {
-    return {
-      gridImport: "gridImportVariableId",
-      gridExport: "gridExportVariableId",
-      pv: "pvVariableId",
-      batteryCharge: "batteryChargeVariableId",
-      batteryDischarge: "batteryDischargeVariableId",
-      load: "loadVariableId",
-      soc: "batterySocVariableId"
-    };
-  }
-  return {
-    gridImport: "gridImportVariableId",
-    gridExport: "gridExportVariableId",
-    pv: "pvVariableId",
-    load: "loadVariableId",
-    battery: "batteryVariableId",
-    soc: "batterySocVariableId"
-  };
+function flowSourcesOf(tile) {
+  if (tile && Array.isArray(tile.flowSources)) return tile.flowSources.filter((row) => row && FLOW_TYPE_LABELS[row.type]);
+  return tile ? flowLegacySources(tile) : [];
+}
+
+function flowConsumersOf(tile) {
+  return tile && Array.isArray(tile.flowConsumers) ? tile.flowConsumers.filter(Boolean) : [];
 }
 
 function flowConfigured(tile) {
   if (!tile || tile.kind !== "energyflow") return false;
-  const mode = tile.flowMode || "signed";
-  const need = mode === "split"
-    ? ["gridImportVariableId", "gridExportVariableId", "pvVariableId", "batteryChargeVariableId", "batteryDischargeVariableId"]
-    : ["gridImportVariableId", "gridExportVariableId", "pvVariableId", "batteryVariableId"];
-  if (tile.homeOverride !== false) need.push("loadVariableId");
-  return need.every((key) => tile[key]);
+  const sources = flowSourcesOf(tile);
+  return sources.length > 0
+    && sources.every((row) => row.variableId)
+    && flowConsumersOf(tile).every((row) => row.variableId);
 }
 
-function flowLine(flows, id) {
-  const lines = flows && flows.lines;
-  if (!lines || !lines[id]) return { active: false, w: 0 };
-  return { active: Boolean(lines[id].active), w: Number(lines[id].w) || 0 };
+/* Welche Kreise die Kachel zeigt, wie EnergyFlow::nodes im Modul. */
+function flowNodesOf(tile) {
+  const has = { pv: false, gridIn: false, gridOut: false, batIn: false, batOut: false, soc: false };
+  for (const row of flowSourcesOf(tile)) {
+    if (row.type === "pv") has.pv = true;
+    else if (row.type === "gridImport") has.gridIn = true;
+    else if (row.type === "gridExport") has.gridOut = true;
+    else if (row.type === "grid") { has.gridIn = true; has.gridOut = true; }
+    else if (row.type === "batteryCharge") has.batIn = true;
+    else if (row.type === "batteryDischarge") has.batOut = true;
+    else if (row.type === "battery") { has.batIn = true; has.batOut = true; }
+    else if (row.type === "soc") has.soc = true;
+  }
+  return has;
 }
 
-function flowNodeText(flows, key) {
-  if (flows && flows[key] && flows[key].text) return flows[key].text;
-  return "—";
+const FLOW_INK = ["#f0a030", "#a38be0", "#e0709a", "#5b8fc7", "#5b8fc7", "#6cc3b5"];
+
+/* Gleiche Geometrie wie build_energy_flow in der Firmware (Pixel der Kachel ohne Überschrift). */
+function flowGeometry(nodes, w, h) {
+  const hasGrid = nodes.gridIn || nodes.gridOut;
+  const hasBat = nodes.batIn || nodes.batOut || nodes.soc;
+  const labelH = 20;
+  let r;
+  if (nodes.pv && hasBat) r = Math.floor(h / 4.8);
+  else if (nodes.pv || hasBat) r = Math.floor((h - labelH) / 3.8);
+  else r = Math.floor((h - labelH) / 2) - 2;
+  r = Math.max(18, Math.min(r, Math.floor(w / 7), 80));
+  const cx = Math.floor(w / 2);
+  let ym;
+  if (nodes.pv && hasBat) ym = Math.floor(h / 2);
+  else if (nodes.pv) ym = h - r - 2;
+  else if (hasBat) ym = labelH + r + 2;
+  else ym = labelH + Math.floor((h - labelH) / 2);
+  const py = r + 2;
+  const by = h - r - 2;
+  const gx = r + 2;
+  const hx = w - r - 2;
+  const k = Math.floor((r * 2) / 5);
+  const dk = Math.round(Math.sqrt(r * r - k * k));
+  const rc = Math.floor(r / 2);
+  const paths = [null, null, null, null, null, null];
+  const corner = (rad, sweep, ex, ey) => (rad > 0 ? ` A ${rad} ${rad} 0 0 ${sweep} ${ex} ${ey}` : ` L ${ex} ${ey}`);
+  if (nodes.pv) {
+    const top = py + dk;
+    let rcl = rc;
+    let bend = ym - k - rcl;
+    if (bend < top) { rcl = Math.max(0, rcl - (top - bend)); bend = ym - k - rcl; }
+    paths[0] = `M ${cx + k} ${top} L ${cx + k} ${bend}${corner(rcl, 0, cx + k + rcl, ym - k)} L ${hx - dk} ${ym - k}`;
+    if (nodes.gridOut) paths[1] = `M ${cx - k} ${top} L ${cx - k} ${bend}${corner(rcl, 1, cx - k - rcl, ym - k)} L ${gx + dk} ${ym - k}`;
+    if (hasBat) paths[2] = `M ${cx} ${py + r} L ${cx} ${by - r}`;
+  }
+  if (nodes.gridIn) paths[3] = `M ${gx + r} ${ym} L ${hx - r} ${ym}`;
+  if (hasBat) {
+    const bottom = by - dk;
+    let rcl = rc;
+    let bend = ym + k + rcl;
+    if (bend > bottom) { rcl = Math.max(0, rcl - (bend - bottom)); bend = ym + k + rcl; }
+    if (hasGrid) paths[4] = `M ${gx + dk} ${ym + k} L ${cx - k - rcl} ${ym + k}${corner(rcl, 1, cx - k, bend)} L ${cx - k} ${bottom}`;
+    paths[5] = `M ${cx + k} ${bottom} L ${cx + k} ${bend}${corner(rcl, 1, cx + k + rcl, ym + k)} L ${hx - dk} ${ym + k}`;
+  }
+  return { r, cx, ym, py, by, gx, hx, labelH, hasGrid, hasBat, paths };
+}
+
+function flowDemo(nodes) {
+  return {
+    pv: "3.200 W", gridIn: "150 W", gridOut: "0 W", batIn: "500 W", batOut: "0 W", home: "2.850 W", soc: nodes.soc ? "63 %" : "",
+    l: [100, 0, 20, 5, 0, 0], mix: [95, 0, 5], c: []
+  };
 }
 
 function buildEnergyFlowHtml(tile, live, mode) {
-  if (!flowConfigured(tile) && !(live && live.flows && live.flows.lines)) {
-    return `${editorKicker(mode, "Energiefluss")}<div class="energy-flow hint" style="padding:8px;font-size:12px">Alle Pflicht-Variablen zuweisen (Netz, PV, Batterie, ggf. Haus).</div>`;
+  if (!flowSourcesOf(tile).length) {
+    return `${editorKicker(mode, "Energiefluss")}<div class="energy-flow hint" style="padding:8px;font-size:12px">Messwerte in den Eigenschaften hinzufügen (Netzbezug, Einspeisung, PV, Batterie).</div>`;
   }
-  const flows = (live && live.flows) || {};
-  const gridImport = flowNodeText(flows, "gridImport");
-  const gridExport = flowNodeText(flows, "gridExport");
-  const gridFallback = flowNodeText(flows, "grid");
-  const labels = {
-    pv: flowNodeText(flows, "pv"),
-    gridImport: gridImport !== "—" ? gridImport : gridFallback,
-    gridExport: gridExport !== "—" ? gridExport : "—",
-    load: flowNodeText(flows, "load"),
-    battery: flowNodeText(flows, "battery")
+  const nodes = flowNodesOf(tile);
+  const box = tilePixelBox(tile);
+  const showTitle = tile.showTitle !== false;
+  const head = showTitle ? Math.round((titlePxOf(tile) || 20) * 1.2) + 4 : 0;
+  const w = Math.max(80, box.width - 20);
+  const h = Math.max(60, box.height - 20 - head);
+  const g = flowGeometry(nodes, w, h);
+  const flow = (live && live.flow && typeof live.flow === "object") ? live.flow : flowDemo(nodes);
+  const pct = Array.isArray(flow.l) ? flow.l : [];
+  const valuePx = g.r >= 50 ? 20 : 16;
+  const iconPx = g.r >= 64 ? 44 : 26;
+  const withIcon = g.r >= 34;
+  const text = (key) => escapeHtml(flow[key] || "-");
+  const parts = [];
+  g.paths.forEach((d, index) => {
+    if (!d) return;
+    const share = Number(pct[index]) || 0;
+    parts.push(`<path d="${d}" fill="none" stroke="${FLOW_INK[index]}" stroke-width="2" stroke-linecap="round" opacity="${share ? 1 : 0.4}"/>`);
+    if (share) {
+      const seconds = (3200 - 22 * Math.min(100, Math.abs(share))) / 1000;
+      const reverse = share < 0 ? ' keyPoints="1;0" keyTimes="0;1" calcMode="linear"' : "";
+      parts.push(`<circle r="4" fill="${FLOW_INK[index]}"><animateMotion dur="${seconds}s" repeatCount="indefinite" path="${d}"${reverse}/></circle>`);
+    }
+  });
+  const circle = (x, y, ring, icon, lines) => {
+    const rows = lines.filter(Boolean);
+    const iconH = withIcon ? iconPx : 0;
+    const total = iconH + rows.length * valuePx * 1.2;
+    let cursor = y - total / 2;
+    let inner = "";
+    if (withIcon) {
+      inner += `<text x="${x}" y="${cursor + iconPx * 0.85}" text-anchor="middle" class="flow-icon" font-size="${iconPx}">${String.fromCodePoint(icon)}</text>`;
+      cursor += iconPx;
+    }
+    for (const [label, color] of rows) {
+      inner += `<text x="${x}" y="${cursor + valuePx * 0.95}" text-anchor="middle" font-size="${valuePx}" fill="${color}">${label}</text>`;
+      cursor += valuePx * 1.2;
+    }
+    return `<circle cx="${x}" cy="${y}" r="${g.r - 1.5}" fill="#152238" stroke="${ring}" stroke-width="3"/>${inner}`;
   };
-  const soc = flows.soc && flows.soc.text ? flows.soc.text : "";
-  const path = (d, lineId, extra) => {
-    const line = flowLine(flows, lineId);
-    if (!line.active) return `<path class="flow-path" d="${d}"/>`;
-    return `<path class="flow-path active${extra ? ` ${extra}` : ""}" d="${d}" style="animation-duration:${flowAnimSeconds(line.w)}s"/>`;
-  };
-  const paths = [
-    path("M50 23 L50 41", "solarToHome"),
-    path("M50 23 L23 38", "solarToGrid", "export"),
-    path("M50 23 L77 38", "solarToBattery", "battery"),
-    path("M23 50 L41 50", "gridToHome"),
-    path("M41 50 L23 50", "homeToGrid", "export"),
-    path("M59 50 L77 50", "homeToBattery", "battery"),
-    path("M77 50 L59 50", "batteryToHome", "battery")
-  ];
-  const homeHint = flows.homeCalculated ? " (berechnet)" : "";
-  return `${editorKicker(mode, "Energiefluss")}<div class="energy-flow"><svg viewBox="0 0 100 78" class="flow-svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true">${paths.join("")}<circle cx="50" cy="52" r="9" fill="#1d3350" stroke="#5a7391"/><text class="flow-node" x="50" y="10" text-anchor="middle">PV</text><text class="flow-value" x="50" y="18" text-anchor="middle">${escapeHtml(labels.pv)}</text><text class="flow-node" x="11" y="52" text-anchor="start">Netz</text><text class="flow-value" x="11" y="60" text-anchor="start">↓ ${escapeHtml(labels.gridImport)}</text><text class="flow-value" x="11" y="68" text-anchor="start">↑ ${escapeHtml(labels.gridExport)}</text><text class="flow-node" x="50" y="55" text-anchor="middle">Haus${homeHint}</text><text class="flow-value" x="50" y="63" text-anchor="middle">${escapeHtml(labels.load)}</text><text class="flow-node" x="89" y="55" text-anchor="end">Akku</text><text class="flow-value" x="89" y="63" text-anchor="end">${escapeHtml(labels.battery)}</text>${soc ? `<text class="flow-value" x="89" y="48" text-anchor="end">${escapeHtml(soc)}</text>` : ""}</svg></div>`;
-}
-
-function fillFlowSlotSelect(tile) {
-  const select = $("p-flow-slot");
-  if (!select) return;
-  const mode = (tile && tile.flowMode) || "signed";
-  const labels = FLOW_SLOT_LABELS[mode] || FLOW_SLOT_LABELS.signed;
-  select.innerHTML = "";
-  for (const [slot, label] of Object.entries(labels)) {
-    const option = document.createElement("option");
-    option.value = slot;
-    option.textContent = label;
-    select.appendChild(option);
+  const caption = (x, y, label, anchor) => `<text x="${x}" y="${y}" text-anchor="${anchor}" class="flow-caption">${escapeHtml(label)}</text>`;
+  if (nodes.pv) {
+    parts.push(circle(g.cx, g.py, "#f0a030", 0xF0A72, [[text("pv"), "#f4f7fb"]]));
+    parts.push(caption(g.cx - g.r - 8, g.py + 5, "PV", "end"));
   }
-}
-
-function syncFlowPropertyPanels(tile) {
-  const mode = (tile && tile.flowMode) || ($("p-flow-mode") && $("p-flow-mode").value) || "signed";
-  if ($("p-flow-grid-vars")) $("p-flow-grid-vars").classList.remove("hidden");
-  if ($("p-flow-signed")) $("p-flow-signed").classList.toggle("hidden", mode === "split");
-  if ($("p-flow-split")) $("p-flow-split").classList.toggle("hidden", mode !== "split");
-  const homeOverride = tile ? tile.homeOverride !== false : ($("p-flow-home-override") && $("p-flow-home-override").checked);
-  if ($("p-flow-load-wrap")) $("p-flow-load-wrap").classList.toggle("hidden", !homeOverride);
-  fillFlowSlotSelect(tile || { flowMode: mode });
+  if (g.hasGrid) {
+    parts.push(circle(g.gx, g.ym, "#5b8fc7", 0xF0D3E, [nodes.gridOut && [`← ${text("gridOut")}`, "#a38be0"], nodes.gridIn && [`→ ${text("gridIn")}`, "#8db8ea"]]));
+    parts.push(caption(g.gx, g.ym - g.r - 6, "Netz", "middle"));
+  }
+  if (g.hasBat) {
+    parts.push(circle(g.cx, g.by, "#e0709a", 0xF0079, [nodes.batIn && [`↓ ${text("batIn")}`, "#e88aae"], nodes.batOut && [`↑ ${text("batOut")}`, "#6cc3b5"]]));
+    const capY = nodes.soc ? g.by - 4 : g.by + 5;
+    parts.push(caption(g.cx - g.r - 8, capY, "Batterie", "end"));
+    if (nodes.soc) parts.push(caption(g.cx - g.r - 8, capY + 20, flow.soc || "", "end"));
+  }
+  parts.push(circle(g.hx, g.ym, "#46566b", 0xF02DC, [[text("home"), "#f4f7fb"]]));
+  const mix = Array.isArray(flow.mix) ? flow.mix : [];
+  const mixInk = ["#f0a030", "#6cc3b5", "#5b8fc7"];
+  const circumference = 2 * Math.PI * (g.r - 2);
+  let offset = 0;
+  mix.forEach((share, index) => {
+    const part = Math.max(0, Math.min(100, Number(share) || 0));
+    if (!part) return;
+    const length = (circumference * part) / 100;
+    parts.push(`<circle cx="${g.hx}" cy="${g.ym}" r="${g.r - 2}" fill="none" stroke="${mixInk[index]}" stroke-width="4" stroke-dasharray="${length} ${circumference - length}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${g.hx} ${g.ym})"/>`);
+    offset += length;
+  });
+  parts.push(caption(g.hx, g.ym - g.r - 6, "Zuhause", "middle"));
+  const consumers = flowConsumersOf(tile);
+  const x0 = g.cx + g.r + 8;
+  const colW = w - x0;
+  if (consumers.length && colW >= 70) {
+    const belowY = g.ym + g.r + 6;
+    const belowH = h - belowY;
+    const aboveH = g.ym - g.r - g.labelH - 2;
+    const y0 = belowH >= aboveH ? belowY : 0;
+    const fit = Math.min(consumers.length, Math.floor(Math.max(belowH, aboveH) / 20), 6);
+    const values = Array.isArray(flow.c) ? flow.c : [];
+    for (let index = 0; index < fit; index += 1) {
+      const y = y0 + index * 20 + 15;
+      parts.push(`<text x="${x0}" y="${y}" class="flow-caption">${escapeHtml(consumers[index].title || "Verbraucher")}</text>`);
+      parts.push(`<text x="${w}" y="${y}" text-anchor="end" class="flow-consumer">${escapeHtml((values[index] && values[index].v) || "-")}</text>`);
+    }
+  }
+  const title = showTitle ? `<div class="value-badge-title"${titleCss(tile)}>${escapeHtml(tile.title || KIND_NAMES.energyflow)}</div>` : "";
+  return `${editorKicker(mode, "Energiefluss")}<div class="energy-flow">${title}<svg class="flow-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">${parts.join("")}</svg></div>`;
 }
 
 function flowVarLabel(variableId) {
@@ -246,16 +333,110 @@ function flowVarLabel(variableId) {
   return v ? `${v.path ? v.path + " / " : ""}${v.name} (${v.id})` : "";
 }
 
-function assignFlowVariable(tile, slot, variable, silent) {
-  const map = flowSlotMap(tile);
-  if (!tile || tile.kind !== "energyflow" || !variable || !map[slot]) return;
-  tile[map[slot]] = variable.id;
-  if (!tile.title && slot === "load") tile.title = "Energiefluss";
-  if (!silent) {
-    markDirty();
-    renderGrid();
-    renderProperties();
+function flowSourceRow(row) {
+  const el = document.createElement("div");
+  el.className = "flow-edit-row flow-source-row";
+  el.dataset.variableId = String(Number(row.variableId) || 0);
+  const options = Object.entries(FLOW_TYPE_LABELS)
+    .map(([value, label]) => `<option value="${value}"${value === row.type ? " selected" : ""}>${escapeHtml(label)}</option>`)
+    .join("");
+  el.innerHTML = `<select data-flow-type>${options}</select>
+    <span class="pick-row"><input readonly data-flow-label value="${escapeHtml(flowVarLabel(row.variableId))}" placeholder="Variable wählen"><button type="button" data-flow-pick>Auswählen</button></span>
+    <label class="flow-invert" title="Vorzeichen des Messwerts umkehren"><input type="checkbox" data-flow-invert${row.invert ? " checked" : ""}></label>
+    <button type="button" data-flow-remove title="Zeile entfernen">×</button>`;
+  return el;
+}
+
+function flowConsumerRow(row) {
+  const el = document.createElement("div");
+  el.className = "flow-edit-row flow-consumer-row";
+  el.dataset.variableId = String(Number(row.variableId) || 0);
+  el.innerHTML = `<input data-flow-title maxlength="24" value="${escapeHtml(row.title || "")}" placeholder="Name, z. B. Pool">
+    <span class="pick-row"><input readonly data-flow-label value="${escapeHtml(flowVarLabel(row.variableId))}" placeholder="Variable wählen"><button type="button" data-flow-pick>Auswählen</button></span>
+    <button type="button" data-flow-remove title="Zeile entfernen">×</button>`;
+  return el;
+}
+
+function renderFlowTables(tile) {
+  const sources = $("p-flow-sources");
+  const consumers = $("p-flow-consumers");
+  if (!sources || !consumers) return;
+  sources.innerHTML = "";
+  consumers.innerHTML = "";
+  for (const row of flowSourcesOf(tile)) sources.appendChild(flowSourceRow(row));
+  for (const row of flowConsumersOf(tile)) consumers.appendChild(flowConsumerRow(row));
+}
+
+function collectFlowSources() {
+  const rows = [];
+  for (const el of document.querySelectorAll("#p-flow-sources .flow-source-row")) {
+    rows.push({
+      type: el.querySelector("[data-flow-type]").value,
+      variableId: Number(el.dataset.variableId) || 0,
+      invert: el.querySelector("[data-flow-invert]").checked
+    });
   }
+  return rows.slice(0, FLOW_MAX_SOURCES);
+}
+
+function collectFlowConsumers() {
+  const rows = [];
+  for (const el of document.querySelectorAll("#p-flow-consumers .flow-consumer-row")) {
+    rows.push({
+      title: el.querySelector("[data-flow-title]").value.trim(),
+      variableId: Number(el.dataset.variableId) || 0
+    });
+  }
+  return rows.slice(0, FLOW_MAX_CONSUMERS);
+}
+
+function assignFlowRowVariable(kind, index, variable) {
+  const host = $(kind === "flowSource" ? "p-flow-sources" : "p-flow-consumers");
+  const el = host && host.children[index];
+  if (!el) return;
+  el.dataset.variableId = String(variable.id);
+  el.querySelector("[data-flow-label]").value = flowVarLabel(variable.id);
+  if (kind === "flowConsumer") {
+    const title = el.querySelector("[data-flow-title]");
+    if (title && !title.value.trim()) title.value = variable.name.slice(0, 24);
+  }
+  applyProperties();
+}
+
+function initFlowTables() {
+  const wire = (hostId, kind) => {
+    const host = $(hostId);
+    if (!host) return;
+    host.addEventListener("input", applyProperties);
+    host.addEventListener("change", applyProperties);
+    host.addEventListener("click", (event) => {
+      const row = event.target.closest(".flow-edit-row");
+      if (!row) return;
+      const index = Array.prototype.indexOf.call(host.children, row);
+      if (event.target.closest("[data-flow-remove]")) {
+        row.remove();
+        applyProperties();
+      } else if (event.target.closest("[data-flow-pick]")) {
+        openVariablePicker(kind, String(index));
+      }
+    });
+  };
+  wire("p-flow-sources", "flowSource");
+  wire("p-flow-consumers", "flowConsumer");
+  bindClick("p-flow-add-source", () => {
+    const host = $("p-flow-sources");
+    if (!host || host.children.length >= FLOW_MAX_SOURCES) return;
+    const used = new Set(Array.from(host.querySelectorAll("[data-flow-type]")).map((select) => select.value));
+    const type = ["gridImport", "gridExport", "pv", "battery"].find((candidate) => !used.has(candidate)) || "pv";
+    host.appendChild(flowSourceRow({ type, variableId: 0, invert: false }));
+    applyProperties();
+  });
+  bindClick("p-flow-add-consumer", () => {
+    const host = $("p-flow-consumers");
+    if (!host || host.children.length >= FLOW_MAX_CONSUMERS) return;
+    host.appendChild(flowConsumerRow({ title: "", variableId: 0 }));
+    applyProperties();
+  });
 }
 
 function scaledTileHtml(mainText, iconId, subText) {
@@ -910,7 +1091,7 @@ function syncRuleHead(mode) {
   box.classList.remove("mode-value", "mode-switch", "mode-image");
   box.classList.add(mode === "switch" || mode === "image" ? `mode-${mode}` : "mode-value");
   const columns = {
-    value: ["Von", "Bis", "Symbol", "Position", "Symbol", "Text", "Kachel", ""],
+    value: ["Von", "Bis", "Symbol", "Position", "Symbolfarbe", "Anzeigetext", "Ausrichtung", "Textfarbe", "Kachel", ""],
     switch: ["Von", "Bis", "Symbol", "Symbolfarbe", "Anzeigetext", "Textfarbe", "Kachel", ""],
     image: ["Von", "Bis", "Art", "Bild / Symbol", "Farbe", ""]
   };
@@ -947,6 +1128,8 @@ function valueRuleRow(rule, tile) {
       + `<select data-rule-icon></select>`
       + `<select data-rule-place><option value="before">Links</option><option value="after">Rechts</option></select>`
       + `<input data-rule-icon-color type="color" title="Symbolfarbe">`
+      + `<input data-rule-text maxlength="16" placeholder="Wert bleibt">`
+      + `<select data-rule-align title="Ausrichtung des Werts"><option value="">Mitte</option><option value="left">Links</option><option value="right">Rechts</option></select>`
       + `<input data-rule-text-color type="color" title="Textfarbe">`
       + `<input data-rule-bg-color type="color" title="Kachel-Farbe">`
       + remove;
@@ -968,6 +1151,8 @@ function valueRuleRow(rule, tile) {
   if (bgColor) bgColor.value = rule?.bgColor || defaults.bg;
   const text = row.querySelector("[data-rule-text]");
   if (text) text.value = rule?.text || "";
+  const align = row.querySelector("[data-rule-align]");
+  if (align) align.value = rule?.align === "left" || rule?.align === "right" ? rule.align : "";
   const kind = row.querySelector("[data-rule-kind]");
   const image = row.querySelector("[data-rule-image]");
   if (kind && image && icon) {
@@ -1013,6 +1198,8 @@ function collectValueRules(tile) {
     if (bgColor) item.bgColor = bgColor;
     const text = (row.querySelector("[data-rule-text]")?.value || "").trim();
     if (text) item.text = text.slice(0, 16);
+    const align = row.querySelector("[data-rule-align]")?.value || "";
+    if (align === "left" || align === "right") item.align = align;
     rows.push(item);
     if (rows.length >= 12) break;
   }
@@ -2052,10 +2239,12 @@ function buildTileElement(tile, context) {
         const core = textSource
           ? displayMainText(tile, live)
           : (live && live.text ? live.text : (!variable ? "—" : ((variable.type === 1 || variable.type === 2) ? "12,3" : "Ein")));
-        const readout = textSource || !(live && live.text)
-          ? `${tile.prefix ? tile.prefix + " " : ""}${core}${tile.unit ? " " + tile.unit : ""}`
-          : core;
         const rule = textSource ? null : matchingValueRule(tile, live);
+        const valueText = rule && rule.text ? rule.text : "";
+        const readout = valueText || (textSource || !(live && live.text)
+          ? `${tile.prefix ? tile.prefix + " " : ""}${core}${tile.unit ? " " + tile.unit : ""}`
+          : core);
+        const valueAlign = rule && (rule.align === "left" || rule.align === "right") ? rule.align : "center";
         const useRules = !textSource && Array.isArray(tile.valueRules) && tile.valueRules.length > 0;
         const textInk = (rule && rule.textColor) || tile.textColor || "";
         const bits = [];
@@ -2085,7 +2274,7 @@ function buildTileElement(tile, context) {
           ? `<span class="value-readout-text">${escapeHtml(readout)}</span>${valueIcon}`
           : `${valueIcon}<span class="value-readout-text">${escapeHtml(readout)}</span>`;
         const ageHtml = tile.showAge ? `<div class="age-line">${escapeHtml((live && live.age) || "vor 4 min")}</div>` : "";
-        element.innerHTML = `${editorKicker(mode, kicker)}<div class="value-badge">${titleHtml}<div class="value-badge-body"><div class="value-readout-row"><div class="value-readout"${readoutStyle}>${readoutInner}</div>${ageHtml}</div></div></div>`;
+        element.innerHTML = `${editorKicker(mode, kicker)}<div class="value-badge">${titleHtml}<div class="value-badge-body align-${valueAlign}"><div class="value-readout-row align-${valueAlign}"><div class="value-readout align-${valueAlign}"${readoutStyle}>${readoutInner}</div>${ageHtml}</div></div></div>`;
         cardBody = null;
       } else {
         cardBody = body || "";
@@ -2635,21 +2824,16 @@ function addTile(kind, col, row, variable, control) {
   } else if (kind === "energyflow") {
     tile.colSpan = Math.min(2, currentGrid().columns);
     tile.rowSpan = Math.min(2, currentGrid().rows);
-    tile.flowMode = "signed";
-    tile.homeOverride = true;
     tile.unit = "W";
     tile.decimals = 0;
-    tile.flowThreshold = 50;
-    tile.pvVariableId = 0;
-    tile.loadVariableId = 0;
-    tile.batteryVariableId = 0;
-    tile.gridImportVariableId = 0;
-    tile.gridExportVariableId = 0;
-    tile.batteryChargeVariableId = 0;
-    tile.batteryDischargeVariableId = 0;
-    tile.batterySocVariableId = 0;
+    tile.flowSources = [
+      { type: "gridImport", variableId: 0, invert: false },
+      { type: "gridExport", variableId: 0, invert: false },
+      { type: "pv", variableId: variable ? variable.id : 0, invert: false },
+      { type: "battery", variableId: 0, invert: false }
+    ];
+    tile.flowConsumers = [];
     tile.title = tile.title || "Energiefluss";
-    if (variable) assignFlowVariable(tile, "pv", variable, true);
   } else if (kind === "multi" || kind === "contacts") {
     tile.rows = [{ variableId: variable ? variable.id : 0, title: variable ? variable.name : "Zeile", unit: "", decimals: 0 }];
     tile.title = tile.title || (kind === "multi" ? "Mehrwert" : "Kontakte");
@@ -3431,20 +3615,9 @@ function renderProperties() {
     if ($("p-setpoint-step")) $("p-setpoint-step").value = tile.setpointStep ?? 0.5;
   }
   if (tile.kind === "energyflow") {
-    if ($("p-flow-mode")) $("p-flow-mode").value = tile.flowMode || "signed";
-    if ($("p-flow-home-override")) $("p-flow-home-override").checked = tile.homeOverride !== false;
-    syncFlowPropertyPanels(tile);
-    if ($("p-flow-grid-import")) $("p-flow-grid-import").value = flowVarLabel(tile.gridImportVariableId);
-    if ($("p-flow-grid-export")) $("p-flow-grid-export").value = flowVarLabel(tile.gridExportVariableId);
-    if ($("p-flow-battery")) $("p-flow-battery").value = flowVarLabel(tile.batteryVariableId);
-    if ($("p-flow-battery-charge")) $("p-flow-battery-charge").value = flowVarLabel(tile.batteryChargeVariableId);
-    if ($("p-flow-battery-discharge")) $("p-flow-battery-discharge").value = flowVarLabel(tile.batteryDischargeVariableId);
-    if ($("p-flow-pv")) $("p-flow-pv").value = flowVarLabel(tile.pvVariableId);
-    if ($("p-flow-load")) $("p-flow-load").value = flowVarLabel(tile.loadVariableId);
-    if ($("p-flow-soc")) $("p-flow-soc").value = flowVarLabel(tile.batterySocVariableId);
+    if (!document.activeElement || !document.activeElement.closest("#p-flow-sources, #p-flow-consumers")) renderFlowTables(tile);
     if ($("p-flow-unit")) $("p-flow-unit").value = tile.unit || "W";
     if ($("p-flow-decimals")) $("p-flow-decimals").value = tile.decimals ?? 0;
-    if ($("p-flow-threshold")) $("p-flow-threshold").value = tile.flowThreshold ?? 50;
   }
   const imgSource = tile.imageSource || "catalog";
   if ($("p-imagesource")) {
@@ -3835,12 +4008,11 @@ function applyProperties() {
     }
   }
   if (tile.kind === "energyflow") {
-    tile.flowMode = $("p-flow-mode") ? $("p-flow-mode").value : "signed";
-    tile.homeOverride = $("p-flow-home-override") ? $("p-flow-home-override").checked : true;
+    tile.flowSources = collectFlowSources();
+    tile.flowConsumers = collectFlowConsumers();
+    for (const key of FLOW_LEGACY_KEYS) delete tile[key];
     tile.unit = $("p-flow-unit") ? $("p-flow-unit").value : "W";
     tile.decimals = $("p-flow-decimals") ? Number($("p-flow-decimals").value) || 0 : 0;
-    tile.flowThreshold = $("p-flow-threshold") ? Number($("p-flow-threshold").value) || 0 : 50;
-    if (!tile.homeOverride) delete tile.loadVariableId;
   }
   if (tile.kind === "image") {
     const source = $("p-imagesource").value || "catalog";
@@ -3902,12 +4074,10 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-title-icon", "p-title-align", "p-bg-color", "p-bg-transparent", "p-own-on", "p-on-color", "p-group", "p-snap", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-icon-colors", "p-icon-off-color", "p-icon-on-color", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-pin", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-icon-colors", "p-scene-icon-off-color", "p-scene-icon-on-color", "p-scene-show-state-text", "p-scene-confirm", "p-scene-pin", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-image-icon-id", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-title-icon", "p-title-align", "p-bg-color", "p-bg-transparent", "p-own-on", "p-on-color", "p-group", "p-snap", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-icon-colors", "p-icon-off-color", "p-icon-on-color", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-pin", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-icon-colors", "p-scene-icon-off-color", "p-scene-icon-on-color", "p-scene-show-state-text", "p-scene-confirm", "p-scene-pin", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-image-icon-id", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
-if ($("p-flow-home-override")) {
-  $("p-flow-home-override").addEventListener("change", applyProperties);
-}
+initFlowTables();
 for (const id of ["p-title-px", "p-text-px", "p-title-bold", "p-title-italic", "p-title-color", "p-text-color", "p-text-bold", "p-text-italic", "p-text-underline", "p-show-age", "p-gauge-min", "p-gauge-max", "p-gauge-unit", "p-gauge-decimals", "p-countdown-mode", "p-schedule"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
@@ -3999,93 +4169,6 @@ function detailsVariableSelect(selectedId, filterFn) {
   }
   picker.value = String(selectedId || 0);
   return picker;
-}
-
-function flowVariableFilter(item) {
-  const t = item.type;
-  return t === 0 || t === 1 || t === 2;
-}
-
-function allFlowVariableKeys() {
-  const keys = new Set();
-  for (const mode of ["signed", "split"]) {
-    for (const key of Object.values(flowSlotMap({ flowMode: mode }))) keys.add(key);
-  }
-  return keys;
-}
-
-function appendEnergyFlowDetails(body, tile, fields, add, check, number, text) {
-  const modeSelect = document.createElement("select");
-  modeSelect.innerHTML = '<option value="signed">Batterie eine Variable (±)</option><option value="split">Batterie getrennt (Laden / Entladen)</option>';
-  modeSelect.value = tile.flowMode || "signed";
-  fields.flowMode = add("Berechnungsmodus", modeSelect);
-  fields.homeOverride = add("Hausverbrauch aus Variable (sonst berechnet)", check(tile.homeOverride !== false));
-  const signedSec = document.createElement("div");
-  signedSec.className = "flow-section";
-  signedSec.dataset.flowSection = "signed";
-  const splitSec = document.createElement("div");
-  splitSec.className = "flow-section hidden";
-  splitSec.dataset.flowSection = "split";
-  const gridSec = document.createElement("div");
-  gridSec.className = "flow-section";
-  gridSec.dataset.flowSection = "grid";
-  body.append(gridSec, signedSec, splitSec);
-  const relocate = (slot, parent, label, variableId) => {
-    const picker = detailsVariableSelect(variableId, flowVariableFilter);
-    fields[`flowSlot_${slot}`] = picker;
-    const wrap = document.createElement("label");
-    wrap.textContent = label;
-    wrap.appendChild(picker);
-    parent.appendChild(wrap);
-  };
-  relocate("gridImport", gridSec, "Netz Bezug", tile.gridImportVariableId);
-  relocate("gridExport", gridSec, "Netz Einspeisung", tile.gridExportVariableId);
-  const sharedSlots = new Set(["load", "pv", "soc", "gridImport", "gridExport"]);
-  for (const [slot, label] of Object.entries(FLOW_SLOT_LABELS.signed)) {
-    if (sharedSlots.has(slot)) continue;
-    const prop = flowSlotMap({ flowMode: "signed" })[slot];
-    relocate(slot, signedSec, label, tile[prop]);
-  }
-  for (const [slot, label] of Object.entries(FLOW_SLOT_LABELS.split)) {
-    if (sharedSlots.has(slot)) continue;
-    const prop = flowSlotMap({ flowMode: "split" })[slot];
-    relocate(slot, splitSec, label, tile[prop]);
-  }
-  relocate("pv", body, "PV-Erzeugung", tile.pvVariableId);
-  relocate("soc", body, "SOC (optional)", tile.batterySocVariableId);
-  const loadWrap = document.createElement("label");
-  loadWrap.id = "d-flow-load-wrap";
-  loadWrap.textContent = "Hausverbrauch ";
-  fields.flowSlot_load = detailsVariableSelect(tile.loadVariableId, flowVariableFilter);
-  loadWrap.appendChild(fields.flowSlot_load);
-  body.appendChild(loadWrap);
-  const socHint = document.createElement("p");
-  socHint.className = "hint";
-  socHint.textContent = "Pflicht: Netz Bezug, Netz Einspeisung, PV und Batterie (je nach Modus). SOC optional. Kachel 2×2 empfohlen.";
-  body.appendChild(socHint);
-  const unitRow = document.createElement("div");
-  unitRow.className = "row";
-  body.appendChild(unitRow);
-  const unitWrap = document.createElement("label");
-  unitWrap.textContent = "Einheit ";
-  fields.flowUnit = text(tile.unit || "W");
-  unitWrap.appendChild(fields.flowUnit);
-  unitRow.appendChild(unitWrap);
-  const decWrap = document.createElement("label");
-  decWrap.textContent = "Nachkommastellen ";
-  fields.flowDecimals = number(tile.decimals ?? 0, 0, 3);
-  decWrap.appendChild(fields.flowDecimals);
-  unitRow.appendChild(decWrap);
-  fields.flowThreshold = add("Animation ab (W)", number(tile.flowThreshold ?? 50, 0, 999999));
-  const sync = () => {
-    const mode = modeSelect.value;
-    signedSec.classList.toggle("hidden", mode === "split");
-    splitSec.classList.toggle("hidden", mode !== "split");
-    loadWrap.classList.toggle("hidden", !fields.homeOverride.checked);
-  };
-  modeSelect.addEventListener("change", sync);
-  fields.homeOverride.addEventListener("change", sync);
-  sync();
 }
 
 /* ---------- Seiten-Dialog ---------- */
@@ -4583,7 +4666,7 @@ let pickerState = null;
 function pickerFilter(kind, variable) {
   if (kind === "image") return isMediaPick(variable);
   if (kind === "forecast") return Number(variable.type) === 3;
-  if (kind === "setpoint" || kind === "weather" || kind === "flow") return Number(variable.type) === 1 || Number(variable.type) === 2;
+  if (kind === "setpoint" || kind === "weather" || kind === "flowSource" || kind === "flowConsumer") return Number(variable.type) === 1 || Number(variable.type) === 2;
   return true;
 }
 
@@ -4619,7 +4702,7 @@ function acceptVariablePicker() {
   const tile = selectedTile();
   if (!variable || !tile || !pickerState) return;
   const kind = pickerState.kind;
-  if (kind === "flow") assignFlowVariable(tile, pickerState.slot, variable);
+  if (kind === "flowSource" || kind === "flowConsumer") assignFlowRowVariable(kind, Number(pickerState.slot), variable);
   else if (kind === "image") assignMediaVariable(tile, variable);
   else if (kind === "forecast") {
     tile.forecastVariableId = variable.id;
@@ -4660,7 +4743,7 @@ function openVariablePicker(kind, slot) {
   const dialog = $("var-picker");
   if (!dialog) return;
   pickerState = { kind, slot };
-  const titles = { variable: "Variable", scene: "Aktions-Variable", weather: "Temperatur", forecast: "Prognose", presence: "Anwesenheit", setpoint: "Sollwert", flow: "Energiefluss", image: "Medien" };
+  const titles = { variable: "Variable", scene: "Aktions-Variable", weather: "Temperatur", forecast: "Prognose", presence: "Anwesenheit", setpoint: "Sollwert", flowSource: "Messwert", flowConsumer: "Verbraucher", image: "Medien" };
   $("var-picker-title").textContent = titles[kind] || "Variable auswählen";
   $("var-picker-search").value = "";
   $("var-picker-actions").checked = kind === "scene";
@@ -4779,7 +4862,7 @@ function validateLayout(layout) {
         throw new Error(`Rolladen „${tile.title || tile.tileId}“ braucht eine schaltbare Variable.`);
       }
       if (tile.kind === "energyflow" && !flowConfigured(tile)) {
-        throw new Error(`Energiefluss „${tile.title || tile.tileId}“: alle Pflicht-Variablen zuweisen (siehe Eigenschaften).`);
+        throw new Error(`Energiefluss „${tile.title || tile.tileId}“: jede Messwert- und Verbraucher-Zeile braucht eine Variable (siehe Eigenschaften).`);
       }
       if (tile.kind === "image") {
         const source = tile.imageSource || "catalog";

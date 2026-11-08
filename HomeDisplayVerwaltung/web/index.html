@@ -376,7 +376,7 @@
             <legend>Werte</legend>
             <div class="rule-head" id="p-value-rules-head"></div>
             <div id="p-value-rules-rows"></div>
-            <p class="hint">Leeres Von oder Bis gilt als offen. Die erste passende Zeile gewinnt, eine Zeile ohne Von und Bis gilt immer.</p>
+            <p class="hint">Leeres Von oder Bis gilt als offen. Die erste passende Zeile gewinnt. Anzeigetext ersetzt den Wert, nicht die Überschrift. Leer lässt den Variablenwert stehen. Die Ausrichtung gilt für diese Wertzeile.</p>
             <button type="button" id="p-value-rules-add">Zeile hinzufügen</button>
           </fieldset>
         </div>
@@ -418,37 +418,25 @@
         </div>
         <div data-for="display" class="hidden"></div>
         <div data-for="energyflow">
-          <label>Modus (Batterie)
-            <select id="p-flow-mode">
-              <option value="signed">Batterie eine Variable (±)</option>
-              <option value="split">Batterie getrennt (Laden / Entladen)</option>
-            </select>
-          </label>
-          <p class="hint">Netz immer zwei Variablen: Bezug (≥ 0) und Einspeisung (≥ 0). PV nur Erzeugung. Modus betrifft nur die Batterie (Power Flow Card Plus).</p>
-          <label>Zuweisen für
-            <select id="p-flow-slot"></select>
-          </label>
-          <div id="p-flow-grid-vars">
-            <label>Netz Bezug <span class="pick-row"><input id="p-flow-grid-import" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="gridImport">Auswählen</button></span></label>
-            <label>Netz Einspeisung <span class="pick-row"><input id="p-flow-grid-export" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="gridExport">Auswählen</button></span></label>
-          </div>
-          <div id="p-flow-signed">
-            <label>Batterie (±) <span class="pick-row"><input id="p-flow-battery" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="battery">Auswählen</button></span></label>
-          </div>
-          <div id="p-flow-split" class="hidden">
-            <label>Batterie Laden <span class="pick-row"><input id="p-flow-battery-charge" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="batteryCharge">Auswählen</button></span></label>
-            <label>Batterie Entladen <span class="pick-row"><input id="p-flow-battery-discharge" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="batteryDischarge">Auswählen</button></span></label>
-          </div>
-          <label>PV-Erzeugung <span class="pick-row"><input id="p-flow-pv" readonly placeholder="Pflicht"><button type="button" class="pick-var" data-pick="flow" data-slot="pv">Auswählen</button></span></label>
-          <label><input id="p-flow-home-override" type="checkbox" checked> Hausverbrauch aus Variable (sonst berechnet)</label>
-          <label id="p-flow-load-wrap">Hausverbrauch <span class="pick-row"><input id="p-flow-load" readonly placeholder="Pflicht wenn oben aktiv"><button type="button" class="pick-var" data-pick="flow" data-slot="load">Auswählen</button></span></label>
-          <label>SOC (optional) <span class="pick-row"><input id="p-flow-soc" readonly placeholder="Ladestand %"><button type="button" class="pick-var" data-pick="flow" data-slot="soc">Auswählen</button></span></label>
+          <fieldset class="font-box">
+            <legend>Messwerte</legend>
+            <div class="flow-head flow-source-head"><span>Art</span><span>Variable</span><span title="Vorzeichen umkehren">±</span><span></span></div>
+            <div id="p-flow-sources"></div>
+            <button type="button" id="p-flow-add-source">Messwert hinzufügen</button>
+            <p class="hint">Mehrere Zeilen gleicher Art werden addiert, zum Beispiel mehrere PV-Wechselrichter. Der Hausverbrauch wird berechnet: Netzbezug + PV + Batterie-Entladung − Einspeisung − Batterie-Ladung. „±“ kehrt das Vorzeichen eines Messwerts um.</p>
+          </fieldset>
+          <fieldset class="font-box">
+            <legend>Einzelne Verbraucher</legend>
+            <div class="flow-head flow-consumer-head"><span>Name</span><span>Variable</span><span></span></div>
+            <div id="p-flow-consumers"></div>
+            <button type="button" id="p-flow-add-consumer">Verbraucher hinzufügen</button>
+            <p class="hint">Verbraucher stehen unter dem Hausverbrauch, zum Beispiel „Pool: 1200 W“. Sie verändern die Berechnung nicht.</p>
+          </fieldset>
           <div class="row">
             <label>Einheit <input id="p-flow-unit" value="W"></label>
             <label>Nachkommastellen <input id="p-flow-decimals" type="number" min="0" max="3" value="0"></label>
           </div>
-          <label>Animation ab (W) <input id="p-flow-threshold" type="number" min="0" value="50"></label>
-          <p class="hint">Alle Pflicht-Variablen über Auswählen zuweisen. Kachel 2×2 empfohlen.</p>
+          <p class="hint">Alle Werte müssen in derselben Einheit vorliegen. Überschrift, Schriftgröße und Farben stellen Sie oben ein. Gerät ab Firmware 0.6.77.</p>
         </div>
         <div data-for="image">
           <label>Bildquelle

@@ -27,6 +27,36 @@
 static const char *TAG_UI = "ui";
 
 #define TILE_MAX 48
+#define FLOW_LINES 6
+#define FLOW_PTS 12
+#define FLOW_SLOT_MAX 4
+#define FLOW_CONS_MAX 6
+
+/* Energiefluss wie die Energieverteilung in Home Assistant: Kreise für PV, Netz, Haus und Batterie,
+ * Linien dazwischen mit wandernden Punkten. Linien: PV→Haus, PV→Netz, PV→Batterie, Netz→Haus, Netz→Batterie, Batterie→Haus. */
+typedef struct flow_slot {
+    lv_obj_t *card;
+    lv_point_t pts[FLOW_LINES][FLOW_PTS];
+    uint8_t npts[FLOW_LINES];
+    lv_obj_t *line[FLOW_LINES];
+    lv_obj_t *dot[FLOW_LINES];
+    int8_t pct[FLOW_LINES];
+    uint16_t phase[FLOW_LINES];
+    lv_obj_t *pv_val;
+    lv_obj_t *grid_in;
+    lv_obj_t *grid_out;
+    lv_obj_t *bat_in;
+    lv_obj_t *bat_out;
+    lv_obj_t *home_val;
+    lv_obj_t *soc_val;
+    lv_obj_t *home_arc[3];
+    lv_obj_t *cons_val[FLOW_CONS_MAX];
+    int cons_count;
+} flow_slot_t;
+
+static flow_slot_t flow_pool[FLOW_SLOT_MAX];
+static int flow_slot_count;
+static lv_timer_t *flow_timer;
 #define HEADER_H 68
 #define HEADER_LEFT 72
 #define HEADER_RIGHT 160
@@ -55,6 +85,7 @@ typedef struct {
     bool has_text_color;
     bool has_bg_color;
     char text[16];
+    char align[8];
     char image_id[20];
     char image_file[28];
 } value_rule_t;
@@ -174,6 +205,7 @@ typedef struct {
     lv_obj_t *arc;
     lv_obj_t *rows[6];
     lv_obj_t *dots[6];
+    flow_slot_t *flow;
     int title_px;
     int text_px;
     bool title_bold;
@@ -188,6 +220,8 @@ typedef struct {
 } tile_view_t;
 
 static void chart_draw_event(lv_event_t *event);
+static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int card_h, bool show_title);
+static void paint_energy_flow(tile_view_t *view, cJSON *flow);
 static void layout_chart_head(tile_view_t *view);
 
 static void ui_wdt_kick(void)
@@ -613,6 +647,7 @@ static const icon_cp_t ICON_CP[] = {
     {"blindsClosed", 0xF00AC}, {"bathtub", 0xF1818}, {"armchair", 0xF156E},
     {"floorLamp", 0xF08DD}, {"book", 0xF00BA}, {"power", 0xF0425},
     {"desk", 0xF1239}, {"hammerWrench", 0xF188D},
+    {"check", 0xF012C}, {"close", 0xF0156}, {"transmissionTower", 0xF0D3E},
 };
 
 static const char *pua(unsigned cp)
@@ -883,9 +918,21 @@ static void layout_value_row(tile_view_t *view)
         lv_obj_move_foreground(view->title_row);
     }
 
+    const value_rule_t *value_rule = value_rule_match(view);
+    if (value_rule && value_rule->text[0] && view->label) label_set_folded(view->label, value_rule->text);
     bool want_icon = apply_value_rule_icon(view, text_h);
     if (view->value_rule_count > 0) {
-        lv_obj_set_style_text_color(view->label, lv_color_hex(value_text_ink(view, value_rule_match(view))), 0);
+        lv_obj_set_style_text_color(view->label, lv_color_hex(value_text_ink(view, value_rule)), 0);
+    }
+    const char *value_align = (value_rule && value_rule->align[0]) ? value_rule->align : "center";
+    lv_flex_align_t value_cross = LV_FLEX_ALIGN_CENTER;
+    lv_text_align_t value_text_align = LV_TEXT_ALIGN_CENTER;
+    if (strcmp(value_align, "left") == 0) {
+        value_cross = LV_FLEX_ALIGN_START;
+        value_text_align = LV_TEXT_ALIGN_LEFT;
+    } else if (strcmp(value_align, "right") == 0) {
+        value_cross = LV_FLEX_ALIGN_END;
+        value_text_align = LV_TEXT_ALIGN_RIGHT;
     }
 
     lv_coord_t icon_w = want_icon ? text_h + 6 : 0;
@@ -904,12 +951,18 @@ static void layout_value_row(tile_view_t *view)
         lv_obj_set_width(view->label, max_value);
         lv_label_set_long_mode(view->label, LV_LABEL_LONG_DOT);
     }
-    lv_obj_set_style_text_align(view->label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_align(view->label, value_text_align, 0);
+    lv_obj_t *value_line = lv_obj_get_parent(view->label);
+    if (value_line && value_line != view->card && value_line != view->value_box) {
+        lv_obj_set_width(value_line, inner_w);
+        lv_obj_set_flex_align(value_line, value_cross, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    }
 
     if (view->value_box) {
         lv_coord_t box_h = inner_h - title_h;
         if (box_h < text_h) box_h = text_h;
         lv_obj_set_size(view->value_box, inner_w, box_h);
+        lv_obj_set_flex_align(view->value_box, LV_FLEX_ALIGN_CENTER, value_cross, value_cross);
         lv_obj_align(view->value_box, LV_ALIGN_TOP_LEFT, 0, title_h);
     }
     if (view->age_label) {
@@ -1400,7 +1453,7 @@ static int read_px(cJSON *tile, const char *key, const char *legacy, int fallbac
 static void load_type(tile_view_t *view, cJSON *tile, const char *kind)
 {
     int title_fallback = (kind && strcmp(kind, "nav") == 0) ? 28 : 20;
-    int text_fallback = (kind && (strcmp(kind, "chart") == 0 || strcmp(kind, "label") == 0)) ? 20 : 28;
+    int text_fallback = (kind && (strcmp(kind, "chart") == 0 || strcmp(kind, "label") == 0 || strcmp(kind, "energyflow") == 0)) ? 20 : 28;
     view->title_px = read_px(tile, "titlePx", NULL, title_fallback);
     view->text_px = read_px(tile, "textPx", "textSize", text_fallback);
     view->title_bold = cJSON_IsTrue(cJSON_GetObjectItem(tile, "titleBold"));
@@ -2950,6 +3003,7 @@ static void show_page(int index)
     tile_count = 0;
     value_rule_used = 0;
     chart_slot_count = 0;
+    flow_slot_count = 0;
     system_label = NULL;
     ui_wdt_kick();
     if (status_label) {
@@ -3403,6 +3457,10 @@ static void show_page(int index)
                 }
                 const char *rule_text = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "text"));
                 if (rule_text) snprintf(slot->text, sizeof(slot->text), "%.15s", rule_text);
+                const char *rule_align = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "align"));
+                if (rule_align && (strcmp(rule_align, "left") == 0 || strcmp(rule_align, "center") == 0 || strcmp(rule_align, "right") == 0)) {
+                    snprintf(slot->align, sizeof(slot->align), "%s", rule_align);
+                }
                 const char *image_id = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "imageId"));
                 if (image_id) snprintf(slot->image_id, sizeof(slot->image_id), "%.19s", image_id);
                 const char *image_file = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "imageFile"));
@@ -3602,6 +3660,12 @@ static void show_page(int index)
             continue;
         }
 
+        if (strcmp(kind, "energyflow") == 0) {
+            build_energy_flow(view, tile, card_w, card_h, show_title);
+            tile_count++;
+            continue;
+        }
+
         if (strcmp(kind, "multi") == 0 || strcmp(kind, "contacts") == 0) {
             bool contacts = strcmp(kind, "contacts") == 0;
             cJSON *rows = cJSON_GetObjectItem(tile, "rows");
@@ -3696,13 +3760,6 @@ static void show_page(int index)
         }
 
         if (strcmp(kind, "countdown") == 0 || strcmp(kind, "appointment") == 0) {
-            if (show_title && view->title[0]) {
-                view->title_label = lv_label_create(view->card);
-                label_set_folded(view->title_label, view->title);
-                lv_obj_set_style_text_font(view->title_label, font_for(view->title_px, view->title_bold, view->title_italic), 0);
-                lv_obj_set_style_text_color(view->title_label, lv_color_hex(title_ink(view)), 0);
-                lv_obj_align(view->title_label, LV_ALIGN_TOP_MID, 0, 0);
-            }
             view->label = lv_label_create(view->card);
             lv_label_set_text(view->label, "-");
             lv_obj_set_style_text_font(view->label, font_for(view->text_px, view->text_bold, view->text_italic), 0);
@@ -5150,6 +5207,395 @@ static void paint_schedule(tile_view_t *view, cJSON *schedule)
     }
 }
 
+static const uint32_t FLOW_INK[FLOW_LINES] = {0xF0A030, 0xA38BE0, 0xE0709A, 0x5B8FC7, 0x5B8FC7, 0x6CC3B5};
+#define FLOW_RING_PV 0xF0A030
+#define FLOW_RING_GRID 0x5B8FC7
+#define FLOW_RING_BAT 0xE0709A
+#define FLOW_RING_HOME 0x46566B
+#define FLOW_INK_EXPORT 0xA38BE0
+#define FLOW_INK_IMPORT 0x8DB8EA
+#define FLOW_INK_CHARGE 0xE88AAE
+#define FLOW_INK_DISCHARGE 0x6CC3B5
+#define FLOW_DOT 8
+
+static void flow_push(flow_slot_t *slot, int line, int x, int y)
+{
+    if (slot->npts[line] >= FLOW_PTS) return;
+    slot->pts[line][slot->npts[line]].x = (lv_coord_t) x;
+    slot->pts[line][slot->npts[line]].y = (lv_coord_t) y;
+    slot->npts[line]++;
+}
+
+/* Viertelbogen um (cx, cy); der Anfangspunkt steht schon in der Linie. */
+static void flow_arc(flow_slot_t *slot, int line, int cx, int cy, int rad, int a0, int a1)
+{
+    for (int step = 1; step <= 4; step++) {
+        float angle = (float) (a0 + (a1 - a0) * step / 4.0f) * 3.14159265f / 180.0f;
+        flow_push(slot, line, cx + (int) lroundf(rad * cosf(angle)), cy + (int) lroundf(rad * sinf(angle)));
+    }
+}
+
+static lv_obj_t *flow_circle(lv_obj_t *parent, int cx, int cy, int r, uint32_t ring, uint32_t fill)
+{
+    lv_obj_t *circle = lv_obj_create(parent);
+    style_flat(circle);
+    lv_obj_set_size(circle, 2 * r, 2 * r);
+    lv_obj_set_pos(circle, cx - r, cy - r);
+    lv_obj_set_style_radius(circle, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(circle, lv_color_hex(fill), 0);
+    lv_obj_set_style_bg_opa(circle, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(circle, 3, 0);
+    lv_obj_set_style_border_color(circle, lv_color_hex(color_mono ? 0xFFFFFF : ring), 0);
+    lv_obj_set_style_border_opa(circle, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(circle, 0, 0);
+    lv_obj_set_style_pad_row(circle, 0, 0);
+    lv_obj_set_flex_flow(circle, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(circle, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(circle, LV_OBJ_FLAG_CLICKABLE);
+    return circle;
+}
+
+static lv_obj_t *flow_text(lv_obj_t *parent, const lv_font_t *font, uint32_t ink, const char *text)
+{
+    lv_obj_t *label = lv_label_create(parent);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, font, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(color_mono ? 0xFFFFFF : ink), 0);
+    lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+    return label;
+}
+
+static void flow_icon(lv_obj_t *parent, const char *icon, bool large)
+{
+    lv_obj_t *label = lv_label_create(parent);
+    paint_icon_label(label, icon, false, large, text_fg());
+    lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+}
+
+static lv_obj_t *flow_caption(lv_obj_t *parent, const char *text, int x, int y, int w, lv_text_align_t align)
+{
+    if (w < 8) w = 8;
+    lv_obj_t *label = lv_label_create(parent);
+    label_set_folded(label, text);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(text_fg()), 0);
+    lv_obj_set_style_text_opa(label, LV_OPA_70, 0);
+    lv_obj_set_style_text_align(label, align, 0);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(label, w);
+    lv_obj_set_pos(label, x, y);
+    lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+    return label;
+}
+
+static void flow_point_at(const flow_slot_t *slot, int line, float fraction, int *x, int *y)
+{
+    int count = slot->npts[line];
+    float total = 0;
+    for (int i = 1; i < count; i++) {
+        float dx = (float) (slot->pts[line][i].x - slot->pts[line][i - 1].x);
+        float dy = (float) (slot->pts[line][i].y - slot->pts[line][i - 1].y);
+        total += sqrtf(dx * dx + dy * dy);
+    }
+    float target = fraction * total;
+    for (int i = 1; i < count; i++) {
+        float dx = (float) (slot->pts[line][i].x - slot->pts[line][i - 1].x);
+        float dy = (float) (slot->pts[line][i].y - slot->pts[line][i - 1].y);
+        float seg = sqrtf(dx * dx + dy * dy);
+        if (target <= seg || i == count - 1) {
+            float t = seg > 0 ? target / seg : 0;
+            if (t > 1) t = 1;
+            *x = slot->pts[line][i - 1].x + (int) lroundf(dx * t);
+            *y = slot->pts[line][i - 1].y + (int) lroundf(dy * t);
+            return;
+        }
+        target -= seg;
+    }
+    *x = slot->pts[line][0].x;
+    *y = slot->pts[line][0].y;
+}
+
+static void flow_tick(lv_timer_t *timer)
+{
+    (void) timer;
+    for (int index = 0; index < flow_slot_count; index++) {
+        flow_slot_t *slot = &flow_pool[index];
+        if (!slot->card) continue;
+        for (int line = 0; line < FLOW_LINES; line++) {
+            if (!slot->dot[line]) continue;
+            int pct = slot->pct[line];
+            if (pct == 0) continue;
+            int strength = pct < 0 ? -pct : pct;
+            int period_ms = 3200 - 22 * strength;
+            slot->phase[line] = (uint16_t) (slot->phase[line] + (65536u * 40u) / (unsigned) period_ms);
+            float fraction = slot->phase[line] / 65536.0f;
+            if (pct < 0) fraction = 1.0f - fraction;
+            int x = 0;
+            int y = 0;
+            flow_point_at(slot, line, fraction, &x, &y);
+            lv_obj_set_pos(slot->dot[line], x - FLOW_DOT / 2, y - FLOW_DOT / 2);
+        }
+    }
+}
+
+static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int card_h, bool show_title)
+{
+    if (flow_slot_count >= FLOW_SLOT_MAX) return;
+    flow_slot_t *slot = &flow_pool[flow_slot_count];
+    memset(slot, 0, sizeof(*slot));
+    lv_obj_clear_flag(view->card, LV_OBJ_FLAG_SCROLLABLE);
+    cJSON *nodes = cJSON_GetObjectItem(tile, "flowNodes");
+    bool has_pv = cJSON_IsTrue(cJSON_GetObjectItem(nodes, "pv"));
+    bool grid_in = cJSON_IsTrue(cJSON_GetObjectItem(nodes, "gridIn"));
+    bool grid_out = cJSON_IsTrue(cJSON_GetObjectItem(nodes, "gridOut"));
+    bool bat_in = cJSON_IsTrue(cJSON_GetObjectItem(nodes, "batIn"));
+    bool bat_out = cJSON_IsTrue(cJSON_GetObjectItem(nodes, "batOut"));
+    bool has_soc = cJSON_IsTrue(cJSON_GetObjectItem(nodes, "soc"));
+    bool has_grid = grid_in || grid_out;
+    bool has_bat = bat_in || bat_out || has_soc;
+
+    int head = show_title ? lv_font_get_line_height(font_for(view->title_px, view->title_bold, view->title_italic)) + 4 : 0;
+    int w = card_w - 20;
+    int h = card_h - 20 - head;
+    if (w < 80 || h < 60) return;
+    const int label_h = 20;
+    int r;
+    if (has_pv && has_bat) r = (int) (h / 4.8f);
+    else if (has_pv || has_bat) r = (int) ((h - label_h) / 3.8f);
+    else r = (h - label_h) / 2 - 2;
+    if (r > w / 7) r = w / 7;
+    if (r > 80) r = 80;
+    if (r < 18) r = 18;
+
+    int cx = w / 2;
+    int ym;
+    if (has_pv && has_bat) ym = head + h / 2;
+    else if (has_pv) ym = head + h - r - 2;
+    else if (has_bat) ym = head + label_h + r + 2;
+    else ym = head + label_h + (h - label_h) / 2;
+    int py = head + r + 2;
+    int by = head + h - r - 2;
+    int gx = r + 2;
+    int hx = w - r - 2;
+    int k = r * 2 / 5;
+    int dk = (int) lroundf(sqrtf((float) (r * r - k * k)));
+    int rc = r / 2;
+
+    if (has_pv) {
+        int top = py + dk;
+        int rcl = rc;
+        int bend = ym - k - rcl;
+        if (bend < top) {
+            rcl -= top - bend;
+            if (rcl < 0) rcl = 0;
+            bend = ym - k - rcl;
+        }
+        flow_push(slot, 0, cx + k, top);
+        flow_push(slot, 0, cx + k, bend);
+        if (rcl > 0) flow_arc(slot, 0, cx + k + rcl, bend, rcl, 180, 90);
+        flow_push(slot, 0, hx - dk, ym - k);
+        if (grid_out) {
+            flow_push(slot, 1, cx - k, top);
+            flow_push(slot, 1, cx - k, bend);
+            if (rcl > 0) flow_arc(slot, 1, cx - k - rcl, bend, rcl, 0, 90);
+            flow_push(slot, 1, gx + dk, ym - k);
+        }
+        if (has_bat) {
+            flow_push(slot, 2, cx, py + r);
+            flow_push(slot, 2, cx, by - r);
+        }
+    }
+    if (grid_in) {
+        flow_push(slot, 3, gx + r, ym);
+        flow_push(slot, 3, hx - r, ym);
+    }
+    if (has_bat) {
+        int bottom = by - dk;
+        int rcl = rc;
+        int bend = ym + k + rcl;
+        if (bend > bottom) {
+            rcl -= bend - bottom;
+            if (rcl < 0) rcl = 0;
+            bend = ym + k + rcl;
+        }
+        if (has_grid) {
+            flow_push(slot, 4, gx + dk, ym + k);
+            flow_push(slot, 4, cx - k - rcl, ym + k);
+            if (rcl > 0) flow_arc(slot, 4, cx - k - rcl, bend, rcl, 270, 360);
+            flow_push(slot, 4, cx - k, bottom);
+        }
+        flow_push(slot, 5, cx + k, bottom);
+        flow_push(slot, 5, cx + k, bend);
+        if (rcl > 0) flow_arc(slot, 5, cx + k + rcl, bend, rcl, 180, 270);
+        flow_push(slot, 5, hx - dk, ym + k);
+    }
+
+    for (int line = 0; line < FLOW_LINES; line++) {
+        if (slot->npts[line] < 2) continue;
+        uint32_t ink = color_mono ? 0xFFFFFF : FLOW_INK[line];
+        lv_obj_t *path = lv_line_create(view->card);
+        lv_line_set_points(path, slot->pts[line], slot->npts[line]);
+        lv_obj_set_pos(path, 0, 0);
+        lv_obj_set_style_line_width(path, 2, 0);
+        lv_obj_set_style_line_color(path, lv_color_hex(ink), 0);
+        lv_obj_set_style_line_opa(path, LV_OPA_40, 0);
+        lv_obj_set_style_line_rounded(path, true, 0);
+        lv_obj_clear_flag(path, LV_OBJ_FLAG_CLICKABLE);
+        slot->line[line] = path;
+        lv_obj_t *dot = lv_obj_create(view->card);
+        style_flat(dot);
+        lv_obj_set_size(dot, FLOW_DOT, FLOW_DOT);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(dot, lv_color_hex(ink), 0);
+        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+        lv_obj_set_style_pad_all(dot, 0, 0);
+        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(dot, LV_OBJ_FLAG_HIDDEN);
+        slot->dot[line] = dot;
+    }
+
+    uint32_t fill = view->base_bg;
+    const lv_font_t *value_font = r >= 50 ? &lv_font_montserrat_20 : &lv_font_montserrat_16;
+    bool large_icon = r >= 64;
+    bool with_icon = r >= 34;
+    if (has_pv) {
+        lv_obj_t *circle = flow_circle(view->card, cx, py, r, FLOW_RING_PV, fill);
+        if (with_icon) flow_icon(circle, "solar", large_icon);
+        slot->pv_val = flow_text(circle, value_font, text_fg(), "-");
+        flow_caption(view->card, "PV", 0, py - 10, cx - r - 8, LV_TEXT_ALIGN_RIGHT);
+    }
+    if (has_grid) {
+        lv_obj_t *circle = flow_circle(view->card, gx, ym, r, FLOW_RING_GRID, fill);
+        if (with_icon) flow_icon(circle, "transmissionTower", large_icon && !(grid_in && grid_out));
+        if (grid_out) slot->grid_out = flow_text(circle, value_font, FLOW_INK_EXPORT, "-");
+        if (grid_in) slot->grid_in = flow_text(circle, value_font, FLOW_INK_IMPORT, "-");
+        flow_caption(view->card, "Netz", gx - r - 2, ym - r - label_h, 2 * r + 4, LV_TEXT_ALIGN_CENTER);
+    }
+    if (has_bat) {
+        lv_obj_t *circle = flow_circle(view->card, cx, by, r, FLOW_RING_BAT, fill);
+        if (with_icon) flow_icon(circle, "batteryIcon", large_icon && !(bat_in && bat_out));
+        if (bat_in) slot->bat_in = flow_text(circle, value_font, FLOW_INK_CHARGE, "-");
+        if (bat_out) slot->bat_out = flow_text(circle, value_font, FLOW_INK_DISCHARGE, "-");
+        int caption_y = has_soc ? by - 20 : by - 10;
+        flow_caption(view->card, "Batterie", 0, caption_y, cx - r - 8, LV_TEXT_ALIGN_RIGHT);
+        if (has_soc) slot->soc_val = flow_caption(view->card, "", 0, caption_y + 20, cx - r - 8, LV_TEXT_ALIGN_RIGHT);
+    }
+    lv_obj_t *home = flow_circle(view->card, hx, ym, r, FLOW_RING_HOME, fill);
+    if (with_icon) flow_icon(home, "home", large_icon);
+    slot->home_val = flow_text(home, value_font, text_fg(), "-");
+    flow_caption(view->card, "Zuhause", hx - r - 20, ym - r - label_h, 2 * r + 22, LV_TEXT_ALIGN_CENTER);
+    static const uint32_t mix_ink[3] = {FLOW_RING_PV, FLOW_INK_DISCHARGE, FLOW_RING_GRID};
+    for (int part = 0; part < 3; part++) {
+        lv_obj_t *arc = lv_arc_create(view->card);
+        lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
+        lv_obj_set_size(arc, 2 * r, 2 * r);
+        lv_obj_set_pos(arc, hx - r, ym - r);
+        lv_obj_set_style_pad_all(arc, 0, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(arc, 4, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(arc, false, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(arc, lv_color_hex(color_mono ? 0xFFFFFF : mix_ink[part]), LV_PART_INDICATOR);
+        lv_arc_set_bg_angles(arc, 0, 360);
+        lv_arc_set_angles(arc, 270, 270);
+        lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
+        slot->home_arc[part] = arc;
+    }
+
+    /* Einzelne Verbraucher stehen unter dem Haus, sonst darüber. */
+    cJSON *consumers = cJSON_GetObjectItem(tile, "flowConsumers");
+    int wanted = cJSON_IsArray(consumers) ? cJSON_GetArraySize(consumers) : 0;
+    int x0 = cx + r + 8;
+    int col_w = w - x0;
+    if (wanted > 0 && col_w >= 70) {
+        int below_y = ym + r + 6;
+        int below_h = head + h - below_y;
+        int above_y = head;
+        int above_h = ym - r - label_h - 2 - head;
+        int y0 = below_h >= above_h ? below_y : above_y;
+        int room = below_h >= above_h ? below_h : above_h;
+        int fit = room / 20;
+        if (fit > wanted) fit = wanted;
+        if (fit > FLOW_CONS_MAX) fit = FLOW_CONS_MAX;
+        int name_w = col_w * 55 / 100;
+        for (int index = 0; index < fit; index++) {
+            cJSON *item = cJSON_GetArrayItem(consumers, index);
+            const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(item, "title"));
+            int y = y0 + index * 20;
+            flow_caption(view->card, name && name[0] ? name : "Verbraucher", x0, y, name_w, LV_TEXT_ALIGN_LEFT);
+            lv_obj_t *value = flow_caption(view->card, "-", x0 + name_w, y, col_w - name_w, LV_TEXT_ALIGN_RIGHT);
+            lv_obj_set_style_text_opa(value, LV_OPA_COVER, 0);
+            slot->cons_val[index] = value;
+        }
+        slot->cons_count = fit;
+    }
+
+    slot->card = view->card;
+    view->flow = slot;
+    flow_slot_count++;
+    if (!flow_timer) flow_timer = lv_timer_create(flow_tick, 40, NULL);
+}
+
+static void flow_set(lv_obj_t *label, const char *prefix, cJSON *flow, const char *key)
+{
+    if (!label) return;
+    const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(flow, key));
+    char buffer[48];
+    snprintf(buffer, sizeof(buffer), "%s%s", prefix ? prefix : "", text && text[0] ? text : "-");
+    lv_label_set_text(label, buffer);
+}
+
+static void paint_energy_flow(tile_view_t *view, cJSON *flow)
+{
+    flow_slot_t *slot = view->flow;
+    if (!slot || !cJSON_IsObject(flow)) return;
+    flow_set(slot->pv_val, NULL, flow, "pv");
+    flow_set(slot->grid_out, LV_SYMBOL_LEFT " ", flow, "gridOut");
+    flow_set(slot->grid_in, LV_SYMBOL_RIGHT " ", flow, "gridIn");
+    flow_set(slot->bat_in, LV_SYMBOL_DOWN " ", flow, "batIn");
+    flow_set(slot->bat_out, LV_SYMBOL_UP " ", flow, "batOut");
+    flow_set(slot->home_val, NULL, flow, "home");
+    if (slot->soc_val) flow_set(slot->soc_val, NULL, flow, "soc");
+    cJSON *lines = cJSON_GetObjectItem(flow, "l");
+    for (int line = 0; line < FLOW_LINES; line++) {
+        cJSON *item = cJSON_GetArrayItem(lines, line);
+        int pct = cJSON_IsNumber(item) ? item->valueint : 0;
+        if (pct > 100) pct = 100;
+        if (pct < -100) pct = -100;
+        if (!slot->line[line]) pct = 0;
+        slot->pct[line] = (int8_t) pct;
+        if (slot->line[line]) lv_obj_set_style_line_opa(slot->line[line], pct ? LV_OPA_COVER : LV_OPA_40, 0);
+        if (slot->dot[line]) {
+            if (pct) lv_obj_clear_flag(slot->dot[line], LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_add_flag(slot->dot[line], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    cJSON *mix = cJSON_GetObjectItem(flow, "mix");
+    int start = 270;
+    for (int part = 0; part < 3; part++) {
+        lv_obj_t *arc = slot->home_arc[part];
+        if (!arc) continue;
+        cJSON *item = cJSON_GetArrayItem(mix, part);
+        int share = cJSON_IsNumber(item) ? item->valueint : 0;
+        if (share <= 0) {
+            lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        if (share > 100) share = 100;
+        int sweep = share * 360 / 100;
+        if (sweep >= 360) sweep = 359;
+        lv_arc_set_angles(arc, (uint16_t) (start % 360), (uint16_t) ((start + sweep) % 360));
+        lv_obj_clear_flag(arc, LV_OBJ_FLAG_HIDDEN);
+        start += sweep;
+    }
+    cJSON *consumers = cJSON_GetObjectItem(flow, "c");
+    for (int index = 0; index < slot->cons_count; index++) {
+        cJSON *item = cJSON_GetArrayItem(consumers, index);
+        flow_set(slot->cons_val[index], NULL, item, "v");
+    }
+}
+
 static void apply_state_body(cJSON *root)
 {
     if (!root || cJSON_IsTrue(cJSON_GetObjectItem(root, "unchanged"))) return;
@@ -5213,6 +5659,7 @@ static void apply_state_body(cJSON *root)
                 label_set_folded(tiles[index].age_label, (sub && sub[0]) ? sub : (age ? age : ""));
             }
             cJSON *lines = cJSON_GetObjectItem(tile, "lines");
+            if (tiles[index].flow) paint_energy_flow(&tiles[index], cJSON_GetObjectItem(tile, "flow"));
             if (cJSON_IsArray(lines)) {
                 int line_count = cJSON_GetArraySize(lines);
                 for (int row_index = 0; row_index < 6 && row_index < line_count; row_index++) {

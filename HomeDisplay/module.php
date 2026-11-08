@@ -1990,33 +1990,32 @@ class HomeDisplay extends IPSModuleStrict
     {
         $unit = trim((string) ($tile['unit'] ?? 'W'));
         $decimals = max(0, min(3, (int) ($tile['decimals'] ?? 0)));
-        $readings = $this->energyFlowReadings($tile);
-        $hasNumeric = false;
-        foreach ($readings as $value) {
-            if ($value !== null) {
-                $hasNumeric = true;
-                break;
-            }
+        $read = $this->energyFlowReader();
+        $sourceValues = [];
+        foreach (HomeDisplayEnergyFlow::sources($tile) as $row) {
+            $sourceValues[] = $read($row['variableId']);
         }
-        $quality = $hasNumeric ? 'ok' : 'empty';
-        $flows = $hasNumeric
-            ? HomeDisplayEnergyFlow::compute($tile, $readings, $decimals, $unit)
-            : [];
+        $consumerValues = [];
+        foreach (HomeDisplayEnergyFlow::consumers($tile) as $row) {
+            $consumerValues[] = $read($row['variableId']);
+        }
+        $flow = HomeDisplayEnergyFlow::compute($tile, $sourceValues, $consumerValues, $decimals, $unit);
+        $quality = $flow['quality'];
         if (isset($pending[$tileId])) {
             $quality = 'pending';
         }
         return [
             'tileId' => $tileId,
             'quality' => $quality,
-            'flows' => $flows,
+            'flow' => $flow['flow'],
             'pending' => isset($pending[$tileId]),
         ];
     }
 
-    /** @param array<string, mixed> $tile @return array<string, float|null> */
-    private function energyFlowReadings(array $tile): array
+    /** @return callable(int): ?float */
+    private function energyFlowReader(): callable
     {
-        $read = function (int $variableId): ?float {
+        return function (int $variableId): ?float {
             if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
                 return null;
             }
@@ -2032,34 +2031,6 @@ class HomeDisplay extends IPSModuleStrict
             }
             return null;
         };
-        $gridImport = $read((int) ($tile['gridImportVariableId'] ?? 0));
-        $gridExport = $read((int) ($tile['gridExportVariableId'] ?? 0));
-        if ($gridImport === null && $gridExport === null) {
-            $gridSigned = $read((int) ($tile['gridVariableId'] ?? 0));
-            if ($gridSigned !== null) {
-                $gridImport = max(0.0, $gridSigned);
-                $gridExport = max(0.0, -$gridSigned);
-            }
-        }
-        $out = [
-            'gridImport' => $gridImport,
-            'gridExport' => $gridExport,
-            'pv' => $read((int) ($tile['pvVariableId'] ?? 0)),
-            'load' => HomeDisplayEnergyFlow::homeOverride($tile)
-                ? $read((int) ($tile['loadVariableId'] ?? 0))
-                : null,
-        ];
-        if (HomeDisplayEnergyFlow::mode($tile) === 'split') {
-            $out['batteryCharge'] = $read((int) ($tile['batteryChargeVariableId'] ?? 0));
-            $out['batteryDischarge'] = $read((int) ($tile['batteryDischargeVariableId'] ?? 0));
-        } else {
-            $out['battery'] = $read((int) ($tile['batteryVariableId'] ?? 0));
-        }
-        $socId = (int) ($tile['batterySocVariableId'] ?? 0);
-        if ($socId > 0) {
-            $out['soc'] = $read($socId);
-        }
-        return $out;
     }
 
     /** @param array<string, mixed> $tile */
@@ -3426,9 +3397,28 @@ PHP;
             $min = '0.1.0';
         }
         if ($this->layoutUsesPin($layout) && version_compare($min, '0.6.76', '<')) {
-            return '0.6.76';
+            $min = '0.6.76';
+        }
+        if ($this->layoutUsesKind($layout, 'energyflow') && version_compare($min, '0.6.77', '<')) {
+            $min = '0.6.77';
         }
         return $min;
+    }
+
+    /** @param array<string, mixed>|null $layout */
+    private function layoutUsesKind(?array $layout, string $kind): bool
+    {
+        if (!is_array($layout)) {
+            return false;
+        }
+        foreach ($layout['pages'] ?? [] as $page) {
+            foreach (is_array($page) ? ($page['tiles'] ?? []) : [] as $tile) {
+                if (is_array($tile) && (string) ($tile['kind'] ?? '') === $kind) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** @param array<string, mixed>|null $layout */
