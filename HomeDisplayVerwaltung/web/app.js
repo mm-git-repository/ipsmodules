@@ -353,7 +353,7 @@ function panelImageSwitchHtml(tile, title, on, live) {
     const tint = rule.iconColor ? ` style="background:${rule.iconColor}"` : "";
     face = image ? `<span class="image-switch-face"${tint}><img src="images/${image.id}.${image.ext}" alt=""></span>` : "";
   } else if (rule && rule.icon) {
-    face = `<span class="image-switch-face">${iconVisual(rule.icon, false, rule.iconColor || "")}</span>`;
+    face = `<span class="image-switch-face image-icon">${iconVisual(rule.icon, false, rule.iconColor || "")}</span>`;
   }
   return `<div class="panel-switch">${titleHtml}<div class="panel-icon">${face}</div></div>`;
 }
@@ -824,6 +824,8 @@ function syncInteractionPropertyPanels() {
   const actionLabel = $("p-action")?.closest("label");
   if (actionLabel) actionLabel.classList.toggle("hidden", mode === "" || mode === "battery");
   $("p-confirm")?.closest("label")?.classList.toggle("hidden", mode === "");
+  const canPin = mode !== "" && mode !== "battery" && Boolean($("p-action")?.checked);
+  $("p-pin")?.closest("label")?.classList.toggle("hidden", !canPin);
   if (DIM_CONTROLS.includes(mode)) {
     const variable = variableById(tile.variableId);
     if (variable && variable.action && $("p-action")) $("p-action").checked = true;
@@ -862,6 +864,7 @@ function syncDisplaySourcePanels() {
   $("p-icon-static")?.classList.add("hidden");
   $("p-action")?.closest("label")?.classList.add("hidden");
   $("p-confirm")?.closest("label")?.classList.add("hidden");
+  $("p-pin")?.closest("label")?.classList.add("hidden");
   $("p-level-wrap")?.classList.add("hidden");
 }
 
@@ -2485,7 +2488,7 @@ function bindDrop(target, col, row, existing) {
       addTile("value", placeCol, placeRow, variable);
       return;
     }
-    if (kind && (!existing || isBackgroundImage(existing))) {
+    if (kind) {
       const hit = existing && isBackgroundImage(existing) ? cellUnderPointer(event, target.closest("#grid") || target.parentElement) : null;
       addTile(kind, hit ? hit.col : col, hit ? hit.row : row, null, control);
     }
@@ -2522,6 +2525,40 @@ function moveTile(tileId, col, row, target) {
   renderProperties();
 }
 
+/* Große Kacheln (Zeitplan ist vier Spalten breit) bleiben im Raster, auch wenn sie nicht auf die erste Spalte fallen. */
+function seatNewTile(tile, col, row) {
+  const grid = currentGrid();
+  let colSpan = Math.max(1, tile.colSpan || 1);
+  let rowSpan = Math.max(1, tile.rowSpan || 1);
+  const place = (nextCol, nextRow, nextColSpan, nextRowSpan) => {
+    tile.col = nextCol;
+    tile.row = nextRow;
+    tile.colSpan = nextColSpan;
+    tile.rowSpan = nextRowSpan;
+  };
+  const accept = (nextColSpan, nextRowSpan) => {
+    const spotCol = Math.max(0, Math.min(col, grid.columns - nextColSpan));
+    const spotRow = Math.max(0, Math.min(row, grid.rows - nextRowSpan));
+    if (fits(null, spotCol, spotRow, nextColSpan, nextRowSpan, null)) {
+      place(spotCol, spotRow, nextColSpan, nextRowSpan);
+      return true;
+    }
+    const free = freeCell(nextColSpan, nextRowSpan);
+    if (free) {
+      place(free.col, free.row, nextColSpan, nextRowSpan);
+      return true;
+    }
+    return false;
+  };
+  if (accept(colSpan, rowSpan)) return true;
+  while (colSpan > 1 || rowSpan > 1) {
+    if (colSpan >= rowSpan && colSpan > 1) colSpan -= 1;
+    else rowSpan -= 1;
+    if (accept(colSpan, rowSpan)) return true;
+  }
+  return false;
+}
+
 function addTile(kind, col, row, variable, control) {
   if (!state.layout) return;
   const page = currentPage();
@@ -2553,8 +2590,9 @@ function addTile(kind, col, row, variable, control) {
       tile.valueOn = 1;
       tile.actionId = tile.actionId || ("a" + stamp);
     } else {
-      /* Reine Wertanzeige – kein Schalten */
+      /* Reine Wertanzeige – kein Schalten. Neue Badges starten mit 24 px Überschrift. */
       tile.displaySource = "variable";
+      tile.titlePx = 24;
     }
     if (variable) assignVariable(tile, variable, true);
   } else if (kind === "nav") {
@@ -2671,8 +2709,8 @@ function addTile(kind, col, row, variable, control) {
       else assignVariable(tile, variable, true);
     }
   }
-  if (!fits(null, col, row, tile.colSpan, tile.rowSpan, null)) {
-    setStatus("Diese Zelle ist belegt.");
+  if (!seatNewTile(tile, col, row)) {
+    setStatus("Auf dieser Seite ist kein Platz für diese Kachel.");
     return;
   }
   page.tiles.push(tile);
@@ -3301,6 +3339,7 @@ function renderProperties() {
   const valueInteraction = tile.kind === "value" ? tileInteractionMode(tile) : null;
   $("p-action").disabled = valueInteraction === "battery" || !(variable && variable.action);
   $("p-confirm").checked = Boolean(tile.confirm);
+  if ($("p-pin")) $("p-pin").value = tile.pin === 1 || tile.pin === 2 ? String(tile.pin) : "";
   if ($("p-actionkind")) $("p-actionkind").value = tile.actionKind || (DIM_CONTROLS.includes(tile.control) ? "dim" : (variable ? variable.actionKind || "switch" : "switch"));
   fillTargetSelect($("p-target"));
   $("p-target").value = tile.targetPage || "";
@@ -3365,6 +3404,7 @@ function renderProperties() {
     if ($("p-scene-show-state-text")) $("p-scene-show-state-text").checked = tile.showStateText === true;
     if ($("p-scene-actionid")) $("p-scene-actionid").value = tile.actionId || "";
     if ($("p-scene-confirm")) $("p-scene-confirm").checked = Boolean(tile.confirm);
+    if ($("p-scene-pin")) $("p-scene-pin").value = tile.pin === 1 || tile.pin === 2 ? String(tile.pin) : "";
     renderSceneSteps(tile);
   }
   const ownOnWrap = $("p-own-on-wrap");
@@ -3552,6 +3592,7 @@ function applyProperties() {
       delete tile.color;
       delete tile.actionKind;
       delete tile.valueRules;
+      delete tile.pin;
       tile.confirm = false;
     } else {
       tile.displaySource = "variable";
@@ -3657,15 +3698,22 @@ function applyProperties() {
       delete tile.dimShowPercent;
       delete tile.dimLayout;
       delete tile.dimTapTrack;
+      delete tile.dimShowStateText;
+      delete tile.dimShowSwitch;
+      delete tile.dimShowBar;
     }
     if ((mode === "switch" || mode === "image" || mode === "combo" || mode === "blinds" || mode === "setpoint") && $("p-action").checked && variable && variable.action) {
       tile.actionId = tile.actionId || `a-${tile.tileId}`;
       tile.actionKind = mode === "blinds" ? "position" : (DIM_CONTROLS.includes(mode) || mode === "setpoint" ? "dim" : "switch");
       tile.confirm = $("p-confirm").checked;
+      const pin = Number($("p-pin")?.value || 0);
+      if (pin === 1 || pin === 2) tile.pin = pin;
+      else delete tile.pin;
     } else if (mode !== "battery") {
       delete tile.actionId;
       if (!DIM_CONTROLS.includes(mode)) delete tile.actionKind;
       tile.confirm = false;
+      delete tile.pin;
     }
       const rules = (mode === "" || mode === "switch" || mode === "image") ? collectValueRules(tile) : [];
       if (rules.length) tile.valueRules = rules;
@@ -3737,9 +3785,13 @@ function applyProperties() {
       tile.actionId = actionIdRaw || tile.actionId || `a-${tile.tileId}`;
       if (!/^[A-Za-z0-9_-]{1,40}$/.test(tile.actionId)) tile.actionId = `a-${tile.tileId}`;
       tile.confirm = Boolean($("p-scene-confirm")?.checked);
+      const scenePin = Number($("p-scene-pin")?.value || 0);
+      if (scenePin === 1 || scenePin === 2) tile.pin = scenePin;
+      else delete tile.pin;
     } else {
       delete tile.actionId;
       tile.confirm = false;
+      delete tile.pin;
     }
     if ($("p-scene-show-icon")?.checked) {
       delete tile.showIcon;
@@ -3850,7 +3902,7 @@ if ($("p-chart-y-mode")) {
     applyProperties();
   });
 }
-for (const id of ["p-title", "p-show-title", "p-title-icon", "p-title-align", "p-bg-color", "p-bg-transparent", "p-own-on", "p-on-color", "p-group", "p-snap", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-icon-colors", "p-icon-off-color", "p-icon-on-color", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-icon-colors", "p-scene-icon-off-color", "p-scene-icon-on-color", "p-scene-show-state-text", "p-scene-confirm", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-image-icon-id", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-text-size", "p-threshold", "p-status-color"]) {
+for (const id of ["p-title", "p-show-title", "p-title-icon", "p-title-align", "p-bg-color", "p-bg-transparent", "p-own-on", "p-on-color", "p-group", "p-snap", "p-col", "p-row", "p-icon", "p-value-icon", "p-prefix", "p-iconon", "p-iconoff", "p-icon-colors", "p-icon-off-color", "p-icon-on-color", "p-show-icon", "p-show-state-text", "p-unit", "p-decimals", "p-action", "p-value-on", "p-value-off", "p-confirm", "p-pin", "p-actionkind", "p-target", "p-text", "p-label-style", "p-label-size", "p-label-bold", "p-label-italic", "p-label-underline", "p-sep-orient", "p-sep-thickness", "p-sep-color", "p-scene-actionid", "p-scene-show-icon", "p-scene-iconon", "p-scene-iconoff", "p-scene-icon-colors", "p-scene-icon-off-color", "p-scene-icon-on-color", "p-scene-show-state-text", "p-scene-confirm", "p-scene-pin", "p-scene-text-size", "p-scene-text-bold", "p-scene-text-italic", "p-scene-text-underline", "p-weather-unit", "p-weather-decimals", "p-weather-icon", "p-presence-mode", "p-setpoint-step", "p-image", "p-imagesource", "p-image-icon-id", "p-camerasource", "p-camera-fit", "p-camera-pace", "p-camera-live-url", "p-camera-live-fps", "p-camera-jpeg-quality", "p-camera-interval", "p-batterypad", "p-batterylabel", "p-displaysource", "p-display-unit", "p-display-decimals", "p-display-icon", "p-chart-period", "p-chart-style", "p-chart-color", "p-chart-axes", "p-chart-grid", "p-chart-value", "p-chart-unit", "p-chart-decimals", "p-chart-y-mode", "p-chart-y-min", "p-chart-y-max", "p-chart-yesterday", "p-chart-refresh", "p-chart-bitmap", "p-chart-extra-ids", "p-flow-unit", "p-flow-decimals", "p-flow-threshold", "p-flow-slot", "p-flow-mode", "p-dim-show-switch", "p-dim-show-bar", "p-dim-show-percent", "p-dim-show-state-text", "p-dim-layout", "p-dim-tap", "p-text-size", "p-threshold", "p-status-color"]) {
   if ($(id)) $(id).addEventListener("change", applyProperties);
 }
 if ($("p-flow-home-override")) {
@@ -4123,10 +4175,14 @@ function openPagesDialog(addPage) {
     theme: { ...state.layout.theme },
     behavior: readDisplayBehavior(state.layout),
     tabBold: state.layout.tabBold === true,
+    pin1: state.layout.pin1 || "",
+    pin2: state.layout.pin2 || "",
     dirty: state.dirty
   };
   fillDisplayBehavior(pagesDialog.general.behavior);
   if ($("l-tab-bold")) $("l-tab-bold").checked = pagesDialog.general.tabBold;
+  if ($("l-pin1")) $("l-pin1").value = pagesDialog.general.pin1;
+  if ($("l-pin2")) $("l-pin2").value = pagesDialog.general.pin2;
   if (addPage && pagesDialog.draft.length < MAX_PAGES) pagesDialog.draft.push(newPage(state.layout, pagesDialog.draft));
   renderPagesDialog();
   dialog.returnValue = "";
@@ -4306,6 +4362,12 @@ function restorePagesGeneral() {
   state.layout.tabBold = saved.tabBold === true;
   if (!state.layout.tabBold) delete state.layout.tabBold;
   if ($("l-tab-bold")) $("l-tab-bold").checked = saved.tabBold === true;
+  if (saved.pin1) state.layout.pin1 = saved.pin1;
+  else delete state.layout.pin1;
+  if (saved.pin2) state.layout.pin2 = saved.pin2;
+  else delete state.layout.pin2;
+  if ($("l-pin1")) $("l-pin1").value = saved.pin1 || "";
+  if ($("l-pin2")) $("l-pin2").value = saved.pin2 || "";
   writeDisplayBehavior(state.layout, saved.behavior);
   fillDisplayBehavior(saved.behavior || readDisplayBehavior(state.layout));
   fillProfileSelect($("display-profile"), saved.displayProfile);
@@ -4346,6 +4408,8 @@ $("pages-dialog").addEventListener("close", () => {
   writeDisplayBehavior(state.layout, collectDisplayBehavior());
   state.layout.tabBold = Boolean($("l-tab-bold")?.checked);
   if (!state.layout.tabBold) delete state.layout.tabBold;
+  writeLayoutPin("pin1", $("l-pin1")?.value);
+  writeLayoutPin("pin2", $("l-pin2")?.value);
   state.layout.pages = pages;
   if (!pages.some((page) => page.id === state.page)) state.page = pages[0].id;
   if (state.selected && !currentPage().tiles.some((tile) => tile.tileId === state.selected)) state.selected = null;
@@ -4864,6 +4928,26 @@ $("l-tab-bold")?.addEventListener("change", () => {
   if (!state.layout.tabBold) delete state.layout.tabBold;
   renderPageTabs();
 });
+function pinDigits(raw) {
+  return String(raw || "").replace(/\D/g, "").slice(0, 8);
+}
+function writeLayoutPin(key, raw) {
+  if (!state.layout) return;
+  const digits = pinDigits(raw);
+  if (digits) state.layout[key] = digits;
+  else delete state.layout[key];
+}
+for (const id of ["l-pin1", "l-pin2"]) {
+  const field = $(id);
+  if (!field) continue;
+  field.addEventListener("input", () => {
+    const digits = pinDigits(field.value);
+    if (field.value !== digits) field.value = digits;
+    writeLayoutPin(id === "l-pin1" ? "pin1" : "pin2", digits);
+    markDirty();
+  });
+}
+$("p-action")?.addEventListener("change", () => syncInteractionPropertyPanels());
 $("color-mono")?.addEventListener("change", () => {
   if (!state.layout) return;
   state.layout.colorMode = $("color-mono").checked ? "mono" : "color";

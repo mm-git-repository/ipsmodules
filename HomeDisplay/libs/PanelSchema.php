@@ -186,6 +186,8 @@ final class HomeDisplayPanelSchema
         if (trim((string) ($layout['name'] ?? '')) === '') {
             throw new InvalidArgumentException('Ansicht ohne Namen.');
         }
+        self::layoutPin($layout, 'pin1');
+        self::layoutPin($layout, 'pin2');
         $profileId = (string) ($layout['displayProfile'] ?? self::defaultProfileId());
         self::profile($profileId);
         $profile = self::profile($profileId);
@@ -291,6 +293,7 @@ final class HomeDisplayPanelSchema
                     }
                 }
                 self::validateKind($page, $tile, $kind, $pageIds, $publish);
+                self::validateTilePin($layout, $tile, $publish);
             }
             /* Nur Wert-Kacheln dürfen auf einem Hintergrundbild liegen, wie im Editor. */
             foreach ($coverCells as $key => $unused) {
@@ -440,6 +443,7 @@ final class HomeDisplayPanelSchema
                     if ($actionId !== '') {
                         $public['actionId'] = $actionId;
                         $public['confirm'] = (bool) ($tile['confirm'] ?? false);
+                        self::publishTilePin($public, $tile);
                     }
                     $iconMode = (string) ($tile['iconMode'] ?? 'static');
                     if ($iconMode === 'toggle') {
@@ -583,6 +587,7 @@ final class HomeDisplayPanelSchema
                         $public['actionId'] = $actionId;
                         $public['actionKind'] = (string) ($tile['actionKind'] ?? 'switch');
                         $public['confirm'] = (bool) ($tile['confirm'] ?? false);
+                        self::publishTilePin($public, $tile);
                         if (isset($tile['valueMin']) || in_array($control, ['dimSwitch', 'slider', 'combo'], true)) {
                             $public['valueMin'] = (float) ($tile['valueMin'] ?? 0);
                         }
@@ -766,7 +771,62 @@ final class HomeDisplayPanelSchema
         if (!empty($layout['tabBold'])) {
             $public['tabBold'] = true;
         }
+        $pin1 = self::layoutPin($layout, 'pin1');
+        $pin2 = self::layoutPin($layout, 'pin2');
+        if ($pin1 !== '') {
+            $public['pin1'] = $pin1;
+        }
+        if ($pin2 !== '') {
+            $public['pin2'] = $pin2;
+        }
         return $public;
+    }
+
+    /** Leer oder 4 bis 8 Ziffern. */
+    private static function layoutPin(array $layout, string $key): string
+    {
+        $pin = trim((string) ($layout[$key] ?? ''));
+        if ($pin === '') {
+            return '';
+        }
+        if (preg_match('/^\d{4,8}$/', $pin) !== 1) {
+            throw new InvalidArgumentException($key === 'pin1'
+                ? 'PIN 1 muss leer sein oder aus 4 bis 8 Ziffern bestehen.'
+                : 'PIN 2 muss leer sein oder aus 4 bis 8 Ziffern bestehen.');
+        }
+        return $pin;
+    }
+
+    /** @param array<string, mixed> $public @param array<string, mixed> $tile */
+    private static function publishTilePin(array &$public, array $tile): void
+    {
+        $pin = (int) ($tile['pin'] ?? 0);
+        if ($pin === 1 || $pin === 2) {
+            $public['pin'] = $pin;
+        }
+    }
+
+    /** @param array<string, mixed> $layout @param array<string, mixed> $tile */
+    private static function validateTilePin(array $layout, array $tile, bool $publish): void
+    {
+        if (!array_key_exists('pin', $tile) || $tile['pin'] === '' || $tile['pin'] === null) {
+            return;
+        }
+        $pin = (int) $tile['pin'];
+        if ($pin === 0) {
+            return;
+        }
+        if ($pin !== 1 && $pin !== 2) {
+            throw new InvalidArgumentException('PIN-Schutz ist 1 oder 2.');
+        }
+        if (trim((string) ($tile['actionId'] ?? '')) === '') {
+            throw new InvalidArgumentException('PIN-Schutz nur zusammen mit einer Aktion.');
+        }
+        if ($publish && self::layoutPin($layout, $pin === 1 ? 'pin1' : 'pin2') === '') {
+            throw new InvalidArgumentException($pin === 1
+                ? 'Eine Kachel verlangt PIN 1, die Ansicht hat aber keine PIN 1.'
+                : 'Eine Kachel verlangt PIN 2, die Ansicht hat aber keine PIN 2.');
+        }
     }
 
     /** @param array<string, mixed> $public @param array<string, mixed> $tile */

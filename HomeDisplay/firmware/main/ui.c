@@ -81,6 +81,7 @@ typedef struct {
     int level;
     bool has_action;
     bool confirm;
+    int pin;
     bool applying;
     lv_obj_t *card;
     lv_obj_t *label;
@@ -260,6 +261,12 @@ static void fold_german(char *dst, size_t dst_len, const char *src)
                 continue;
             }
         }
+        /* Gedankenstrich und Halbgeviertstrich fehlen in der Display-Schrift und würden als Kästchen erscheinen. */
+        if (p[0] == 0xE2 && p[1] == 0x80 && (p[2] == 0x93 || p[2] == 0x94)) {
+            if (o + 1 < dst_len) dst[o++] = '-';
+            p += 3;
+            continue;
+        }
         if ((p[0] & 0xE0) == 0xC0 && !p[1]) break;
         if ((p[0] & 0xF0) == 0xE0 && (!p[1] || !p[2])) break;
         if ((p[0] & 0xF8) == 0xF0 && (!p[1] || !p[2] || !p[3])) break;
@@ -368,6 +375,26 @@ static lv_obj_t *dim_popup;
 static lv_obj_t *dim_slider;
 static lv_obj_t *dim_title_label;
 static tile_view_t *dim_tile;
+static char layout_pin1[9];
+static char layout_pin2[9];
+static lv_obj_t *pin_popup;
+static lv_obj_t *pin_title_label;
+static lv_obj_t *pin_dots_label;
+static lv_obj_t *pin_status_label;
+static char pin_entry[9];
+static int pin_len;
+static tile_view_t *pin_tile;
+static int pin_kind;
+static int pin_value;
+static int pin_revert;
+static bool pin_painted;
+static char pin_open_for[40];
+static int pin_fails;
+static int64_t pin_lock_until;
+static int64_t pin_deadline;
+static tile_view_t *knob_drag_tile;
+static int knob_drag_from;
+enum { PIN_ACT_SEND = 1, PIN_ACT_DIM = 2 };
 static lv_obj_t *analog_clock;
 static lv_obj_t *analog_hour;
 static lv_obj_t *analog_min;
@@ -729,6 +756,7 @@ static bool apply_value_rule_icon(tile_view_t *view, lv_coord_t text_h)
 }
 
 static void place_cover_image(tile_view_t *view, const char *file, int box_w, int box_h);
+static bool show_icon_fit(tile_view_t *view, const char *icon, int box_w, int box_h, uint32_t ink);
 
 static void apply_image_switch(tile_view_t *view, const value_rule_t *rule)
 {
@@ -757,13 +785,20 @@ static void apply_image_switch(tile_view_t *view, const value_rule_t *rule)
             view->rule_image[0] = 0;
         }
     }
-    if (view->icon_label) {
-        if (!picture && rule && rule->icon[0]) {
-            uint32_t ink = rule->has_icon_color ? rule->icon_color : icon_ink(view);
+    if (view->icon_label) lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+    if (!picture && rule && rule->icon[0] && view->image_img) {
+        uint32_t ink = rule->has_icon_color ? rule->icon_color : icon_ink(view);
+        int box_w = view->card ? lv_obj_get_content_width(view->card) : 0;
+        int box_h = view->card ? lv_obj_get_content_height(view->card) : 0;
+        if (box_w < 16) box_w = 120;
+        if (box_h < 16) box_h = 80;
+        view->rule_image[0] = 0;
+        lv_obj_clear_flag(view->image_img, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_img_recolor_opa(view->image_img, LV_OPA_TRANSP, 0);
+        if (!show_icon_fit(view, rule->icon, box_w, box_h, ink) && view->icon_label) {
+            lv_obj_add_flag(view->image_img, LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
             paint_icon_label(view->icon_label, rule->icon, false, true, ink);
-        } else {
-            lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
         }
     }
 }
@@ -856,8 +891,19 @@ static void layout_value_row(tile_view_t *view)
     lv_coord_t icon_w = want_icon ? text_h + 6 : 0;
     lv_coord_t max_value = inner_w - icon_w;
     if (max_value < 8) max_value = 8;
-    lv_obj_set_width(view->label, text_width_capped(lv_label_get_text(view->label), font, max_value));
-    lv_label_set_long_mode(view->label, LV_LABEL_LONG_DOT);
+    /* Nur kürzen, wenn der Text die freie Zeile wirklich überragt. Sonst bleibt die gemessene Breite. */
+    const char *value_text = lv_label_get_text(view->label);
+    lv_point_t value_size;
+    lv_txt_get_size(&value_size, value_text && value_text[0] ? value_text : " ", font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_coord_t need = value_size.x + 2;
+    if (need < 8) need = 8;
+    if (need <= max_value) {
+        lv_obj_set_width(view->label, LV_SIZE_CONTENT);
+        lv_label_set_long_mode(view->label, LV_LABEL_LONG_CLIP);
+    } else {
+        lv_obj_set_width(view->label, max_value);
+        lv_label_set_long_mode(view->label, LV_LABEL_LONG_DOT);
+    }
     lv_obj_set_style_text_align(view->label, LV_TEXT_ALIGN_CENTER, 0);
 
     if (view->value_box) {
@@ -1089,6 +1135,9 @@ static void set_power_checked(tile_view_t *tile, bool on)
 }
 
 static void open_dim_popup(tile_view_t *tile);
+static void paint_switch_value(tile_view_t *tile, int value);
+static bool pin_is_locked(void);
+static bool pin_take(tile_view_t *tile, int kind, int value, int revert, bool painted);
 
 static void tile_event(lv_event_t *event)
 {
@@ -1110,47 +1159,46 @@ static void tile_event(lv_event_t *event)
     }
     if (now - tile->last_tap_at < 700000) return;
     tile->last_tap_at = now;
-    if (tile->confirm && (strcmp(confirm_tile, tile->tile_id) != 0 || now - confirm_at > 4000000)) {
+    /* Eine gesetzte PIN ersetzt „Nochmal tippen“. */
+    if (tile->pin == 0 && tile->confirm && (strcmp(confirm_tile, tile->tile_id) != 0 || now - confirm_at > 4000000)) {
         snprintf(confirm_tile, sizeof(confirm_tile), "%s", tile->tile_id);
         confirm_at = now;
         lv_label_set_text(tile->label, "Nochmal tippen");
         return;
     }
     confirm_tile[0] = '\0';
+    if (tile->pin != 0 && pin_is_locked()) {
+        if (tile->label) lv_label_set_text(tile->label, "Gesperrt");
+        return;
+    }
     /* Dimmer: Popup; reine Schalter: Zielzustand (Toggle), nicht den Ist-Wert. */
     if (strcmp(tile->control, "dimSwitch") == 0 || strcmp(tile->control, "slider") == 0
         || strcmp(tile->control, "combo") == 0) {
         if (strcmp(tile->dim_tap, "on") != 0 && strcmp(tile->dim_tap, "off") != 0) {
+            if (pin_take(tile, PIN_ACT_DIM, 0, tile->value, false)) return;
             open_dim_popup(tile);
         }
         return;
     }
+    int previous = tile->value;
     int next = toggle_target(tile);
-    tile->value = next;
+    paint_switch_value(tile, next);
+    if (pin_take(tile, PIN_ACT_SEND, next, previous, true)) return;
     hold_target(tile, next);
-    if (tile->value_rule_count > 0) {
-        apply_action_rules(tile, next);
-    } else {
-        refresh_icons(tile, value_is_on(tile, next));
-        if (tile->card) {
-            lv_obj_set_style_bg_color(tile->card, lv_color_hex(value_is_on(tile, next) ? tile_on_color(tile) : tile->base_bg), 0);
-        }
-        if (tile->label && tile->show_state_text) {
-            label_set_folded(tile->label, value_is_on(tile, next) ? "Ein" : "Aus");
-        }
-    }
     action_callback(tile->tile_id, tile->action_id, next);
 }
 
 static void show_page(int index);
 static void apply_state_body(cJSON *root);
 static void send_level(tile_view_t *tile, int value);
+static void close_pin_popup(bool revert);
 static void close_dim_popup(void)
 {
     if (dim_popup) {
         lv_obj_add_flag(dim_popup, LV_OBJ_FLAG_HIDDEN);
     }
     dim_tile = NULL;
+    pin_open_for[0] = '\0';
 }
 
 static void dim_slider_event(lv_event_t *event)
@@ -1158,6 +1206,8 @@ static void dim_slider_event(lv_event_t *event)
     if (lv_event_get_code(event) != LV_EVENT_RELEASED || !dim_tile) return;
     note_touch();
     int value = (int) lv_slider_get_value(dim_slider);
+    bool passed = pin_open_for[0] && strcmp(pin_open_for, dim_tile->tile_id) == 0;
+    if (!passed && pin_take(dim_tile, PIN_ACT_SEND, value, dim_tile->value, false)) return;
     send_level(dim_tile, value);
     close_dim_popup();
 }
@@ -1392,6 +1442,182 @@ static void send_level(tile_view_t *tile, int value)
     action_callback(tile->tile_id, tile->action_id, value);
 }
 
+static void paint_switch_value(tile_view_t *tile, int value)
+{
+    if (!tile) return;
+    tile->value = value;
+    bool on = value_is_on(tile, value);
+    if (tile->power) set_power_checked(tile, on);
+    if (tile->track) place_level(tile, value);
+    if (control_is_dimmer(tile->control)) {
+        refresh_icons(tile, on);
+        paint_dim_label(tile);
+        return;
+    }
+    if (tile->value_rule_count > 0) {
+        apply_action_rules(tile, value);
+        return;
+    }
+    refresh_icons(tile, on);
+    if (tile->card && !tile->bg_clear) {
+        lv_obj_set_style_bg_color(tile->card, lv_color_hex(on ? tile_on_color(tile) : tile->base_bg), 0);
+    }
+    if (tile->label && tile->show_state_text) {
+        label_set_folded(tile->label, on ? "Ein" : "Aus");
+    }
+}
+
+static const char *pin_secret(const tile_view_t *tile)
+{
+    if (!tile) return "";
+    if (tile->pin == 1) return layout_pin1;
+    if (tile->pin == 2) return layout_pin2;
+    return "";
+}
+
+static bool pin_is_locked(void)
+{
+    return esp_timer_get_time() < pin_lock_until;
+}
+
+static void pin_show_dots(void)
+{
+    char dots[9];
+    int count = pin_len;
+    if (count < 0) count = 0;
+    if (count > 8) count = 8;
+    for (int i = 0; i < count; i++) dots[i] = '*';
+    dots[count] = '\0';
+    if (pin_dots_label) lv_label_set_text(pin_dots_label, count ? dots : "-");
+}
+
+static void close_pin_popup(bool revert)
+{
+    tile_view_t *tile = pin_tile;
+    int revert_value = pin_revert;
+    bool painted = pin_painted;
+    pin_tile = NULL;
+    pin_kind = 0;
+    pin_painted = false;
+    pin_len = 0;
+    pin_entry[0] = '\0';
+    if (pin_popup) lv_obj_add_flag(pin_popup, LV_OBJ_FLAG_HIDDEN);
+    if (revert && painted && tile) paint_switch_value(tile, revert_value);
+}
+
+static void pin_accept(void)
+{
+    tile_view_t *tile = pin_tile;
+    int kind = pin_kind;
+    int value = pin_value;
+    pin_fails = 0;
+    close_pin_popup(false);
+    if (!tile || !tile->has_action) return;
+    if (kind == PIN_ACT_DIM) {
+        snprintf(pin_open_for, sizeof(pin_open_for), "%s", tile->tile_id);
+        open_dim_popup(tile);
+        return;
+    }
+    send_level(tile, value);
+    if (dim_tile == tile) close_dim_popup();
+}
+
+static void pin_fail(void)
+{
+    pin_len = 0;
+    pin_entry[0] = '\0';
+    pin_show_dots();
+    if (pin_status_label) lv_label_set_text(pin_status_label, "Falsche PIN");
+    pin_fails++;
+    if (pin_fails >= 3) {
+        tile_view_t *tile = pin_tile;
+        pin_fails = 0;
+        pin_lock_until = esp_timer_get_time() + 30000000LL;
+        close_pin_popup(true);
+        if (tile && tile->label) lv_label_set_text(tile->label, "Gesperrt");
+    }
+}
+
+static void pin_push_digit(char digit)
+{
+    const char *secret = pin_secret(pin_tile);
+    if (!secret[0] || pin_len >= 8) return;
+    pin_deadline = esp_timer_get_time() + 20000000LL;
+    if (pin_status_label) lv_label_set_text(pin_status_label, "");
+    pin_entry[pin_len++] = digit;
+    pin_entry[pin_len] = '\0';
+    pin_show_dots();
+    if (pin_len < (int) strlen(secret)) return;
+    if (strcmp(pin_entry, secret) == 0) pin_accept();
+    else pin_fail();
+}
+
+static void pin_matrix_event(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
+    note_touch();
+    if (!pin_tile || pin_is_locked()) return;
+    lv_obj_t *matrix = lv_event_get_target(event);
+    uint16_t id = lv_btnmatrix_get_selected_btn(matrix);
+    if (id == LV_BTNMATRIX_BTN_NONE) return;
+    const char *text = lv_btnmatrix_get_btn_text(matrix, id);
+    if (!text || !text[0]) return;
+    if (text[0] == 'C' && text[1] == '\0') {
+        pin_deadline = esp_timer_get_time() + 20000000LL;
+        if (pin_len > 0) pin_len--;
+        pin_entry[pin_len] = '\0';
+        pin_show_dots();
+        if (pin_status_label) lv_label_set_text(pin_status_label, "");
+        return;
+    }
+    if (text[0] >= '0' && text[0] <= '9' && text[1] == '\0') pin_push_digit(text[0]);
+}
+
+static void pin_cancel_event(lv_event_t *event)
+{
+    (void) event;
+    note_touch();
+    close_pin_popup(true);
+}
+
+static void pin_tick(lv_timer_t *timer)
+{
+    (void) timer;
+    if (!pin_popup || lv_obj_has_flag(pin_popup, LV_OBJ_FLAG_HIDDEN) || !pin_tile) return;
+    if (esp_timer_get_time() >= pin_deadline) close_pin_popup(true);
+}
+
+static bool pin_take(tile_view_t *tile, int kind, int value, int revert, bool painted)
+{
+    const char *secret = pin_secret(tile);
+    if (!tile || !secret[0]) return false;
+    if (pin_is_locked()) {
+        if (painted) paint_switch_value(tile, revert);
+        if (tile->label) lv_label_set_text(tile->label, "Gesperrt");
+        return true;
+    }
+    if (pin_popup && !lv_obj_has_flag(pin_popup, LV_OBJ_FLAG_HIDDEN)) {
+        if (pin_tile == tile) return true;
+        if (painted) paint_switch_value(tile, revert);
+        return true;
+    }
+    if (!pin_popup) return false;
+    pin_tile = tile;
+    pin_kind = kind;
+    pin_value = value;
+    pin_revert = revert;
+    pin_painted = painted;
+    pin_len = 0;
+    pin_entry[0] = '\0';
+    pin_deadline = esp_timer_get_time() + 20000000LL;
+    pin_show_dots();
+    if (pin_status_label) lv_label_set_text(pin_status_label, "");
+    if (pin_title_label) label_set_folded(pin_title_label, tile->title[0] ? tile->title : "PIN");
+    lv_obj_clear_flag(pin_popup, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(pin_popup);
+    return true;
+}
+
 /* Nur der Griff zählt. Tippen auf die Leiste ändert nichts. */
 static void knob_event(lv_event_t *event)
 {
@@ -1399,8 +1625,16 @@ static void knob_event(lv_event_t *event)
     if (locked) return;
     tile_view_t *tile = lv_event_get_user_data(event);
     if (!tile || !tile->track) return;
+    if (tile->pin != 0 && pin_is_locked()) {
+        if (tile->label) lv_label_set_text(tile->label, "Gesperrt");
+        return;
+    }
     lv_event_code_t code = lv_event_get_code(event);
     if (code == LV_EVENT_CLICKED || code == LV_EVENT_PRESSING) {
+        if (knob_drag_tile != tile) {
+            knob_drag_tile = tile;
+            knob_drag_from = tile->value;
+        }
         lv_point_t point;
         lv_indev_get_point(lv_indev_get_act(), &point);
         lv_area_t area;
@@ -1419,10 +1653,18 @@ static void knob_event(lv_event_t *event)
         if (tile->power) set_power_checked(tile, value_is_on(tile, value));
         if (tile->label) paint_dim_label(tile);
         tile->applying = false;
-        if (code == LV_EVENT_CLICKED) send_level(tile, tile->value);
+        if (code == LV_EVENT_CLICKED) {
+            int from = knob_drag_from;
+            knob_drag_tile = NULL;
+            if (!pin_take(tile, PIN_ACT_SEND, tile->value, from, true)) send_level(tile, tile->value);
+        }
         return;
     }
-    if (lv_event_get_code(event) == LV_EVENT_RELEASED) send_level(tile, tile->value);
+    if (lv_event_get_code(event) == LV_EVENT_RELEASED) {
+        int from = knob_drag_tile == tile ? knob_drag_from : tile->value;
+        knob_drag_tile = NULL;
+        if (!pin_take(tile, PIN_ACT_SEND, tile->value, from, true)) send_level(tile, tile->value);
+    }
 }
 
 static void power_event(lv_event_t *event)
@@ -1431,11 +1673,18 @@ static void power_event(lv_event_t *event)
     if (locked) return;
     tile_view_t *tile = lv_event_get_user_data(event);
     if (!tile || tile->applying || !tile->power) return;
+    int previous = tile->value;
+    if (tile->pin != 0 && pin_is_locked()) {
+        set_power_checked(tile, value_is_on(tile, previous));
+        if (tile->label) lv_label_set_text(tile->label, "Gesperrt");
+        return;
+    }
     int value = toggle_target(tile);
     tile->applying = true;
     set_power_checked(tile, value_is_on(tile, value));
     place_level(tile, value);
     tile->applying = false;
+    if (pin_take(tile, PIN_ACT_SEND, value, previous, true)) return;
     send_level(tile, value);
 }
 
@@ -2670,6 +2919,7 @@ static void draw_group_frames(cJSON *page)
 static void show_page(int index)
 {
     /* Schlanker Aufbau + Icons/Farben wie Editor. Keine Slider/Bilder beim Paint. */
+    close_pin_popup(false);
     close_dim_popup();
     ui_wdt_kick();
     cJSON *pages = layout_root ? cJSON_GetObjectItem(layout_root, "pages") : NULL;
@@ -2877,6 +3127,8 @@ static void show_page(int index)
         if (icon && icon[0]) snprintf(view->icon_name, sizeof(view->icon_name), "%s", icon);
         load_type(view, tile, kind);
         view->confirm = cJSON_IsTrue(cJSON_GetObjectItem(tile, "confirm"));
+        int pin_no = json_int(tile, "pin", 0);
+        view->pin = (pin_no == 1 || pin_no == 2) ? pin_no : 0;
         view->base_bg = kind_bg(kind);
         bool own_bg = false;
         if (!color_mono) {
@@ -3059,6 +3311,11 @@ static void show_page(int index)
         view->dim_show_bar = !cJSON_IsFalse(cJSON_GetObjectItem(tile, "dimShowBar"));
         view->dim_show_percent = !cJSON_IsFalse(cJSON_GetObjectItem(tile, "dimShowPercent"));
         view->dim_show_state_text = cJSON_IsTrue(cJSON_GetObjectItem(tile, "dimShowStateText"));
+        if (strcmp(view->control, "image") == 0) {
+            view->show_state_text = false;
+            view->dim_show_percent = false;
+            view->dim_show_state_text = false;
+        }
         bool battery = strcmp(view->control, "battery") == 0;
         bool dim_switch = strcmp(view->control, "dimSwitch") == 0;
         bool slider = strcmp(view->control, "slider") == 0;
@@ -3081,13 +3338,7 @@ static void show_page(int index)
                 }
             }
         }
-        if (ghost) {
-            view->has_action = false;
-            plain_value = true;
-            dimmer = false;
-            battery = false;
-            lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
-        }
+        if (ghost) lv_obj_set_style_bg_opa(view->card, LV_OPA_TRANSP, 0);
         if (slider) view->dim_show_switch = false;
         if (dim_switch) view->dim_show_switch = true;
         const char *tap = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "dimTap"));
@@ -3445,13 +3696,22 @@ static void show_page(int index)
         }
 
         if (strcmp(kind, "countdown") == 0 || strcmp(kind, "appointment") == 0) {
+            if (show_title && view->title[0]) {
+                view->title_label = lv_label_create(view->card);
+                label_set_folded(view->title_label, view->title);
+                lv_obj_set_style_text_font(view->title_label, font_for(view->title_px, view->title_bold, view->title_italic), 0);
+                lv_obj_set_style_text_color(view->title_label, lv_color_hex(title_ink(view)), 0);
+                lv_obj_align(view->title_label, LV_ALIGN_TOP_MID, 0, 0);
+            }
             view->label = lv_label_create(view->card);
             lv_label_set_text(view->label, "-");
             lv_obj_set_style_text_font(view->label, font_for(view->text_px, view->text_bold, view->text_italic), 0);
-            lv_obj_align(view->label, LV_ALIGN_CENTER, 0, show_title ? 8 : 0);
+            lv_obj_set_style_text_color(view->label, lv_color_hex(view->own_text ? view->text_color : text_fg()), 0);
+            lv_obj_align(view->label, LV_ALIGN_CENTER, 0, (show_title && view->title[0]) ? 10 : 0);
             view->age_label = lv_label_create(view->card);
             lv_label_set_text(view->age_label, "");
             lv_obj_set_style_text_font(view->age_label, &lv_font_montserrat_16, 0);
+            lv_obj_set_style_text_color(view->age_label, lv_color_hex(text_fg()), 0);
             lv_obj_align(view->age_label, LV_ALIGN_BOTTOM_MID, 0, -4);
             tile_count++;
             continue;
@@ -3660,6 +3920,7 @@ typedef struct {
     wc_word_t hour[13];
     bool three_quarter_at_45;
     bool ein_uhr;
+    bool oclock_word;
 } wc_layout_t;
 
 static const wc_layout_t WC_GERMAN = {
@@ -3672,19 +3933,22 @@ static const wc_layout_t WC_GERMAN = {
               [7] = {5, 5, 6}, [8] = {8, 1, 4}, [9] = {7, 3, 4}, [10] = {8, 5, 4}, [11] = {7, 0, 3}, [12] = {4, 5, 5} },
     .three_quarter_at_45 = false,
     .ein_uhr = true,
+    .oclock_word = true,
 };
 
-/* Schwäbisch: "S isch fünf noch halber drei", Dreiviertel statt Viertel vor. */
+/* Schwäbisch: "S isch fünf noch halber drei", Dreiviertel statt Viertel vor.
+ * Stunden mit -e (oinse, zwoie, dreie, ...), ohne „Uhr“ zur vollen Stunde. */
 static const wc_layout_t WC_SWABIAN = {
-    .rows = { "ESKISCHFÜNF", "ZEHNZWANZIG", "DREIVIERTEL", "NOCHVORMNEI", "HALBERTZWOI",
-              "ZWÖLFEKFÜNF", "SECHSGSIEBE", "ZEHNEFACHTM", "OINSWDREIJP", "VIERELFEUHR" },
+    .rows = { "ESKISCHFÜNF", "ZEHNZWANZIG", "DREIVIERTEL", "NOCHVORELFE", "HALBERZWOIE",
+              "ZWÖLFEFÜNFE", "SECHSEOINSE", "SIEBNEDREIE", "VIEREACHTEN", "NEUNEZEHNER" },
     .es = {0, 0, 2}, .is = {0, 3, 4}, .five = {0, 7, 4}, .ten = {1, 0, 4}, .twenty = {1, 4, 7},
     .quarter = {2, 4, 7}, .three_quarter = {2, 0, 11}, .after = {3, 0, 4}, .before = {3, 4, 3},
-    .half = {4, 0, 6}, .oclock = {9, 8, 3},
-    .hour = { [1] = {8, 0, 4}, [2] = {4, 7, 4}, [3] = {8, 5, 4}, [4] = {9, 0, 4}, [5] = {5, 7, 4}, [6] = {6, 0, 5},
-              [7] = {6, 6, 5}, [8] = {7, 6, 4}, [9] = {3, 8, 3}, [10] = {7, 0, 5}, [11] = {9, 4, 4}, [12] = {5, 0, 6} },
+    .half = {4, 0, 6},
+    .hour = { [1] = {6, 6, 5}, [2] = {4, 6, 5}, [3] = {7, 6, 5}, [4] = {8, 0, 5}, [5] = {5, 6, 5}, [6] = {6, 0, 6},
+              [7] = {7, 0, 6}, [8] = {8, 5, 5}, [9] = {9, 0, 5}, [10] = {9, 5, 5}, [11] = {3, 7, 4}, [12] = {5, 0, 6} },
     .three_quarter_at_45 = true,
     .ein_uhr = false,
+    .oclock_word = false,
 };
 
 enum {
@@ -3866,7 +4130,7 @@ static void update_word_clock(int hour, int minute, bool swabian)
     if (flags & WC_AFTER) wc_add(mask, layout->after);
     if (flags & WC_BEFORE) wc_add(mask, layout->before);
     if (flags & WC_HALF) wc_add(mask, layout->half);
-    if (block == 0) wc_add(mask, layout->oclock);
+    if (block == 0 && layout->oclock_word) wc_add(mask, layout->oclock);
     wc_add(mask, (block == 0 && shown_hour == 1 && layout->ein_uhr) ? layout->ein : layout->hour[shown_hour]);
     for (int row = 0; row < WC_ROWS; row++) {
         uint16_t changed = (uint16_t) ((mask[row] ^ wc_lit[row]) & 0x7FF);
@@ -4180,6 +4444,54 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_center(dim_close_lbl);
     lv_obj_add_event_cb(dim_close, dim_popup_close_event, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(dim_popup, LV_OBJ_FLAG_HIDDEN);
+    pin_popup = lv_obj_create(screen);
+    lv_obj_set_size(pin_popup, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES);
+    lv_obj_set_style_bg_color(pin_popup, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(pin_popup, LV_OPA_80, 0);
+    style_flat(pin_popup);
+    lv_obj_t *pin_card = lv_obj_create(pin_popup);
+    lv_obj_set_size(pin_card, 480, 560);
+    lv_obj_center(pin_card);
+    lv_obj_set_style_bg_color(pin_card, lv_color_hex(0x1A1A1A), 0);
+    lv_obj_set_style_radius(pin_card, 12, 0);
+    style_flat(pin_card);
+    pin_title_label = lv_label_create(pin_card);
+    lv_label_set_text(pin_title_label, "PIN");
+    lv_obj_set_style_text_color(pin_title_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(pin_title_label, &lv_font_montserrat_28, 0);
+    lv_obj_align(pin_title_label, LV_ALIGN_TOP_MID, 0, 16);
+    pin_dots_label = lv_label_create(pin_card);
+    lv_label_set_text(pin_dots_label, "-");
+    lv_obj_set_style_text_color(pin_dots_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(pin_dots_label, &lv_font_montserrat_48, 0);
+    lv_obj_align(pin_dots_label, LV_ALIGN_TOP_MID, 0, 56);
+    pin_status_label = lv_label_create(pin_card);
+    lv_label_set_text(pin_status_label, "");
+    lv_obj_set_style_text_color(pin_status_label, lv_color_hex(0xFFB547), 0);
+    lv_obj_set_style_text_font(pin_status_label, &lv_font_montserrat_28, 0);
+    lv_obj_align(pin_status_label, LV_ALIGN_TOP_MID, 0, 120);
+    static const char *pin_map[] = {
+        "1", "2", "3", "\n",
+        "4", "5", "6", "\n",
+        "7", "8", "9", "\n",
+        "C", "0", ""
+    };
+    lv_obj_t *pin_matrix = lv_btnmatrix_create(pin_card);
+    lv_btnmatrix_set_map(pin_matrix, pin_map);
+    lv_obj_set_size(pin_matrix, 420, 300);
+    lv_obj_align(pin_matrix, LV_ALIGN_TOP_MID, 0, 160);
+    lv_obj_set_style_text_font(pin_matrix, &lv_font_montserrat_28, LV_PART_ITEMS);
+    lv_btnmatrix_set_btn_ctrl_all(pin_matrix, LV_BTNMATRIX_CTRL_CLICK_TRIG | LV_BTNMATRIX_CTRL_NO_REPEAT);
+    lv_obj_add_event_cb(pin_matrix, pin_matrix_event, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_t *pin_cancel = lv_btn_create(pin_card);
+    lv_obj_set_size(pin_cancel, 220, 56);
+    lv_obj_align(pin_cancel, LV_ALIGN_BOTTOM_MID, 0, -16);
+    lv_obj_t *pin_cancel_lbl = lv_label_create(pin_cancel);
+    lv_label_set_text(pin_cancel_lbl, "Abbrechen");
+    lv_obj_set_style_text_font(pin_cancel_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_center(pin_cancel_lbl);
+    lv_obj_add_event_cb(pin_cancel, pin_cancel_event, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(pin_popup, LV_OBJ_FLAG_HIDDEN);
     build_test_layer(screen);
     build_boot_layer(screen);
     set_boot_message("Hausanzeige startet", "Anzeige bereit");
@@ -4187,6 +4499,7 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     touched_at = esp_timer_get_time();
     offline_since = touched_at;
     lv_timer_create(clock_tick, 1000, NULL);
+    lv_timer_create(pin_tick, 500, NULL);
 }
 
 void homedisplay_ui_set_pairing_code(const char *code)
@@ -4276,6 +4589,23 @@ void homedisplay_ui_apply_layout(const char *json)
     }
     if (layout_root) cJSON_Delete(layout_root);
     layout_root = root;
+    layout_pin1[0] = '\0';
+    layout_pin2[0] = '\0';
+    const char *pin_texts[2] = {
+        cJSON_GetStringValue(cJSON_GetObjectItem(root, "pin1")),
+        cJSON_GetStringValue(cJSON_GetObjectItem(root, "pin2")),
+    };
+    char *pin_dst[2] = { layout_pin1, layout_pin2 };
+    for (int pin_index = 0; pin_index < 2; pin_index++) {
+        const char *text = pin_texts[pin_index];
+        if (!text) continue;
+        size_t len = strlen(text);
+        bool digits = len >= 4 && len <= 8;
+        for (size_t i = 0; digits && i < len; i++) {
+            if (text[i] < '0' || text[i] > '9') digits = false;
+        }
+        if (digits) snprintf(pin_dst[pin_index], 9, "%s", text);
+    }
     const char *cm = cJSON_GetStringValue(cJSON_GetObjectItem(root, "colorMode"));
     color_mono = cm && strcmp(cm, "mono") == 0;
     cJSON *theme = cJSON_GetObjectItem(root, "theme");
@@ -4873,6 +5203,9 @@ static void apply_state_body(cJSON *root)
                 }
             }
             if (tiles[index].label) label_set_folded(tiles[index].label, text ? text : "-");
+            if (strcmp(tiles[index].control, "image") == 0 && tiles[index].label) {
+                lv_obj_add_flag(tiles[index].label, LV_OBJ_FLAG_HIDDEN);
+            }
             if (tiles[index].chart_line) layout_chart_head(&tiles[index]);
             const char *age = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "age"));
             const char *sub = cJSON_GetStringValue(cJSON_GetObjectItem(tile, "sub"));

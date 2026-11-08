@@ -11,7 +11,7 @@ class WifiWhirl extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 20;
+    private const MODULE_BUILD = 21;
 
     private const IS_ACTIVE = 102;
     private const IS_INACTIVE = 104;
@@ -301,6 +301,7 @@ class WifiWhirl extends IPSModuleStrict
             $this->configureTimer();
             $this->configureAutomationTimer();
             $this->handleAutomationEnabledTransition();
+            $this->syncAutomationActiveVariable();
             if (method_exists($this, 'SetVisualizationType')) {
                 $this->SetVisualizationType(1);
             }
@@ -378,6 +379,12 @@ class WifiWhirl extends IPSModuleStrict
 
         if ($Ident === 'AutomationEditor') {
             $this->handleAutomationEditorRequest($Value);
+
+            return;
+        }
+
+        if ($Ident === 'AutomationActive') {
+            $this->setAutomationEnabledFromEditor(['enabled' => WifiWhirlAutomation::toBool($Value)]);
 
             return;
         }
@@ -652,6 +659,15 @@ class WifiWhirl extends IPSModuleStrict
             $this->RunAutomation();
         } elseif (!$enabled && $wasEnabled) {
             $this->RunAutomation();
+        }
+    }
+
+    private function syncAutomationActiveVariable(): void
+    {
+        try {
+            $this->SetValue('AutomationActive', $this->readAutomationEnabledProperty());
+        } catch (Throwable) {
+            // Variable noch nicht angelegt
         }
     }
 
@@ -993,6 +1009,9 @@ class WifiWhirl extends IPSModuleStrict
         ++$pos;
 
         $switchPres = $pres['~Switch'] ?? '~Switch';
+        $this->RegisterVariableBoolean('AutomationActive', 'Automatisierung aktiv', $switchPres, $pos);
+        $this->EnableAction('AutomationActive');
+        ++$pos;
         $this->RegisterVariableString('AutomationStatus', 'Automatisierung Status', $textPres, $pos);
         ++$pos;
         $this->RegisterVariableFloat('AutomationPvSurplus', 'Automatisierung PV-Überschuss', $pres['WWHL.W'] ?? 'WWHL.W', $pos);

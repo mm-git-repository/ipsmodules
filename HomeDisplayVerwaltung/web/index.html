@@ -246,6 +246,13 @@
           </div>
           <label><input id="p-scene-show-state-text" type="checkbox"> Text Ein/Aus anzeigen</label>
           <label><input id="p-scene-confirm" type="checkbox"> Bestätigung an der Anzeige</label>
+          <label>PIN-Schutz
+            <select id="p-scene-pin">
+              <option value="">keiner</option>
+              <option value="1">PIN 1</option>
+              <option value="2">PIN 2</option>
+            </select>
+          </label>
           <p class="hint">Jede Zeile setzt beim Tippen eine Lampe auf den gewählten Wert. Farbe optional über eine Integer-Variable (Profil HexColor). Die Kachel zeigt Ein, wenn alle Lampen der Szene aktuell dem hinterlegten Wert entsprechen – Icon und Farbe „Ein“ gelten dann.</p>
         </div>
         <div data-for="weather">
@@ -357,6 +364,13 @@
             <label>Wert Aus <input id="p-value-off" type="number" step="any"></label>
           </div>
           <label><input id="p-confirm" type="checkbox"> Bestätigung an der Anzeige</label>
+          <label>PIN-Schutz
+            <select id="p-pin">
+              <option value="">keiner</option>
+              <option value="1">PIN 1</option>
+              <option value="2">PIN 2</option>
+            </select>
+          </label>
           </fieldset>
           <fieldset id="p-value-rules" class="font-box">
             <legend>Werte</legend>
@@ -527,6 +541,8 @@
         <label>Akzent <input id="theme-accent" type="color" value="#ffb547"></label>
         <label class="check"><input id="color-mono" type="checkbox"> Schwarz/Weiß</label>
         <label class="check"><input id="l-tab-bold" type="checkbox"> Reiter fett</label>
+        <label>PIN 1 <input id="l-pin1" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="4–8 Ziffern"></label>
+        <label>PIN 2 <input id="l-pin2" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="4–8 Ziffern"></label>
       </div>
       <h4>Helligkeit und Ruheanzeige</h4>
       <p class="hint">Gilt für diese Ansicht. Die Beleuchtung ist an oder aus. Nachts gilt der Nachtschalter, wenn „Nachts dimmen“ an ist.</p>

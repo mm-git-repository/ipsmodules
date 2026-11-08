@@ -968,7 +968,7 @@ class HomeDisplay extends IPSModuleStrict
             'layout' => [
                 'version' => (int) ($layoutDocument['version'] ?? 0),
                 'sha256' => $this->hash($layoutDocument),
-                'minFirmware' => is_array($layout) ? (string) ($layout['minFirmware'] ?? '0.1.0') : '0.1.0',
+                'minFirmware' => $this->effectiveMinFirmware($layout),
                 'held' => $this->layoutHeld($device['id'], $layout),
             ],
         ];
@@ -1541,27 +1541,66 @@ class HomeDisplay extends IPSModuleStrict
     private function countdownStateTile(array $tile, string $tileId): array
     {
         $variableId = (int) ($tile['variableId'] ?? 0);
-        $text = '—';
+        $text = 'kein Wert';
         $quality = 'empty';
         if ($variableId > 0 && IPS_VariableExists($variableId)) {
-            $raw = GetValue($variableId);
-            $remain = null;
-            if (is_numeric($raw)) {
-                $number = (int) $raw;
-                $remain = (string) ($tile['countdownMode'] ?? '') === 'seconds' ? $number : $number - time();
-            }
+            $remain = $this->countdownRemain(GetValue($variableId), (string) ($tile['countdownMode'] ?? '') === 'seconds');
             if ($remain === null) {
-                $text = '—';
+                $text = 'kein Wert';
             } elseif ($remain <= 0) {
                 $text = 'fertig';
             } else {
-                $hours = intdiv($remain, 3600);
-                $minutes = intdiv($remain % 3600, 60);
-                $text = $hours > 0 ? sprintf('%d h %02d min', $hours, $minutes) : sprintf('%d min', max(1, $minutes));
+                $text = $this->countdownText($remain);
             }
             $quality = 'ok';
         }
         return ['tileId' => $tileId, 'text' => $text, 'quality' => $quality];
+    }
+
+    /** Restsekunden aus Zahl, Ziffernfolge, Uhrzeit oder Datum. */
+    private function countdownRemain(mixed $raw, bool $secondsMode): ?int
+    {
+        if (is_string($raw)) {
+            $text = trim($raw);
+            if (preg_match('/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/', $text, $match) === 1) {
+                $hours = (int) $match[1];
+                $minutes = (int) $match[2];
+                $seconds = isset($match[3]) ? (int) $match[3] : 0;
+                if ($hours > 99 || $minutes > 59 || $seconds > 59) {
+                    return null;
+                }
+                return $hours * 3600 + $minutes * 60 + $seconds;
+            }
+            if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $text, $match) === 1) {
+                $stamp = strtotime($match[1] . '-' . $match[2] . '-' . $match[3] . ' 00:00:00');
+                return $stamp ? $stamp - time() : null;
+            }
+            if (preg_match('/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/', $text, $match) === 1) {
+                $stamp = strtotime(sprintf('%04d-%02d-%02d 00:00:00', (int) $match[3], (int) $match[2], (int) $match[1]));
+                return $stamp ? $stamp - time() : null;
+            }
+            if (preg_match('/^\d+$/', $text) === 1) {
+                $raw = (int) $text;
+            } else {
+                return null;
+            }
+        }
+        if (!is_numeric($raw)) {
+            return null;
+        }
+        $number = (int) $raw;
+        return $secondsMode ? $number : $number - time();
+    }
+
+    private function countdownText(int $remain): string
+    {
+        $hours = intdiv($remain, 3600);
+        $minutes = intdiv($remain % 3600, 60);
+        $seconds = $remain % 60;
+        if ($hours > 0) {
+            return sprintf('%d h %02d min', $hours, $minutes);
+        }
+        return sprintf('%02d:%02d', $minutes, $seconds);
     }
 
     /** @param array<string, mixed> $tile @return array<string, mixed> */
@@ -3357,6 +3396,42 @@ PHP;
     }
 
     /** @param array<string, mixed>|null $layout */
+    private function layoutUsesPin(?array $layout): bool
+    {
+        if (!is_array($layout)) {
+            return false;
+        }
+        foreach ($layout['pages'] ?? [] as $page) {
+            if (!is_array($page)) {
+                continue;
+            }
+            foreach ($page['tiles'] ?? [] as $tile) {
+                if (!is_array($tile)) {
+                    continue;
+                }
+                $pin = (int) ($tile['pin'] ?? 0);
+                if ($pin === 1 || $pin === 2) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Ältere Firmware würde eine PIN-Kachel ohne Abfrage schalten. */
+    private function effectiveMinFirmware(?array $layout): string
+    {
+        $min = is_array($layout) ? (string) ($layout['minFirmware'] ?? '0.1.0') : '0.1.0';
+        if ($min === '') {
+            $min = '0.1.0';
+        }
+        if ($this->layoutUsesPin($layout) && version_compare($min, '0.6.76', '<')) {
+            return '0.6.76';
+        }
+        return $min;
+    }
+
+    /** @param array<string, mixed>|null $layout */
     private function layoutHeld(int $instanceId, ?array $layout): bool
     {
         if (!is_array($layout)) {
@@ -3364,7 +3439,7 @@ PHP;
         }
         $runtime = $this->runtime();
         $installed = (string) ($runtime[(string) $instanceId]['firmware'] ?? '0.0.0');
-        return version_compare($installed, (string) ($layout['minFirmware'] ?? '0.1.0'), '<');
+        return version_compare($installed, $this->effectiveMinFirmware($layout), '<');
     }
 
     /** @param array<string, mixed> $body */

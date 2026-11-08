@@ -251,12 +251,12 @@ label.small { font-size: 12px; color: var(--muted); }
 .tile.tile-ghost .oh-card-label,
 .tile.tile-ghost .oh-card-state,
 .tile.tile-ghost .name { text-shadow: 0 1px 2px rgba(0, 0, 0, .75); }
-.tile.tile-ghost .oh-icon-toggle,
-.tile.tile-ghost .ctl,
-.tile.tile-ghost .value-inline-icon,
-.tile.tile-ghost .value-title-icon,
-.tile.tile-ghost .oh-card-body,
-.tile.tile-ghost .sw { display: none !important; }
+.tile.tile-ghost:not(.dim) .oh-icon-toggle,
+.tile.tile-ghost:not(.dim) .ctl,
+.tile.tile-ghost:not(.dim) .value-inline-icon,
+.tile.tile-ghost:not(.dim) .value-title-icon,
+.tile.tile-ghost:not(.dim) .oh-card-body,
+.tile.tile-ghost:not(.dim) .sw { display: none !important; }
 #page-tabs button { display: flex; align-items: center; justify-content: space-evenly; gap: 0; }
 .tab-icon { display: inline-flex; line-height: 1; }
 .tab-icon .mdi { font-size: 1em; line-height: 1; }
@@ -474,6 +474,7 @@ label.small { font-size: 12px; color: var(--muted); }
   display: flex;
   flex-direction: column;
   align-items: center;
+  width: 100%;
   max-width: 100%;
   min-width: 0;
 }
@@ -483,6 +484,7 @@ label.small { font-size: 12px; color: var(--muted); }
   align-items: center;
   justify-content: center;
   gap: 0.2em;
+  width: max-content;
   min-width: 0;
   max-width: 100%;
   text-align: center;
@@ -721,7 +723,9 @@ dialog button[value=ok], dialog button[value=publish] { background: var(--accent
 #grid .panel-title-icon { flex: none; display: inline-flex; align-items: center; line-height: 1; }
 #grid .panel-title-icon .mdi { font-size: 1em; line-height: 1; }
 #grid .panel-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#grid .panel-icon { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+#grid .panel-icon { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; container-type: size; }
+#grid .panel-icon .image-icon { width: 100%; height: 100%; font-size: min(88cqw, 88cqh); display: flex; align-items: center; justify-content: center; line-height: 1; }
+#grid .panel-icon .image-icon .mdi { font-size: 1em; line-height: 1; }
 #grid .panel-icon-btn { margin: 0; padding: 0; border: 0; background: transparent; color: inherit; line-height: 1; pointer-events: none; }
 #grid .panel-icon .mdi { font-size: 48px; line-height: 1; }
 #grid .panel-state { flex: none; text-align: center; font-size: 28px; line-height: 1.1; }
