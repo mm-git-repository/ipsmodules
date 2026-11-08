@@ -39,6 +39,7 @@ static bool show_page_may_yield;
 #define CHART_POINT_MAX 56
 #define UI_CLIENT_LOCK_MS 2000
 #define VALUE_RULE_MAX 12
+#define VALUE_RULE_POOL 96
 
 typedef struct {
     float from;
@@ -53,6 +54,9 @@ typedef struct {
     bool has_icon_color;
     bool has_text_color;
     bool has_bg_color;
+    char text[16];
+    char image_id[20];
+    char image_file[28];
 } value_rule_t;
 static lv_point_t chart_point_pool[CHART_SLOT_MAX][CHART_POINT_MAX];
 static lv_point_t chart_yest_pool[CHART_SLOT_MAX][CHART_POINT_MAX];
@@ -145,8 +149,9 @@ typedef struct {
     char text_size[8];
     char status_color[8];
     float threshold;
-    value_rule_t value_rules[VALUE_RULE_MAX];
+    int value_rule_first;
     int value_rule_count;
+    char rule_image[28];
     bool have_number;
     float live_number;
     bool holding;
@@ -321,6 +326,9 @@ static lv_obj_t *system_label;
 static cJSON *layout_root;
 static tile_view_t tiles[TILE_MAX];
 static int tile_count;
+/* Regeln liegen einmal für alle Kacheln, nicht zwölfmal in jeder Kachel. */
+static value_rule_t value_rule_pool[VALUE_RULE_POOL];
+static int value_rule_used;
 
 /* Kamerabilder liegen im Speicher, nicht im Flash. Zwei RGB565-Flächen je Kachel:
  * eine wird gezeigt, die andere wird dekodiert. Das letzte Bild bleibt beim Seitenwechsel erhalten. */
@@ -577,6 +585,7 @@ static const icon_cp_t ICON_CP[] = {
     {"smokeOff", 0xF1809}, {"windowOpen", 0xF05B1}, {"blindsOpen", 0xF1011},
     {"blindsClosed", 0xF00AC}, {"bathtub", 0xF1818}, {"armchair", 0xF156E},
     {"floorLamp", 0xF08DD}, {"book", 0xF00BA}, {"power", 0xF0425},
+    {"desk", 0xF1239}, {"hammerWrench", 0xF188D},
 };
 
 static const char *pua(unsigned cp)
@@ -672,7 +681,9 @@ static const value_rule_t *value_rule_match(const tile_view_t *view)
 {
     if (!view) return NULL;
     for (int i = 0; i < view->value_rule_count; i++) {
-        const value_rule_t *rule = &view->value_rules[i];
+        int slot = view->value_rule_first + i;
+        if (slot < 0 || slot >= value_rule_used) break;
+        const value_rule_t *rule = &value_rule_pool[slot];
         if (!rule->has_from && !rule->has_to) return rule;
         if (!view->have_number) continue;
         if (rule->has_from && view->live_number < rule->from - 0.0001f) continue;
@@ -715,6 +726,83 @@ static bool apply_value_rule_icon(tile_view_t *view, lv_coord_t text_h)
     lv_obj_set_style_flex_grow(view->icon_label, 0, 0);
     paint_icon_label(view->icon_label, icon, false, text_h > 36, ink);
     return true;
+}
+
+static void place_cover_image(tile_view_t *view, const char *file, int box_w, int box_h);
+
+static void apply_image_switch(tile_view_t *view, const value_rule_t *rule)
+{
+    bool picture = rule && rule->image_file[0];
+    if (view->image_img) {
+        if (picture) {
+            lv_obj_clear_flag(view->image_img, LV_OBJ_FLAG_HIDDEN);
+            int box_w = view->card ? lv_obj_get_width(view->card) : 0;
+            int box_h = view->card ? lv_obj_get_height(view->card) : 0;
+            if (box_w < 16) box_w = 120;
+            if (box_h < 16) box_h = 80;
+            bool file_changed = strcmp(view->rule_image, rule->image_file) != 0;
+            bool size_changed = lv_obj_get_width(view->image_img) != box_w || lv_obj_get_height(view->image_img) != box_h;
+            if (file_changed || size_changed) {
+                snprintf(view->rule_image, sizeof(view->rule_image), "%s", rule->image_file);
+                place_cover_image(view, rule->image_file, box_w, box_h);
+            }
+            if (rule->has_icon_color) {
+                lv_obj_set_style_img_recolor(view->image_img, lv_color_hex(rule->icon_color), 0);
+                lv_obj_set_style_img_recolor_opa(view->image_img, LV_OPA_50, 0);
+            } else {
+                lv_obj_set_style_img_recolor_opa(view->image_img, LV_OPA_TRANSP, 0);
+            }
+        } else {
+            lv_obj_add_flag(view->image_img, LV_OBJ_FLAG_HIDDEN);
+            view->rule_image[0] = 0;
+        }
+    }
+    if (view->icon_label) {
+        if (!picture && rule && rule->icon[0]) {
+            uint32_t ink = rule->has_icon_color ? rule->icon_color : icon_ink(view);
+            lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+            paint_icon_label(view->icon_label, rule->icon, false, true, ink);
+        } else {
+            lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+/* Schalter und Bildschalter: die erste passende Zeile setzt Symbol, Text und Farbe. */
+static void apply_action_rules(tile_view_t *view, int number)
+{
+    if (!view || view->value_rule_count <= 0) return;
+    view->have_number = true;
+    view->live_number = (float) number;
+    const value_rule_t *rule = value_rule_match(view);
+    if (strcmp(view->control, "image") == 0) {
+        apply_image_switch(view, rule);
+        return;
+    }
+    if (view->icon_label) {
+        if (rule && rule->icon[0]) {
+            uint32_t ink = rule->has_icon_color ? rule->icon_color : icon_ink(view);
+            lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+            paint_icon_label(view->icon_label, rule->icon, false, true, ink);
+        } else {
+            lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (view->label) {
+        if (rule && rule->text[0]) {
+            lv_obj_clear_flag(view->label, LV_OBJ_FLAG_HIDDEN);
+            label_set_folded(view->label, rule->text);
+            if (rule->has_text_color) lv_obj_set_style_text_color(view->label, lv_color_hex(rule->text_color), 0);
+        } else if (!view->show_state_text) {
+            lv_obj_add_flag(view->label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (view->card && rule && rule->has_bg_color) {
+        lv_obj_set_style_bg_color(view->card, lv_color_hex(rule->bg_color), 0);
+        lv_obj_set_style_bg_opa(view->card, LV_OPA_COVER, 0);
+    } else if (view->card && !view->bg_clear) {
+        lv_obj_set_style_bg_color(view->card, lv_color_hex(view->base_bg), 0);
+    }
 }
 
 /* Überschrift als Icon-vor-Text-Zeile. Zahl und Symbol darunter vertikal mittig. */
@@ -935,7 +1023,7 @@ static bool value_is_on(const tile_view_t *tile, int value)
 {
     if (!tile) return false;
     if (control_is_dimmer(tile->control)) return value != tile->value_off;
-    if (strcmp(tile->control, "switch") == 0) return value == tile->value_on;
+    if (strcmp(tile->control, "switch") == 0 || strcmp(tile->control, "image") == 0) return value == tile->value_on;
     return value > tile->value_min;
 }
 
@@ -1039,13 +1127,17 @@ static void tile_event(lv_event_t *event)
     }
     int next = toggle_target(tile);
     tile->value = next;
-    refresh_icons(tile, value_is_on(tile, next));
     hold_target(tile, next);
-    if (tile->card) {
-        lv_obj_set_style_bg_color(tile->card, lv_color_hex(value_is_on(tile, next) ? tile_on_color(tile) : tile->base_bg), 0);
-    }
-    if (tile->label && tile->show_state_text) {
-        label_set_folded(tile->label, value_is_on(tile, next) ? "Ein" : "Aus");
+    if (tile->value_rule_count > 0) {
+        apply_action_rules(tile, next);
+    } else {
+        refresh_icons(tile, value_is_on(tile, next));
+        if (tile->card) {
+            lv_obj_set_style_bg_color(tile->card, lv_color_hex(value_is_on(tile, next) ? tile_on_color(tile) : tile->base_bg), 0);
+        }
+        if (tile->label && tile->show_state_text) {
+            label_set_folded(tile->label, value_is_on(tile, next) ? "Ein" : "Aus");
+        }
     }
     action_callback(tile->tile_id, tile->action_id, next);
 }
@@ -2606,6 +2698,7 @@ static void show_page(int index)
     }
     lv_obj_clean(grid);
     tile_count = 0;
+    value_rule_used = 0;
     chart_slot_count = 0;
     system_label = NULL;
     ui_wdt_kick();
@@ -3022,9 +3115,11 @@ static void show_page(int index)
         if (cJSON_IsArray(rules)) {
             cJSON *rule = NULL;
             cJSON_ArrayForEach(rule, rules) {
-                if (view->value_rule_count >= VALUE_RULE_MAX) break;
+                if (view->value_rule_count >= VALUE_RULE_MAX || value_rule_used >= VALUE_RULE_POOL) break;
                 if (!cJSON_IsObject(rule)) continue;
-                value_rule_t *slot = &view->value_rules[view->value_rule_count++];
+                if (view->value_rule_count == 0) view->value_rule_first = value_rule_used;
+                value_rule_t *slot = &value_rule_pool[value_rule_used++];
+                view->value_rule_count++;
                 memset(slot, 0, sizeof(*slot));
                 cJSON *from = cJSON_GetObjectItem(rule, "from");
                 cJSON *to = cJSON_GetObjectItem(rule, "to");
@@ -3055,6 +3150,12 @@ static void show_page(int index)
                     slot->bg_color = parse_hex_color(bg_ink, view->base_bg);
                     slot->has_bg_color = true;
                 }
+                const char *rule_text = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "text"));
+                if (rule_text) snprintf(slot->text, sizeof(slot->text), "%.15s", rule_text);
+                const char *image_id = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "imageId"));
+                if (image_id) snprintf(slot->image_id, sizeof(slot->image_id), "%.19s", image_id);
+                const char *image_file = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "imageFile"));
+                if (image_file) snprintf(slot->image_file, sizeof(slot->image_file), "%.27s", image_file);
             }
         }
 
@@ -3400,7 +3501,8 @@ static void show_page(int index)
                 view->base_bg = theme_button;
                 lv_obj_set_style_bg_color(view->card, lv_color_hex(view->base_bg), 0);
             }
-            if (view->show_icon) {
+            bool image_switch = strcmp(view->control, "image") == 0;
+            if (image_switch || view->show_icon || view->value_rule_count > 0) {
                 lv_coord_t icon_y = view->show_state_text ? -6 : (show_title ? 16 : 4);
                 const char *shown = icon_toggle ? view->icon_off : (icon && icon[0] ? icon : "lightOff");
                 view->icon_large = true;
@@ -3408,6 +3510,14 @@ static void show_page(int index)
                 paint_icon_label(view->icon_label, shown, false, true, icon_state_ink(view, false));
                 lv_obj_align(view->icon_label, LV_ALIGN_CENTER, 0, icon_y);
                 lv_obj_clear_flag(view->icon_label, LV_OBJ_FLAG_CLICKABLE);
+                if (view->value_rule_count > 0 && !view->show_icon) lv_obj_add_flag(view->icon_label, LV_OBJ_FLAG_HIDDEN);
+            }
+            if (image_switch) {
+                view->image_img = lv_img_create(view->card);
+                lv_obj_set_style_bg_opa(view->image_img, LV_OPA_TRANSP, 0);
+                lv_obj_center(view->image_img);
+                lv_obj_add_flag(view->image_img, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(view->image_img, LV_OBJ_FLAG_CLICKABLE);
             }
             if (view->show_state_text) {
                 lv_label_set_text(view->label, "Aus");
@@ -3416,6 +3526,7 @@ static void show_page(int index)
                 lv_obj_add_flag(view->label, LV_OBJ_FLAG_HIDDEN);
             }
             lv_obj_add_event_cb(view->card, tile_event, LV_EVENT_CLICKED, view);
+            if (view->value_rule_count > 0) apply_action_rules(view, view->value_off);
         } else if (plain_value) {
             view->value_row = true;
             view->show_title_row = show_title;
@@ -4732,7 +4843,7 @@ static void apply_state_body(cJSON *root)
                 number = (int) value->valuedouble;
                 has_number = true;
             } else if (cJSON_IsBool(value)) {
-                if (control_is_dimmer(tiles[index].control) || strcmp(tiles[index].control, "switch") == 0) {
+                if (control_is_dimmer(tiles[index].control) || strcmp(tiles[index].control, "switch") == 0 || strcmp(tiles[index].control, "image") == 0) {
                     number = cJSON_IsTrue(value) ? tiles[index].value_on : tiles[index].value_off;
                 } else {
                     number = cJSON_IsTrue(value) ? 1 : 0;
@@ -4818,10 +4929,12 @@ static void apply_state_body(cJSON *root)
             if (tiles[index].value_row) layout_value_row(&tiles[index]);
             if (control_is_dimmer(tiles[index].control)) {
                 paint_dim_label(&tiles[index]);
+            } else if (tiles[index].value_rule_count > 0 && (strcmp(tiles[index].control, "switch") == 0 || strcmp(tiles[index].control, "image") == 0)) {
+                apply_action_rules(&tiles[index], number);
             } else if (tiles[index].has_action && tiles[index].label && tiles[index].show_state_text) {
                 label_set_folded(tiles[index].label, on ? "Ein" : "Aus");
             }
-            if (tiles[index].has_action && tiles[index].card && strcmp(tiles[index].control, "switch") == 0) {
+            if (tiles[index].value_rule_count == 0 && tiles[index].has_action && tiles[index].card && strcmp(tiles[index].control, "switch") == 0) {
                 lv_obj_set_style_bg_color(tiles[index].card,
                     lv_color_hex(on ? tile_on_color(&tiles[index]) : tiles[index].base_bg), 0);
             }
@@ -4829,7 +4942,7 @@ static void apply_state_body(cJSON *root)
             if (rule && rule->has_bg_color && tiles[index].card) {
                 lv_obj_set_style_bg_color(tiles[index].card, lv_color_hex(rule->bg_color), 0);
                 lv_obj_set_style_bg_opa(tiles[index].card, LV_OPA_COVER, 0);
-            } else if (tiles[index].value_rule_count > 0 && tiles[index].card && !tiles[index].bg_clear) {
+            } else if (tiles[index].value_row && tiles[index].value_rule_count > 0 && tiles[index].card && !tiles[index].bg_clear) {
                 lv_obj_set_style_bg_color(tiles[index].card, lv_color_hex(tiles[index].base_bg), 0);
             } else if (!tiles[index].bg_clear && !tiles[index].has_action && tiles[index].has_threshold && tiles[index].card) {
                 uint32_t bg = tiles[index].base_bg;

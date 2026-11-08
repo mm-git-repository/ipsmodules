@@ -2,6 +2,19 @@
 
 declare(strict_types=1);
 
+final class HomeDisplayTileException extends InvalidArgumentException
+{
+    public string $pageId = '';
+    public string $tileId = '';
+
+    public function __construct(string $message, string $pageId, string $tileId)
+    {
+        parent::__construct($message);
+        $this->pageId = $pageId;
+        $this->tileId = $tileId;
+    }
+}
+
 /**
  * Vertrag einer Kachel: Seite, Rasterzelle, Art, Symbol, Variable und freigegebene Aktion.
  * Eine Kachel kann das Raster verlassen: dann gelten x und y in Pixeln der Inhaltsfläche.
@@ -33,6 +46,7 @@ final class HomeDisplayPanelSchema
         'bubbles', 'bubbleChart', 'waves', 'shutterOpen', 'valveOpen', 'valveClosed', 'pumpOff', 'doorOpen', 'doorClosed',
         'garageOpen', 'lockOpen', 'fanOff', 'plugOff', 'bellOff', 'wifiOff', 'speakerOff', 'tvOff', 'waterOff', 'coolOff',
         'fireOff', 'motionOff', 'smokeOff', 'windowOpen', 'blindsOpen', 'blindsClosed',
+        'desk', 'hammerWrench',
     ];
 
     public const BATTERY_LABELS = ['inside', 'left', 'right', 'top', 'bottom'];
@@ -77,7 +91,7 @@ final class HomeDisplayPanelSchema
     public const ACTIONS = ['switch', 'dim', 'position'];
 
     /** switch: Tippen. dimSwitch: Ein/Aus eines Dimmwerts. slider: nur Ziehen. combo: Schalter und Balken. battery: Ladestand grafisch. */
-    public const CONTROLS = ['switch', 'dimSwitch', 'slider', 'combo', 'battery', 'blinds', 'setpoint'];
+    public const CONTROLS = ['switch', 'image', 'dimSwitch', 'slider', 'combo', 'battery', 'blinds', 'setpoint'];
 
     public const COLORS = ['neutral', 'ok', 'warn', 'alarm'];
 
@@ -276,7 +290,7 @@ final class HomeDisplayPanelSchema
                         }
                     }
                 }
-                self::validateKind($tile, $kind, $pageIds, $publish);
+                self::validateKind($page, $tile, $kind, $pageIds, $publish);
             }
             /* Nur Wert-Kacheln dürfen auf einem Hintergrundbild liegen, wie im Editor. */
             foreach ($coverCells as $key => $unused) {
@@ -612,6 +626,15 @@ final class HomeDisplayPanelSchema
                                     $item[$key] = $ruleColor;
                                 }
                             }
+                            $ruleText = trim((string) ($rule['text'] ?? ''));
+                            if ($ruleText !== '') {
+                                $item['text'] = mb_substr($ruleText, 0, 16);
+                            }
+                            $imageId = strtolower(trim((string) ($rule['imageId'] ?? '')));
+                            if (preg_match('/^[a-f0-9]{16}$/', $imageId)) {
+                                $item['imageId'] = $imageId;
+                                $item['imageFile'] = HomeDisplayCatalogStore::panelImageFileName($imageId);
+                            }
                             $rules[] = (object) $item;
                         }
                         if ($rules !== []) {
@@ -643,8 +666,8 @@ final class HomeDisplayPanelSchema
                             }
                         }
                     }
-                    if ($control === 'switch' || in_array($control, ['dimSwitch', 'slider', 'combo'], true)) {
-                        $dim = $control !== 'switch';
+                    if ($control === 'switch' || $control === 'image' || in_array($control, ['dimSwitch', 'slider', 'combo'], true)) {
+                        $dim = $control !== 'switch' && $control !== 'image';
                         $public['valueOn'] = array_key_exists('valueOn', $tile)
                             ? (float) $tile['valueOn']
                             : ($dim ? (float) ($tile['valueMax'] ?? 100) : 1.0);
@@ -843,85 +866,21 @@ final class HomeDisplayPanelSchema
                 continue;
             }
             foreach ($page['tiles'] ?? [] as $tile) {
-                if (is_array($tile) && ($tile['kind'] ?? '') === 'image' && (string) ($tile['imageId'] ?? '') !== '') {
+                if (!is_array($tile)) {
+                    continue;
+                }
+                if (($tile['kind'] ?? '') === 'image' && (string) ($tile['imageId'] ?? '') !== '') {
                     $ids[(string) $tile['imageId']] = true;
+                }
+                foreach ($tile['valueRules'] ?? [] as $rule) {
+                    $ruleId = (string) (is_array($rule) ? ($rule['imageId'] ?? '') : '');
+                    if ($ruleId !== '') {
+                        $ids[$ruleId] = true;
+                    }
                 }
             }
         }
         return array_keys($ids);
-    }
-
-    /**
-     * @param list<array<string, mixed>> $rows
-     * @return array<string, mixed>
-     */
-    public static function layoutFromRows(array $rows, string $name): array
-    {
-        usort($rows, static function ($left, $right) {
-            return (int) ($left['Position'] ?? 0) <=> (int) ($right['Position'] ?? 0);
-        });
-        $pages = [];
-        $gridProfile = self::profile(self::defaultProfileId());
-        foreach (self::PAGES as $id => $title) {
-            $pages[$id] = [
-                'id' => $id, 'title' => $title,
-                'columns' => (int) $gridProfile['defaultColumns'], 'rows' => (int) $gridProfile['defaultRows'],
-                'tiles' => [],
-            ];
-        }
-        $index = 0;
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $pageId = (string) ($row['Page'] ?? 'start');
-            if (!isset($pages[$pageId])) {
-                continue;
-            }
-            $index++;
-            $action = !empty($row['Action']);
-            $tile = [
-                'tileId' => 't' . $index,
-                'kind' => 'value',
-                'icon' => (string) ($row['Icon'] ?? 'energy'),
-                'title' => (string) ($row['Title'] ?? 'Kachel'),
-                'col' => (int) ($row['Col'] ?? 0),
-                'row' => (int) ($row['Row'] ?? 0),
-                'colSpan' => 1,
-                'rowSpan' => 1,
-                'variableId' => (int) ($row['VariableID'] ?? 0),
-                'unit' => (string) ($row['Unit'] ?? ''),
-                'decimals' => (int) ($row['Decimals'] ?? 0),
-            ];
-            $control = (string) ($row['Control'] ?? 'switch');
-            if (in_array($control, self::CONTROLS, true) && $control !== 'switch') {
-                $tile['control'] = $control;
-            }
-            if ($action || in_array($control, ['dimSwitch', 'slider', 'combo'], true)) {
-                $tile['actionId'] = 'a' . $index;
-                $tile['actionKind'] = in_array($control, ['dimSwitch', 'slider', 'combo'], true)
-                    ? 'dim'
-                    : (string) ($row['ActionKind'] ?? 'switch');
-                $tile['confirm'] = !empty($row['Confirm']);
-                if ($tile['actionKind'] === 'dim') {
-                    $tile['valueMin'] = 0;
-                    $tile['valueMax'] = 100;
-                }
-            }
-            $pages[$pageId]['tiles'][] = $tile;
-        }
-        $used = array_values(array_filter($pages, static function ($page) {
-            return $page['tiles'] !== [];
-        }));
-        if ($used === []) {
-            $used = [$pages['start']];
-        }
-        return [
-            'name' => $name,
-            'displayProfile' => self::defaultProfileId(),
-            'showTabs' => true,
-            'pages' => $used,
-        ];
     }
 
     /**
@@ -1017,60 +976,6 @@ final class HomeDisplayPanelSchema
         ];
     }
 
-    /** @return list<array<string, mixed>> */
-    public static function presetRows(string $name): array
-    {
-        $presets = [
-            'energy' => [
-                ['Page' => 'energie', 'Icon' => 'energy', 'Title' => 'Netzbezug'],
-                ['Page' => 'energie', 'Icon' => 'energy', 'Title' => 'Einspeisung'],
-                ['Page' => 'energie', 'Icon' => 'energy', 'Title' => 'Erzeugung'],
-                ['Page' => 'energie', 'Icon' => 'energy', 'Title' => 'Verbrauch'],
-            ],
-            'whirl' => [
-                ['Page' => 'pool', 'Icon' => 'temperature', 'Title' => 'Whirlpool Temperatur'],
-                ['Page' => 'pool', 'Icon' => 'pump', 'Title' => 'Whirlpool Pumpe', 'Action' => true, 'ActionKind' => 'switch'],
-                ['Page' => 'pool', 'Icon' => 'temperature', 'Title' => 'Whirlpool Heizung', 'Action' => true, 'ActionKind' => 'switch'],
-            ],
-            'pool' => [
-                ['Page' => 'pool', 'Icon' => 'temperature', 'Title' => 'pH'],
-                ['Page' => 'pool', 'Icon' => 'alarm', 'Title' => 'ORP'],
-                ['Page' => 'pool', 'Icon' => 'pump', 'Title' => 'Pool Pumpe', 'Action' => true, 'ActionKind' => 'switch'],
-            ],
-            'tuya' => [
-                ['Page' => 'pool', 'Icon' => 'temperature', 'Title' => 'Wassertemperatur'],
-                ['Page' => 'pool', 'Icon' => 'alarm', 'Title' => 'Leitfähigkeit'],
-                ['Page' => 'pool', 'Icon' => 'alarm', 'Title' => 'Chlor'],
-            ],
-            'gardena' => [
-                ['Page' => 'garten', 'Icon' => 'valve', 'Title' => 'Ventil A', 'Action' => true, 'ActionKind' => 'switch', 'Confirm' => true],
-                ['Page' => 'garten', 'Icon' => 'valve', 'Title' => 'Ventil B', 'Action' => true, 'ActionKind' => 'switch', 'Confirm' => true],
-                ['Page' => 'garten', 'Icon' => 'alarm', 'Title' => 'Sensor'],
-            ],
-        ];
-        if (!isset($presets[$name])) {
-            throw new InvalidArgumentException('Unbekannte Vorlage.');
-        }
-        $rows = [];
-        foreach ($presets[$name] as $index => $tile) {
-            $rows[] = [
-                'Position' => $index + 1,
-                'Page' => $tile['Page'],
-                'Col' => $index % 2,
-                'Row' => intdiv($index, 2),
-                'Icon' => $tile['Icon'],
-                'Title' => $tile['Title'],
-                'VariableID' => 0,
-                'Unit' => '',
-                'Decimals' => 0,
-                'Action' => !empty($tile['Action']),
-                'Confirm' => !empty($tile['Confirm']),
-                'ActionKind' => $tile['ActionKind'] ?? 'switch',
-            ];
-        }
-        return $rows;
-    }
-
     /** @param array<string, mixed> $tile */
     private static function rejectForeignKeys(array $tile): void
     {
@@ -1157,7 +1062,22 @@ final class HomeDisplayPanelSchema
         return $rows;
     }
 
-    private static function validateKind(array $tile, string $kind, array $pageIds, bool $publish): void
+    private static function failTile(array $page, array $tile, string $detail): void
+    {
+        $pageTitle = trim((string) ($page['title'] ?? $page['id'] ?? ''));
+        $tileTitle = trim((string) ($tile['title'] ?? ''));
+        if ($tileTitle === '') {
+            $tileTitle = (string) ($tile['tileId'] ?? 'Kachel');
+        }
+        throw new HomeDisplayTileException(
+            'Seite „' . $pageTitle . '“, Kachel „' . $tileTitle . '“: ' . $detail,
+            (string) ($page['id'] ?? ''),
+            (string) ($tile['tileId'] ?? '')
+        );
+    }
+
+    /** @param array<string, mixed> $page @param array<string, mixed> $tile @param list<string> $pageIds */
+    private static function validateKind(array $page, array $tile, string $kind, array $pageIds, bool $publish): void
     {
         if ($kind === 'value') {
             $source = (string) ($tile['displaySource'] ?? 'variable');
@@ -1166,7 +1086,7 @@ final class HomeDisplayPanelSchema
             }
             if ($source === 'text') {
                 if ($publish && trim((string) ($tile['text'] ?? '')) === '') {
-                    throw new InvalidArgumentException('Wertkachel ohne Text.');
+                    self::failTile($page, $tile, 'braucht Text.');
                 }
                 $icon = (string) ($tile['icon'] ?? '');
                 if ($icon !== '' && !in_array($icon, self::ICONS, true)) {
@@ -1197,7 +1117,7 @@ final class HomeDisplayPanelSchema
             $actionId = trim((string) ($tile['actionId'] ?? ''));
             if ($actionId === '' && !isset($tile['control'])) {
                 if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) ($tile['variableId'] ?? 0)))) {
-                    throw new InvalidArgumentException('Wertkachel ohne Variable.');
+                    self::failTile($page, $tile, 'braucht eine Variable.');
                 }
                 return;
             }
@@ -1207,7 +1127,7 @@ final class HomeDisplayPanelSchema
             }
             if ($control === 'battery') {
                 if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) $tile['variableId']))) {
-                    throw new InvalidArgumentException('Batteriekachel ohne Variable.');
+                    self::failTile($page, $tile, 'braucht eine Variable.');
                 }
                 $batteryLabel = (string) ($tile['batteryLabel'] ?? 'inside');
                 if ($batteryLabel !== '' && !in_array($batteryLabel, self::BATTERY_LABELS, true)) {
@@ -1237,13 +1157,13 @@ final class HomeDisplayPanelSchema
             if ($control === 'setpoint') {
                 $setpointId = (int) ($tile['setpointVariableId'] ?? 0);
                 if ($publish && ($setpointId <= 0 || !IPS_VariableExists($setpointId))) {
-                    throw new InvalidArgumentException('Setpoint ohne Sollwert-Variable.');
+                    self::failTile($page, $tile, 'braucht eine Sollwert-Variable.');
                 }
                 if ($publish && trim((string) ($tile['actionId'] ?? '')) === '') {
                     throw new InvalidArgumentException('Setpoint ohne schaltbare Sollwert-Aktion.');
                 }
             }
-            self::validateAction($tile, $publish);
+            self::validateAction($page, $tile, $publish);
             return;
         }
         if ($kind === 'nav') {
@@ -1259,7 +1179,7 @@ final class HomeDisplayPanelSchema
         }
         if ($kind === 'label') {
             if (trim((string) ($tile['text'] ?? '')) === '') {
-                throw new InvalidArgumentException('Textkachel ohne Text.');
+                self::failTile($page, $tile, 'braucht Text.');
             }
             $labelStyle = (string) ($tile['labelStyle'] ?? 'text');
             if (!in_array($labelStyle, self::LABEL_STYLES, true)) {
@@ -1312,12 +1232,12 @@ final class HomeDisplayPanelSchema
                 foreach ($required as $flowKey) {
                     $vid = (int) ($tile[$flowKey] ?? 0);
                     if ($vid <= 0 || !IPS_VariableExists($vid)) {
-                        throw new InvalidArgumentException('Energiefluss: Pflicht-Variable fehlt oder existiert nicht (' . $flowKey . ').');
+                        self::failTile($page, $tile, 'Pflicht-Variable fehlt oder existiert nicht (' . $flowKey . ').');
                     }
                 }
                 $soc = (int) ($tile['batterySocVariableId'] ?? 0);
                 if ($soc > 0 && !IPS_VariableExists($soc)) {
-                    throw new InvalidArgumentException('Energiefluss: SOC-Variable existiert nicht.');
+                    self::failTile($page, $tile, 'SOC-Variable existiert nicht.');
                 }
             }
             return;
@@ -1336,15 +1256,15 @@ final class HomeDisplayPanelSchema
             }
             $defs = HomeDisplayChart::seriesDefinitions($tile);
             if ($publish && $defs === []) {
-                throw new InvalidArgumentException('Diagrammkachel ohne Variable.');
+                self::failTile($page, $tile, 'braucht eine Variable.');
             }
             foreach ($defs as $def) {
                 $vid = (int) $def['variableId'];
                 if ($publish && !IPS_VariableExists($vid)) {
-                    throw new InvalidArgumentException('Diagrammkachel: Variable existiert nicht.');
+                    self::failTile($page, $tile, 'Variable existiert nicht.');
                 }
                 if ($publish && !HomeDisplayChart::variableLogged($vid)) {
-                    throw new InvalidArgumentException('Diagrammkachel: Variable „' . $vid . '“ ist nicht archiviert.');
+                    self::failTile($page, $tile, 'Variable „' . $vid . '“ ist nicht archiviert.');
                 }
             }
             return;
@@ -1385,10 +1305,10 @@ final class HomeDisplayPanelSchema
                     if (!is_array($step)) {
                         throw new InvalidArgumentException('Szenenschritt ungültig.');
                     }
-                    self::assertSwitchable((int) ($step['variableId'] ?? 0), 'Szenen-Lampe');
+                        self::assertSwitchable($page, $tile, (int) ($step['variableId'] ?? 0), 'Szenen-Lampe');
                     $colorId = (int) ($step['colorVariableId'] ?? 0);
                     if ($colorId > 0) {
-                        self::assertSwitchable($colorId, 'Szenen-Farbe');
+                        self::assertSwitchable($page, $tile, $colorId, 'Szenen-Farbe');
                     }
                 }
             }
@@ -1396,17 +1316,17 @@ final class HomeDisplayPanelSchema
         }
         if ($kind === 'weather') {
             if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) $tile['variableId']))) {
-                throw new InvalidArgumentException('Wetterkachel ohne Temperaturvariable.');
+                self::failTile($page, $tile, 'braucht eine Temperaturvariable.');
             }
             $forecast = (int) ($tile['forecastVariableId'] ?? 0);
             if ($publish && $forecast > 0 && !IPS_VariableExists($forecast)) {
-                throw new InvalidArgumentException('Wetterkachel: Prognose-Variable existiert nicht.');
+                self::failTile($page, $tile, 'Prognose-Variable existiert nicht.');
             }
             return;
         }
         if ($kind === 'presence') {
             if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) $tile['variableId']))) {
-                throw new InvalidArgumentException('Anwesenheitskachel ohne Variable.');
+                self::failTile($page, $tile, 'braucht eine Variable.');
             }
             return;
         }
@@ -1428,12 +1348,12 @@ final class HomeDisplayPanelSchema
             }
             if ($source === 'text') {
                 if (trim((string) ($tile['text'] ?? '')) === '') {
-                    throw new InvalidArgumentException('Anzeigekachel ohne Text.');
+                    self::failTile($page, $tile, 'braucht Text.');
                 }
                 return;
             }
             if ($publish && ((int) ($tile['variableId'] ?? 0) <= 0 || !IPS_VariableExists((int) $tile['variableId']))) {
-                throw new InvalidArgumentException('Anzeigekachel ohne Variable.');
+                self::failTile($page, $tile, 'braucht eine Variable.');
             }
             return;
         }
@@ -1453,7 +1373,7 @@ final class HomeDisplayPanelSchema
                 $variableId = (int) ($tile['variableId'] ?? 0);
                 $mediaObjectId = (int) ($tile['mediaObjectId'] ?? 0);
                 if ($publish && !HomeDisplayMedia::publishableMediaBinding($variableId, $mediaObjectId)) {
-                    throw new InvalidArgumentException('Bildkachel ohne Medien-Variable oder Medienobjekt (Bild).');
+                    self::failTile($page, $tile, 'braucht eine Medien-Variable oder ein Medienobjekt.');
                 }
                 return;
             }
@@ -1480,7 +1400,7 @@ final class HomeDisplayPanelSchema
                 }
                 $vid = (int) ($row['variableId'] ?? 0);
                 if ($publish && ($vid <= 0 || !IPS_VariableExists($vid))) {
-                    throw new InvalidArgumentException('Zeile ohne Variable.');
+                    self::failTile($page, $tile, 'eine Zeile braucht eine Variable.');
                 }
             }
             return;
@@ -1501,7 +1421,7 @@ final class HomeDisplayPanelSchema
         if ($kind === 'gauge' || $kind === 'countdown' || $kind === 'appointment') {
             $vid = (int) ($tile['variableId'] ?? 0);
             if ($publish && ($vid <= 0 || !IPS_VariableExists($vid))) {
-                throw new InvalidArgumentException('Kachel ohne Variable.');
+                self::failTile($page, $tile, 'braucht eine Variable.');
             }
             if ($kind === 'countdown') {
                 $mode = (string) ($tile['countdownMode'] ?? 'until');
@@ -1519,12 +1439,12 @@ final class HomeDisplayPanelSchema
             $variableId = (int) ($tile['variableId'] ?? 0);
             $mediaObjectId = (int) ($tile['mediaObjectId'] ?? 0);
             if ($publish && $variableId <= 0 && $mediaObjectId <= 0) {
-                throw new InvalidArgumentException($source === 'media'
-                    ? 'Kamerakachel ohne Medien-Variable oder Medienobjekt.'
-                    : 'Kamerakachel ohne Variable für die Bildadresse.');
+                self::failTile($page, $tile, $source === 'media'
+                    ? 'braucht eine Medien-Variable oder ein Medienobjekt.'
+                    : 'braucht eine Variable für die Bildadresse.');
             }
             if ($publish && $variableId > 0 && !IPS_VariableExists($variableId)) {
-                throw new InvalidArgumentException('Kamerakachel: Variable existiert nicht.');
+                self::failTile($page, $tile, 'Variable existiert nicht.');
             }
             if ($publish) {
                 $hasMedia = HomeDisplayMedia::resolveImageMediaId($tile) > 0;
@@ -1567,19 +1487,19 @@ final class HomeDisplayPanelSchema
         return 'chart_' . substr($safe, 0, 28) . '.png';
     }
 
-    private static function assertSwitchable(int $variableId, string $label): void
+    private static function assertSwitchable(array $page, array $tile, int $variableId, string $label): void
     {
         if ($variableId <= 0 || !function_exists('IPS_VariableExists') || !IPS_VariableExists($variableId)) {
-            throw new InvalidArgumentException($label . ' ohne Variable.');
+            self::failTile($page, $tile, $label . ' ohne Variable.');
         }
         $variable = IPS_GetVariable($variableId);
         if ((int) ($variable['VariableAction'] ?? 0) <= 0 && (int) ($variable['VariableCustomAction'] ?? 0) <= 0) {
-            throw new InvalidArgumentException($label . ' ist nicht schaltbar.');
+            self::failTile($page, $tile, $label . ' ist nicht schaltbar.');
         }
     }
 
-    /** @param array<string, mixed> $tile */
-    private static function validateAction(array $tile, bool $publish): void
+    /** @param array<string, mixed> $page @param array<string, mixed> $tile */
+    private static function validateAction(array $page, array $tile, bool $publish): void
     {
         $actionId = trim((string) ($tile['actionId'] ?? ''));
         if ($actionId === '') {
@@ -1601,11 +1521,11 @@ final class HomeDisplayPanelSchema
             return;
         }
         if ($variableId <= 0 || !function_exists('IPS_VariableExists') || !IPS_VariableExists($variableId)) {
-            throw new InvalidArgumentException('Schaltbare Kachel ohne Variable.');
+            self::failTile($page, $tile, 'braucht eine schaltbare Variable.');
         }
         $variable = IPS_GetVariable($variableId);
         if ((int) ($variable['VariableAction'] ?? 0) <= 0 && (int) ($variable['VariableCustomAction'] ?? 0) <= 0) {
-            throw new InvalidArgumentException('Die Variable hat keine Aktion.');
+            self::failTile($page, $tile, 'die Variable hat keine Aktion.');
         }
     }
 

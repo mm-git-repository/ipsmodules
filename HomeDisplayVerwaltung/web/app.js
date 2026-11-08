@@ -33,7 +33,8 @@ const ICONS = [
   ["smokeOff", "Rauchmelder aus", 0xF1809], ["windowOpen", "Fenster offen", 0xF05B1],
   ["blindsOpen", "Jalousie offen", 0xF1011], ["blindsClosed", "Jalousie zu", 0xF00AC],
   ["bathtub", "Badewanne", 0xF1818], ["armchair", "Sessel", 0xF156E],
-  ["floorLamp", "Stehlampe", 0xF08DD], ["book", "Buch", 0xF00BA], ["power", "Ein/Aus", 0xF0425]
+  ["floorLamp", "Stehlampe", 0xF08DD], ["book", "Buch", 0xF00BA], ["power", "Ein/Aus", 0xF0425],
+  ["desk", "Büro", 0xF1239], ["hammerWrench", "Hobbyraum", 0xF188D]
 ];
 /* Auswahllisten zeigen die Symbole nach dem deutschen Namen sortiert. */
 const ICONS_SORTED = [...ICONS].sort((a, b) => a[1].localeCompare(b[1], "de"));
@@ -311,17 +312,50 @@ function displayMainText(tile, live) {
   return tile.unit ? `${sample} ${tile.unit}` : sample;
 }
 
-function panelSwitchHtml(tile, title, on, iconId, showIcon) {
+function switchRule(tile, on, live) {
+  const number = live ? numericLiveValue(tile, live) : null;
+  if (number !== null) return matchingValueRule(tile, { value: number });
+  return matchingValueRule(tile, { value: on ? valueOnOf(tile) : valueOffOf(tile) });
+}
+
+function panelSwitchHtml(tile, title, on, iconId, showIcon, live) {
   const align = tile && tile.titleAlign === "center" ? "align-center" : (tile && tile.titleAlign === "right" ? "align-right" : "");
   const headingId = tile && titleIconShown(tile) ? titleIconId(tile) : "";
   const headingIcon = headingId ? `<span class="panel-title-icon">${iconVisual(headingId)}</span>` : "";
   const titleHtml = tile && tile.showTitle === false ? "" : `<div class="panel-title ${align}"${titleCss(tile)}>${headingIcon}<span class="panel-title-text">${escapeHtml(title || "")}</span></div>`;
-  const ink = iconStateColor(tile, on);
-  const iconHtml = showIcon
-    ? `<button type="button" class="panel-icon-btn${ink ? " icon-colored" : ""}" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(iconId, on, ink)}</button>`
+  const rule = switchRule(tile, on, live);
+  const shown = (rule && rule.icon) || iconId;
+  const ink = (rule && rule.iconColor) || iconStateColor(tile, on);
+  const iconHtml = (rule ? Boolean(shown) : showIcon)
+    ? `<button type="button" class="panel-icon-btn${ink ? " icon-colored" : ""}" data-icon-toggle aria-pressed="${on ? "true" : "false"}">${iconVisual(shown, on, ink)}</button>`
     : "";
-  const stateHtml = tile && tile.showStateText ? `<div class="panel-state"${cssFont(textPxOf(tile), tile.textBold, tile.textItalic, tile.textUnderline)}>${on ? "Ein" : "Aus"}</div>` : "";
+  const caption = rule ? (rule.text || "") : (tile && tile.showStateText ? (on ? "Ein" : "Aus") : "");
+  const textInk = (rule && rule.textColor) || "";
+  const stateBits = [];
+  if (textPxOf(tile)) stateBits.push(`font-size:${textPxOf(tile)}px`);
+  if (tile && tile.textBold) stateBits.push("font-weight:700");
+  if (tile && tile.textItalic) stateBits.push("font-style:italic");
+  if (tile && tile.textUnderline) stateBits.push("text-decoration:underline");
+  if (textInk) stateBits.push(`color:${textInk}`);
+  const stateHtml = caption ? `<div class="panel-state"${stateBits.length ? ` style="${stateBits.join(";")}"` : ""}>${escapeHtml(caption)}</div>` : "";
   return `<div class="panel-switch">${titleHtml}<div class="panel-icon">${iconHtml}</div>${stateHtml}</div>`;
+}
+
+function panelImageSwitchHtml(tile, title, on, live) {
+  const align = tile && tile.titleAlign === "center" ? "align-center" : (tile && tile.titleAlign === "right" ? "align-right" : "");
+  const headingId = tile && titleIconShown(tile) ? titleIconId(tile) : "";
+  const headingIcon = headingId ? `<span class="panel-title-icon">${iconVisual(headingId)}</span>` : "";
+  const titleHtml = tile && tile.showTitle === false ? "" : `<div class="panel-title ${align}"${titleCss(tile)}>${headingIcon}<span class="panel-title-text">${escapeHtml(title || "")}</span></div>`;
+  const rule = switchRule(tile, on, live);
+  let face = "";
+  if (rule && rule.imageId) {
+    const image = (state.images || []).find((item) => item.id === rule.imageId);
+    const tint = rule.iconColor ? ` style="background:${rule.iconColor}"` : "";
+    face = image ? `<span class="image-switch-face"${tint}><img src="images/${image.id}.${image.ext}" alt=""></span>` : "";
+  } else if (rule && rule.icon) {
+    face = `<span class="image-switch-face">${iconVisual(rule.icon, false, rule.iconColor || "")}</span>`;
+  }
+  return `<div class="panel-switch">${titleHtml}<div class="panel-icon">${face}</div></div>`;
 }
 
 function titleIconEnabled(tile) {
@@ -344,7 +378,7 @@ function titleIconId(tile) {
   const interaction = tile.kind === "value" ? tileInteractionMode(tile) : "";
   const control = tile.control || "";
   const ownOnly = tile.kind === "scene"
-    || (tile.kind === "value" && (interaction === "switch" || (tile.iconMode || "") === "toggle"
+    || (tile.kind === "value" && (interaction === "switch" || interaction === "image" || (tile.iconMode || "") === "toggle"
       || DIM_CONTROLS.includes(control) || (tile.actionKind === "dim" && control !== "setpoint")));
   if (ownOnly) return tile.titleIcon || "";
   return tile.titleIcon || tile.icon || "";
@@ -384,7 +418,9 @@ function normalizeTile(tile) {
       if (!tile.control || tile.control === "switch") tile.control = "switch";
       if (tile.showIcon === undefined) tile.showIcon = true;
     }
-    if (tileInteractionMode(tile) === "" && (tile.displaySource || "variable") !== "text") migrateValueRules(tile);
+    const valueMode = tileInteractionMode(tile);
+    if (valueMode === "" && (tile.displaySource || "variable") !== "text") migrateValueRules(tile);
+    if (valueMode === "switch") migrateSwitchRules(tile);
   }
   if (tile.kind === "scene" && !Array.isArray(tile.sceneSteps) && tile.variableId) {
     tile.sceneSteps = [{ variableId: tile.variableId, value: true }];
@@ -424,6 +460,32 @@ function migrateValueRules(tile) {
   delete tile.iconPlace;
   if (rules.length) tile.valueRules = rules.slice(0, 12);
   else delete tile.valueRules;
+}
+
+function migrateSwitchRules(tile) {
+  const legacy = tile.iconMode === "toggle" || tile.iconOn || tile.iconOff || tile.showStateText || tile.onColor;
+  if (!legacy) return;
+  const onItem = { from: valueOnOf(tile), to: valueOnOf(tile) };
+  if (tile.iconOn) onItem.icon = tile.iconOn;
+  if (tile.iconOnColor) onItem.iconColor = tile.iconOnColor;
+  if (tile.onColor) onItem.bgColor = tile.onColor;
+  if (tile.showStateText) onItem.text = "Ein";
+  const offItem = {};
+  if (tile.iconOff) offItem.icon = tile.iconOff;
+  if (tile.iconOffColor) offItem.iconColor = tile.iconOffColor;
+  if (tile.bgColor) offItem.bgColor = tile.bgColor;
+  if (tile.showStateText) offItem.text = "Aus";
+  const rules = [onItem];
+  if (Object.keys(offItem).length) rules.push(offItem);
+  tile.valueRules = rules.slice(0, 12);
+  delete tile.iconMode;
+  delete tile.iconOn;
+  delete tile.iconOff;
+  delete tile.iconOnColor;
+  delete tile.iconOffColor;
+  delete tile.onColor;
+  delete tile.showIcon;
+  delete tile.showStateText;
 }
 
 function applyTileChrome(element, tile) {
@@ -482,9 +544,10 @@ function chartSvgMarkup(series, style, min, max, emptyText) {
   return `<svg class="oh-chart-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${area}<polyline class="oh-chart-line" points="${poly}"></polyline></svg>`;
 }
 const CONTROL_NAMES = { switch: "Schalter", combo: "Dimmschalter", battery: "Batterie" };
-const INTERACTION_NAMES = { switch: "Schalter (Ein/Aus)", combo: "Dimmschalter", battery: "Batterie", blinds: "Rolladen", setpoint: "Setpoint" };
+const INTERACTION_NAMES = { switch: "Schalter (Ein/Aus)", image: "Bildschalter", combo: "Dimmschalter", battery: "Batterie", blinds: "Rolladen", setpoint: "Setpoint" };
 const INTERACTION_HINTS = {
-  switch: "Ein/Aus. Farbe, Icon und Text sind einzeln wählbar.",
+  switch: "Ein/Aus. Symbol, Text und Farben stehen in der Wertetabelle.",
+  image: "Ein Druck auf das Bild schaltet. Bild oder Symbol stehen in der Wertetabelle.",
   combo: "Dimmer: Schalter, Balken, Prozent, Text und Antippen sind einzeln wählbar.",
   battery: "Ladestand grafisch, ohne Schaltaktion an der Anzeige.",
   blinds: "Position 0–100 % oder Fahrt über schaltbare Variable (Aktionsart Position).",
@@ -533,7 +596,7 @@ function numericLiveValue(tile, live) {
   if (!live) return null;
   if (typeof live.value === "number" && !Number.isNaN(live.value)) return live.value;
   if (typeof live.value === "boolean") {
-    if (DIM_CONTROLS.includes(tile && tile.control) || (tile && tile.control === "switch")) return live.value ? valueOnOf(tile) : valueOffOf(tile);
+    if (DIM_CONTROLS.includes(tile && tile.control) || (tile && (tile.control === "switch" || tile.control === "image"))) return live.value ? valueOnOf(tile) : valueOffOf(tile);
     return live.value ? (tile.valueMax ?? 100) : (tile.valueMin ?? 0);
   }
   if (live.text) {
@@ -558,6 +621,7 @@ function tileInteractionMode(tile) {
   if (tile.control === "battery") return "battery";
   if (tile.control === "blinds") return "blinds";
   if (tile.control === "setpoint") return "setpoint";
+  if (tile.control === "image") return "image";
   if (tile.control === "slider" || tile.control === "combo" || tile.control === "dimSwitch") return "combo";
   if ((tile.iconMode || "") === "toggle" || tile.control === "switch" || tile.actionId) return "switch";
   return "";
@@ -743,10 +807,13 @@ function syncInteractionPropertyPanels() {
   if (!tile || tile.kind !== "value") return;
   const mode = interaction.value;
   const plain = mode === "" || mode === "battery";
-  $("p-icon-static")?.classList.toggle("hidden", mode === "" || mode === "switch" || mode === "battery" || mode === "combo");
-  $("p-switch-wrap")?.classList.toggle("hidden", mode !== "switch");
-  $("p-icon-toggle")?.classList.toggle("hidden", mode !== "switch" || !$("p-show-icon")?.checked);
-  $("p-value-rules")?.classList.toggle("hidden", mode !== "" || ($("p-displaysource")?.value || "variable") === "text");
+  const textSource = ($("p-displaysource")?.value || "variable") === "text";
+  const tableMode = textSource ? "" : (mode === "switch" || mode === "image" || mode === "" ? mode : "");
+  $("p-icon-static")?.classList.toggle("hidden", mode === "" || mode === "switch" || mode === "image" || mode === "battery" || mode === "combo");
+  $("p-switch-wrap")?.classList.add("hidden");
+  $("p-icon-toggle")?.classList.add("hidden");
+  $("p-value-rules")?.classList.toggle("hidden", textSource || (mode !== "" && mode !== "switch" && mode !== "image"));
+  if (tableMode === "switch" || tableMode === "image" || tableMode === "") syncRuleHead(tableMode === "" ? "value" : tableMode);
   $("p-battery-wrap")?.classList.toggle("hidden", mode !== "battery");
   const hintEl = $("p-control-hint");
   if (hintEl) {
@@ -754,7 +821,6 @@ function syncInteractionPropertyPanels() {
     hintEl.textContent = hint;
     hintEl.classList.toggle("hidden", !hint);
   }
-  $("p-interaction")?.closest("label")?.classList.toggle("hidden", mode === "");
   const actionLabel = $("p-action")?.closest("label");
   if (actionLabel) actionLabel.classList.toggle("hidden", mode === "" || mode === "battery");
   $("p-confirm")?.closest("label")?.classList.toggle("hidden", mode === "");
@@ -771,11 +837,11 @@ function syncInteractionPropertyPanels() {
   const both = mode === "combo" && $("p-dim-show-switch")?.checked && $("p-dim-show-bar")?.checked;
   $("p-dim-layout-wrap")?.classList.toggle("hidden", !both);
   $("p-dim-tap-wrap")?.classList.toggle("hidden", mode !== "combo" && mode !== "blinds");
-  $("p-value-format")?.classList.toggle("hidden", mode === "switch");
-  $("p-own-on-wrap")?.classList.toggle("hidden", mode !== "switch" && mode !== "combo");
-  $("p-level-wrap")?.classList.toggle("hidden", mode !== "switch" && mode !== "combo");
+  $("p-value-format")?.classList.toggle("hidden", mode === "switch" || mode === "image");
+  $("p-own-on-wrap")?.classList.toggle("hidden", mode !== "combo");
+  $("p-level-wrap")?.classList.toggle("hidden", mode !== "switch" && mode !== "image" && mode !== "combo");
   const bgLabel = $("p-own-bg-label");
-  if (bgLabel) bgLabel.textContent = mode === "switch" || mode === "combo" ? "Farbe Aus" : "Kachel-Farbe";
+  if (bgLabel) bgLabel.textContent = mode === "combo" ? "Farbe Aus" : "Kachel-Farbe";
   if (plain) { /* Anzeige ohne Schaltergrafik */ }
 }
 
@@ -785,7 +851,8 @@ function syncDisplaySourcePanels() {
   $("p-variable-wrap")?.classList.toggle("hidden", text);
   $("p-display-text-wrap")?.classList.toggle("hidden", !text);
   $("p-decimals")?.closest("label")?.classList.toggle("hidden", text);
-  $("p-value-rules")?.classList.toggle("hidden", !tile || tile.kind !== "value" || text || ($("p-interaction")?.value || "") !== "");
+  const mode = $("p-interaction")?.value || "";
+  $("p-value-rules")?.classList.toggle("hidden", !tile || tile.kind !== "value" || text || (mode !== "" && mode !== "switch" && mode !== "image"));
   if (!text) return;
   $("p-interaction")?.closest("label")?.classList.add("hidden");
   $("p-switch-wrap")?.classList.add("hidden");
@@ -827,28 +894,91 @@ function ruleColorDefaults(tile) {
   };
 }
 
+function ruleTableMode() {
+  const mode = $("p-interaction")?.value || "";
+  if (mode === "switch" || mode === "image") return mode;
+  return "value";
+}
+
+function syncRuleHead(mode) {
+  const box = $("p-value-rules");
+  const head = $("p-value-rules-head");
+  if (!box || !head) return;
+  box.classList.remove("mode-value", "mode-switch", "mode-image");
+  box.classList.add(mode === "switch" || mode === "image" ? `mode-${mode}` : "mode-value");
+  const columns = {
+    value: ["Von", "Bis", "Symbol", "Position", "Symbol", "Text", "Kachel", ""],
+    switch: ["Von", "Bis", "Symbol", "Symbolfarbe", "Anzeigetext", "Textfarbe", "Kachel", ""],
+    image: ["Von", "Bis", "Art", "Bild / Symbol", "Farbe", ""]
+  };
+  head.innerHTML = (columns[mode] || columns.value).map((label) => `<span>${label}</span>`).join("");
+}
+
 function valueRuleRow(rule, tile) {
   const defaults = ruleColorDefaults(tile);
+  const mode = ruleTableMode();
   const row = document.createElement("div");
   row.className = "rule-row";
-  row.innerHTML = `<input data-rule-from type="number" step="any" placeholder="offen">`
-    + `<input data-rule-to type="number" step="any" placeholder="offen">`
-    + `<select data-rule-icon></select>`
-    + `<select data-rule-place><option value="before">Links</option><option value="after">Rechts</option></select>`
-    + `<input data-rule-icon-color type="color" title="Symbolfarbe">`
-    + `<input data-rule-text-color type="color" title="Textfarbe">`
-    + `<input data-rule-bg-color type="color" title="Kachel-Farbe">`
-    + `<button type="button" data-rule-remove title="Zeile entfernen">×</button>`;
-  fillIconSelect(row.querySelector("[data-rule-icon]"), true);
+  const bounds = `<input data-rule-from type="number" step="any" placeholder="offen">`
+    + `<input data-rule-to type="number" step="any" placeholder="offen">`;
+  const remove = `<button type="button" data-rule-remove title="Zeile entfernen">×</button>`;
+  if (mode === "image") {
+    row.innerHTML = bounds
+      + `<select data-rule-kind><option value="image">Bild</option><option value="icon">Symbol</option></select>`
+      + `<select data-rule-image></select><select data-rule-icon class="hidden"></select>`
+      + `<input data-rule-icon-color type="color" title="Farbe">`
+      + remove;
+    fillImageSelect(row.querySelector("[data-rule-image]"));
+    fillIconSelect(row.querySelector("[data-rule-icon]"), true);
+  } else if (mode === "switch") {
+    row.innerHTML = bounds
+      + `<select data-rule-icon></select>`
+      + `<input data-rule-icon-color type="color" title="Symbolfarbe">`
+      + `<input data-rule-text placeholder="kein Text">`
+      + `<input data-rule-text-color type="color" title="Textfarbe">`
+      + `<input data-rule-bg-color type="color" title="Kachel-Farbe">`
+      + remove;
+    fillIconSelect(row.querySelector("[data-rule-icon]"), true);
+  } else {
+    row.innerHTML = bounds
+      + `<select data-rule-icon></select>`
+      + `<select data-rule-place><option value="before">Links</option><option value="after">Rechts</option></select>`
+      + `<input data-rule-icon-color type="color" title="Symbolfarbe">`
+      + `<input data-rule-text-color type="color" title="Textfarbe">`
+      + `<input data-rule-bg-color type="color" title="Kachel-Farbe">`
+      + remove;
+    fillIconSelect(row.querySelector("[data-rule-icon]"), true);
+  }
   const from = ruleBound(rule?.from);
   const to = ruleBound(rule?.to);
   row.querySelector("[data-rule-from]").value = from === null ? "" : String(from);
   row.querySelector("[data-rule-to]").value = to === null ? "" : String(to);
-  row.querySelector("[data-rule-icon]").value = rule?.icon || "";
-  row.querySelector("[data-rule-place]").value = rule?.place === "after" ? "after" : "before";
-  row.querySelector("[data-rule-icon-color]").value = rule?.iconColor || defaults.icon;
-  row.querySelector("[data-rule-text-color]").value = rule?.textColor || defaults.text;
-  row.querySelector("[data-rule-bg-color]").value = rule?.bgColor || defaults.bg;
+  const icon = row.querySelector("[data-rule-icon]");
+  if (icon) icon.value = rule?.icon || "";
+  const place = row.querySelector("[data-rule-place]");
+  if (place) place.value = rule?.place === "after" ? "after" : "before";
+  const iconColor = row.querySelector("[data-rule-icon-color]");
+  if (iconColor) iconColor.value = rule?.iconColor || defaults.icon;
+  const textColor = row.querySelector("[data-rule-text-color]");
+  if (textColor) textColor.value = rule?.textColor || defaults.text;
+  const bgColor = row.querySelector("[data-rule-bg-color]");
+  if (bgColor) bgColor.value = rule?.bgColor || defaults.bg;
+  const text = row.querySelector("[data-rule-text]");
+  if (text) text.value = rule?.text || "";
+  const kind = row.querySelector("[data-rule-kind]");
+  const image = row.querySelector("[data-rule-image]");
+  if (kind && image && icon) {
+    kind.value = rule?.imageId ? "image" : (rule?.icon ? "icon" : "image");
+    image.value = rule?.imageId || "";
+    const showImage = kind.value !== "icon";
+    image.classList.toggle("hidden", !showImage);
+    icon.classList.toggle("hidden", showImage);
+    kind.addEventListener("change", () => {
+      const useImage = kind.value !== "icon";
+      image.classList.toggle("hidden", !useImage);
+      icon.classList.toggle("hidden", useImage);
+    });
+  }
   return row;
 }
 
@@ -857,23 +987,29 @@ function collectValueRules(tile) {
   const host = $("p-value-rules-rows");
   if (!host) return rows;
   const defaults = ruleColorDefaults(tile);
+  const mode = ruleTableMode();
   for (const row of host.querySelectorAll(".rule-row")) {
     const item = {};
     const from = ruleBound(row.querySelector("[data-rule-from]")?.value.trim());
     const to = ruleBound(row.querySelector("[data-rule-to]")?.value.trim());
     if (from !== null) item.from = from;
     if (to !== null) item.to = to;
+    const kind = row.querySelector("[data-rule-kind]")?.value || "";
     const icon = row.querySelector("[data-rule-icon]")?.value || "";
-    if (icon) {
+    const imageId = row.querySelector("[data-rule-image]")?.value || "";
+    if (mode === "image" && kind === "image" && imageId) item.imageId = imageId;
+    else if (icon && !(mode === "image" && kind === "image")) {
       item.icon = icon;
       if (row.querySelector("[data-rule-place]")?.value === "after") item.place = "after";
     }
     const iconColor = chosenColor(row.querySelector("[data-rule-icon-color]"), defaults.icon);
     const textColor = chosenColor(row.querySelector("[data-rule-text-color]"), defaults.text);
     const bgColor = chosenColor(row.querySelector("[data-rule-bg-color]"), defaults.bg);
-    if (icon && iconColor) item.iconColor = iconColor;
+    if ((item.icon || item.imageId) && iconColor) item.iconColor = iconColor;
     if (textColor) item.textColor = textColor;
     if (bgColor) item.bgColor = bgColor;
+    const text = (row.querySelector("[data-rule-text]")?.value || "").trim();
+    if (text) item.text = text.slice(0, 16);
     rows.push(item);
     if (rows.length >= 12) break;
   }
@@ -883,6 +1019,8 @@ function collectValueRules(tile) {
 function renderValueRules(tile) {
   const host = $("p-value-rules-rows");
   if (!host) return;
+  const mode = ruleTableMode();
+  syncRuleHead(mode);
   host.innerHTML = "";
   const rules = Array.isArray(tile?.valueRules) ? tile.valueRules.slice(0, 12) : [];
   for (const rule of rules) host.appendChild(valueRuleRow(rule, tile));
@@ -1878,11 +2016,13 @@ function buildTileElement(tile, context) {
       if (labelPos !== "inside") element.classList.add(`label-${labelPos}`, "label-outside");
     }
     if (control === "setpoint") element.classList.add("setpoint");
-    const switchTile = interaction === "switch" && Boolean(tile.actionId);
+    const switchTile = (interaction === "switch" || interaction === "image") && Boolean(tile.actionId);
     if (switchTile) {
       element.classList.add("as-switch");
       const on = liveIsOn(tile, live, demoOn);
       element.classList.toggle("on", on);
+      const rule = switchRule(tile, on, live);
+      if (rule && rule.bgColor) element.style.setProperty("background", rule.bgColor, "important");
     }
     const showIcon = switchTile && tile.showIcon !== false;
     const dimTile = DIM_CONTROLS.includes(control) || (tile.actionKind === "dim" && control !== "setpoint");
@@ -1892,8 +2032,11 @@ function buildTileElement(tile, context) {
     const displayText = live && live.text ? live.text : (variable ? "12,3" : "—");
     const label = tile.title || (variable ? variable.name : "Wert");
     let on = element.classList.contains("on");
-    if (switchTile) {
-      element.innerHTML = panelSwitchHtml(tile, label, on, iconId, showIcon);
+    if (!switchTile && (interaction === "switch" || interaction === "image")) on = liveIsOn(tile, live, demoOn);
+    if (interaction === "image") {
+      element.innerHTML = panelImageSwitchHtml(tile, label, on, live);
+    } else if (interaction === "switch") {
+      element.innerHTML = panelSwitchHtml(tile, label, on, iconId, true, live);
     } else {
       const stateLine = dimmerStateLine(tile, live, interaction, displayText, body);
       let cardBody;
@@ -3124,7 +3267,7 @@ function renderProperties() {
     if ($("p-show-icon")) $("p-show-icon").checked = tile.showIcon !== false;
     if ($("p-show-state-text")) $("p-show-state-text").checked = tile.showStateText === true;
     if ($("p-interaction")) $("p-interaction").value = tileInteractionMode(tile);
-    renderValueRules(tile);
+    if (!document.activeElement || !document.activeElement.closest("#p-value-rules-rows")) renderValueRules(tile);
     if ($("p-dim-show-switch")) $("p-dim-show-switch").checked = tile.dimShowSwitch !== false;
     if ($("p-dim-show-bar")) $("p-dim-show-bar").checked = tile.dimShowBar !== false;
     if ($("p-dim-show-state-text")) $("p-dim-show-state-text").checked = tile.dimShowStateText === true;
@@ -3226,7 +3369,7 @@ function renderProperties() {
   }
   const ownOnWrap = $("p-own-on-wrap");
   if (ownOnWrap) {
-    const ownOnVisible = tile.kind === "scene" || (tile.kind === "value" && (tileInteractionMode(tile) === "switch" || tileInteractionMode(tile) === "combo"));
+    const ownOnVisible = tile.kind === "scene" || (tile.kind === "value" && tileInteractionMode(tile) === "combo");
     ownOnWrap.classList.toggle("hidden", !ownOnVisible);
   }
   if (tile.kind === "weather") {
@@ -3426,17 +3569,8 @@ function applyProperties() {
     delete tile.control;
     delete tile.batteryPad;
     delete tile.batteryLabel;
-    if (mode === "switch") {
-      tile.control = "switch";
-      if ($("p-show-icon")?.checked) {
-        tile.iconMode = "toggle";
-        tile.iconOn = $("p-iconon").value || "lightOn";
-        tile.iconOff = $("p-iconoff").value || "lightOff";
-        writeIconColors(tile, $("p-icon-colors")?.checked, $("p-icon-off-color"), $("p-icon-on-color"));
-      } else {
-        tile.showIcon = false;
-      }
-      if ($("p-show-state-text")?.checked) tile.showStateText = true;
+    if (mode === "switch" || mode === "image") {
+      tile.control = mode;
       delete tile.icon;
       delete tile.iconPlace;
     } else if (mode === "") {
@@ -3488,7 +3622,7 @@ function applyProperties() {
       tile.valueMax = tile.valueMax ?? 100;
       if (!tile.unit) tile.unit = "%";
     }
-    if (mode === "switch" || mode === "combo") {
+    if (mode === "switch" || mode === "image" || mode === "combo") {
       const onRaw = $("p-value-on") ? $("p-value-on").value.trim() : "";
       const offRaw = $("p-value-off") ? $("p-value-off").value.trim() : "";
       const onNum = Number(onRaw);
@@ -3524,7 +3658,7 @@ function applyProperties() {
       delete tile.dimLayout;
       delete tile.dimTapTrack;
     }
-    if ((mode === "switch" || mode === "combo" || mode === "blinds" || mode === "setpoint") && $("p-action").checked && variable && variable.action) {
+    if ((mode === "switch" || mode === "image" || mode === "combo" || mode === "blinds" || mode === "setpoint") && $("p-action").checked && variable && variable.action) {
       tile.actionId = tile.actionId || `a-${tile.tileId}`;
       tile.actionKind = mode === "blinds" ? "position" : (DIM_CONTROLS.includes(mode) || mode === "setpoint" ? "dim" : "switch");
       tile.confirm = $("p-confirm").checked;
@@ -3533,7 +3667,7 @@ function applyProperties() {
       if (!DIM_CONTROLS.includes(mode)) delete tile.actionKind;
       tile.confirm = false;
     }
-      const rules = mode === "" ? collectValueRules(tile) : [];
+      const rules = (mode === "" || mode === "switch" || mode === "image") ? collectValueRules(tile) : [];
       if (rules.length) tile.valueRules = rules;
       else delete tile.valueRules;
     }
@@ -3999,6 +4133,18 @@ function openPagesDialog(addPage) {
   dialog.showModal();
 }
 
+let pageDragId = "";
+
+function movePageDraft(pages, fromId, targetId, after) {
+  const from = pages.findIndex((item) => item.id === fromId);
+  if (from < 0 || fromId === targetId) return;
+  const [moved] = pages.splice(from, 1);
+  let to = pages.findIndex((item) => item.id === targetId);
+  if (to < 0) to = pages.length;
+  else if (after) to += 1;
+  pages.splice(to, 0, moved);
+}
+
 function renderPagesDialog() {
   const list = $("l-pages");
   const pages = pagesDialog.draft;
@@ -4008,6 +4154,14 @@ function renderPagesDialog() {
   pages.forEach((page, index) => {
     const card = document.createElement("div");
     card.className = "page-card";
+    card.dataset.pageId = page.id;
+    const grip = document.createElement("button");
+    grip.type = "button";
+    grip.className = "page-drag";
+    grip.draggable = true;
+    grip.setAttribute("aria-label", "Seite verschieben");
+    grip.title = "Seite verschieben";
+    grip.innerHTML = "<span></span>";
     const fields = document.createElement("div");
     fields.className = "page-grid";
 
@@ -4070,7 +4224,46 @@ function renderPagesDialog() {
       removeCell
     );
 
-    card.append(fields);
+    const placeDrop = (event) => {
+      const rect = card.getBoundingClientRect();
+      const after = event.clientY > rect.top + rect.height / 2;
+      card.classList.toggle("drop-before", !after);
+      card.classList.toggle("drop-after", after);
+      return after;
+    };
+    grip.addEventListener("dragstart", (event) => {
+      pageDragId = page.id;
+      event.dataTransfer.setData("text/homedisplay-page", page.id);
+      event.dataTransfer.effectAllowed = "move";
+      card.classList.add("dragging");
+    });
+    grip.addEventListener("dragend", () => {
+      pageDragId = "";
+      card.classList.remove("dragging");
+    });
+    card.addEventListener("dragover", (event) => {
+      const types = event.dataTransfer.types ? [...event.dataTransfer.types] : [];
+      if (!pageDragId && !types.includes("text/homedisplay-page")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      placeDrop(event);
+    });
+    card.addEventListener("dragleave", (event) => {
+      if (event.relatedTarget && card.contains(event.relatedTarget)) return;
+      card.classList.remove("drop-before", "drop-after");
+    });
+    card.addEventListener("drop", (event) => {
+      const fromId = event.dataTransfer.getData("text/homedisplay-page") || pageDragId;
+      if (!fromId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const after = placeDrop(event);
+      card.classList.remove("drop-before", "drop-after", "dragging");
+      movePageDraft(pages, fromId, page.id, after);
+      renderPagesDialog();
+    });
+
+    card.append(grip, fields);
     list.appendChild(card);
   });
   $("pages-add").disabled = pages.length >= MAX_PAGES;
@@ -4442,11 +4635,35 @@ for (const item of document.querySelectorAll(".palette-item")) {
 
 /* ---------- Speichern ---------- */
 
+function noteTile(error, page, tile) {
+  error.pageId = page && page.id;
+  error.tileId = tile && tile.tileId;
+  const name = (tile && (tile.title || tile.tileId)) || "";
+  const pageTitle = (page && (page.title || page.id)) || "";
+  const message = String(error.message || "");
+  if (!message.startsWith("Seite „")) {
+    error.message = name && message.includes(name)
+      ? `Seite „${pageTitle}“: ${message}`
+      : `Seite „${pageTitle}“, Kachel „${name}“: ${message}`;
+  }
+  return error;
+}
+
+function revealTile(pageId, tileId) {
+  if (pageId) state.page = pageId;
+  if (tileId) state.selected = tileId;
+  renderPageTabs();
+  renderGrid();
+  const element = tileId ? document.querySelector(`[data-tile-id="${tileId}"]`) : null;
+  if (element) element.scrollIntoView({ block: "center", inline: "center" });
+}
+
 function validateLayout(layout) {
   if (!layout.name) throw new Error("Die Ansicht braucht einen Namen.");
   const seen = new Set();
   for (const page of layout.pages) {
     for (const tile of page.tiles) {
+      try {
       if (seen.has(tile.tileId)) throw new Error("Doppelte Kachelkennung.");
       seen.add(tile.tileId);
       if (tile.kind === "value" && tile.control === "battery" && !tile.variableId) throw new Error(`Die Batteriekachel „${tile.title || tile.tileId}“ braucht eine Variable.`);
@@ -4508,6 +4725,9 @@ function validateLayout(layout) {
           if (!tile.icon) throw new Error("Eine Bildkachel (Symbol) braucht ein Symbol.");
         } else if (!tile.imageId) throw new Error("Eine Bildkachel hat kein Bild.");
       }
+      } catch (error) {
+        throw noteTile(error, page, tile);
+      }
     }
   }
 }
@@ -4538,7 +4758,12 @@ async function store(publish) {
       }
     }
     const result = await call(publish ? "publish" : "save", { layout: state.layout });
-    if (result && result.ok === false) throw new Error(result.error || "Speichern fehlgeschlagen");
+    if (result && result.ok === false) {
+      const error = new Error(result.error || "Speichern fehlgeschlagen");
+      error.pageId = result.pageId;
+      error.tileId = result.tileId;
+      throw error;
+    }
     const previousId = state.layout.id;
     const previousName = state.layout.name;
     state.catalog = await call("catalog");
@@ -4549,6 +4774,7 @@ async function store(publish) {
     renderLayoutSelect();
     setStatus(publish ? "Ansicht veröffentlicht. Die Anzeigen übernehmen sie beim nächsten Abruf." : "Entwurf gespeichert.");
   } catch (error) {
+    if (error.pageId || error.tileId) revealTile(error.pageId, error.tileId);
     setStatus(error.message || "Speichern fehlgeschlagen.");
   }
 }

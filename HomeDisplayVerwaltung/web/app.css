@@ -448,17 +448,20 @@ label.small { font-size: 12px; color: var(--muted); }
   line-height: 1;
 }
 .tile.value .value-badge-title .value-title-icon .mdi { font-size: 1em; line-height: 1; }
-.rule-head, .rule-row {
-  display: grid;
-  grid-template-columns: 72px 72px minmax(0, 1fr) 84px 42px 42px 42px 30px;
-  gap: 6px;
-  align-items: center;
-}
+.rule-head, .rule-row { display: grid; gap: 6px; align-items: center; }
+#p-value-rules.mode-value .rule-head,
+#p-value-rules.mode-value .rule-row { grid-template-columns: 72px 72px minmax(0, 1fr) 84px 42px 42px 42px 30px; }
+#p-value-rules.mode-switch .rule-head,
+#p-value-rules.mode-switch .rule-row { grid-template-columns: 64px 64px minmax(0, 1fr) 96px minmax(72px, 1fr) 84px 64px 30px; }
+#p-value-rules.mode-image .rule-head,
+#p-value-rules.mode-image .rule-row { grid-template-columns: 72px 72px 88px minmax(0, 1fr) 42px 30px; }
 .rule-head { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .rule-row { margin: 4px 0; }
 .rule-row input, .rule-row select { width: 100%; min-width: 0; margin: 0; padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px; }
 .rule-row input[type="color"] { height: 32px; padding: 2px; }
 .rule-row button { height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: white; }
+.image-switch-face { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
+.image-switch-face img { max-width: 100%; max-height: 100%; object-fit: contain; mix-blend-mode: multiply; }
 .tile.value .value-badge-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -501,14 +504,14 @@ label.small { font-size: 12px; color: var(--muted); }
   line-height: 1;
 }
 .tile.value .value-inline-icon .mdi { font-size: 1em; line-height: 1; }
-.font-box {
+.font-box, .section-box {
   border: 1px solid var(--line);
   border-radius: 8px;
   margin: 10px 0;
   padding: 4px 10px 10px;
   min-width: 0;
 }
-.font-box legend {
+.font-box legend, .section-box legend {
   padding: 0 6px;
   font-size: 12px;
   font-weight: 700;
@@ -518,8 +521,8 @@ label.small { font-size: 12px; color: var(--muted); }
 }
 .font-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; margin: 0; }
 .font-box .font-row > label { margin: 0; }
-.font-box label select { width: auto; min-width: 88px; }
-.font-box label input[type="color"] { width: 42px; min-width: 42px; padding: 2px; }
+.font-box .font-row label select { width: auto; min-width: 88px; }
+.font-box .font-row label input[type="color"] { width: 42px; min-width: 42px; padding: 2px; }
 #p-own-bg-wrap { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; }
 #p-own-bg-wrap input[type="color"] { display: block; width: 42px; padding: 2px; margin-top: 2px; }
 .age-line { flex: none; font-size: 16px; opacity: 0.75; line-height: 1.1; }
@@ -741,7 +744,14 @@ table.panels tr.inactive td { color: var(--muted); }
 .general-grid label { margin: 0; }
 .general-grid label.check { display: flex; align-items: center; gap: 6px; height: 32px; }
 .general-grid select, .general-grid input[type=color], .general-grid input[type=number] { width: 100%; height: 32px; box-sizing: border-box; }
-.page-card { border: 1px solid var(--line); border-radius: 6px; padding: 10px; margin: 8px 0; }
+.page-card { display: flex; align-items: stretch; gap: 8px; border: 1px solid var(--line); border-radius: 6px; padding: 10px; margin: 8px 0; }
+.page-card.dragging { opacity: 0.55; }
+.page-card.drop-before { box-shadow: inset 0 3px 0 var(--accent); }
+.page-card.drop-after { box-shadow: inset 0 -3px 0 var(--accent); }
+.page-card .page-grid { flex: 1; min-width: 0; margin-bottom: 0; }
+.page-drag { flex: none; width: 28px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: grab; display: flex; align-items: center; justify-content: center; }
+.page-drag:active { cursor: grabbing; }
+.page-drag span { display: block; width: 14px; height: 2px; background: currentColor; box-shadow: 0 5px 0 currentColor, 0 10px 0 currentColor; }
 .page-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px 10px; align-items: end; margin-bottom: 8px; }
 .pf { display: flex; flex-direction: column; gap: 2px; margin: 0; min-width: 0; font-size: 12px; color: var(--muted); }
 .pf input, .pf select, .pf button { width: 100%; height: 32px; box-sizing: border-box; margin: 0; font-size: 13px; }

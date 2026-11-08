@@ -111,32 +111,36 @@
         <h3 id="t-title">Kachel</h3>
         <div id="tile-body">
         <label class="hidden">Art <input id="p-kind" readonly></label>
-        <div class="title-line">
-          <label class="grow">Titel <input id="p-title"></label>
-          <label>Position
-            <select id="p-title-align">
-              <option value="left">Links</option>
-              <option value="center">Mitte</option>
-              <option value="right">Rechts</option>
-            </select>
+        <fieldset class="section-box">
+          <legend>Allgemein</legend>
+          <div class="title-line">
+            <label class="grow">Titel <input id="p-title"></label>
+            <label>Position
+              <select id="p-title-align">
+                <option value="left">Links</option>
+                <option value="center">Mitte</option>
+                <option value="right">Rechts</option>
+              </select>
+            </label>
+            <label class="switch" title="Titel anzeigen">Anzeigen <input id="p-show-title" type="checkbox" checked></label>
+          </div>
+          <label>Gruppe (Frame)
+            <input id="p-group" placeholder="z. B. Wohnzimmer" maxlength="40">
           </label>
-          <label class="switch" title="Titel anzeigen">Anzeigen <input id="p-show-title" type="checkbox" checked></label>
-        </div>
-        <label>Gruppe (Frame)
-          <input id="p-group" placeholder="z. B. Wohnzimmer" maxlength="40">
-        </label>
-        <div class="row hidden">
-          <label>Spalte <input id="p-col" type="number" min="1"></label>
-          <label>Zeile <input id="p-row" type="number" min="1"></label>
-        </div>
-        <div class="title-line">
-          <label class="switch"><input id="p-snap" type="checkbox" checked> Am Raster ausrichten</label>
-          <label class="switch"><input id="p-bg-transparent" type="checkbox"> Transparent</label>
-          <label id="p-own-bg-wrap"><span id="p-own-bg-label">Kachel-Farbe</span> <input id="p-bg-color" type="color" value="#2a4f7c"></label>
-        </div>
-        <div class="row">
-          <label id="p-own-on-wrap"><input id="p-own-on" type="checkbox"> Farbe Ein <input id="p-on-color" type="color" value="#ffb547"></label>
-        </div>
+          <div class="row hidden">
+            <label>Spalte <input id="p-col" type="number" min="1"></label>
+            <label>Zeile <input id="p-row" type="number" min="1"></label>
+          </div>
+          <div class="title-line">
+            <label class="switch"><input id="p-snap" type="checkbox" checked> Am Raster ausrichten</label>
+            <label class="switch"><input id="p-bg-transparent" type="checkbox"> Transparent</label>
+            <label id="p-own-bg-wrap"><span id="p-own-bg-label">Kachel-Farbe</span> <input id="p-bg-color" type="color" value="#2a4f7c"></label>
+            <label class="switch" id="p-show-age-wrap"><input id="p-show-age" type="checkbox"> Alter anzeigen</label>
+          </div>
+          <div class="row">
+            <label id="p-own-on-wrap"><input id="p-own-on" type="checkbox"> Farbe Ein <input id="p-on-color" type="color" value="#ffb547"></label>
+          </div>
+        </fieldset>
         <div id="p-font-wrap">
           <fieldset id="p-title-font" class="font-box">
             <legend>Überschrift</legend>
@@ -158,7 +162,6 @@
               <label class="switch" id="p-text-underline-wrap">Unterstrichen<input id="p-text-underline" type="checkbox"></label>
             </div>
           </fieldset>
-          <label class="switch" id="p-show-age-wrap"><input id="p-show-age" type="checkbox"> Alter anzeigen</label>
         </div>
         <div data-for="nav">
           <label>Symbol
@@ -282,10 +285,13 @@
             <label>Suffix / Einheit <input id="p-unit"></label>
             <label>Nachkommastellen <input id="p-decimals" type="number" min="0" max="3" value="0"></label>
           </div>
+          <fieldset class="section-box" id="p-control-box">
+            <legend>Bedienung</legend>
           <label>Schalter / Bedienung
             <select id="p-interaction">
               <option value="">Nur Wert anzeigen</option>
               <option value="switch">Schalter (Ein/Aus)</option>
+              <option value="image">Bildschalter</option>
               <option value="combo">Dimmschalter</option>
               <option value="blinds">Rolladen</option>
               <option value="setpoint">Setpoint (Heizung)</option>
@@ -304,15 +310,6 @@
             </div>
             <label><input id="p-show-state-text" type="checkbox"> Text Ein/Aus anzeigen</label>
           </div>
-          <fieldset id="p-value-rules" class="font-box">
-            <legend>Werte</legend>
-            <div class="rule-head">
-              <span>Von</span><span>Bis</span><span>Symbol</span><span>Position</span><span>Symbol</span><span>Text</span><span>Kachel</span><span></span>
-            </div>
-            <div id="p-value-rules-rows"></div>
-            <p class="hint">Leeres Von oder Bis gilt als offen. Die erste passende Zeile gewinnt, eine Zeile ohne Von und Bis gilt immer.</p>
-            <button type="button" id="p-value-rules-add">Zeile hinzufügen</button>
-          </fieldset>
           <div id="p-setpoint-wrap" class="hidden">
             <label>Sollwert-Variable <span class="pick-row"><input id="p-setpoint-var" readonly placeholder="Auswählen"><button type="button" class="pick-var" data-pick="setpoint">Auswählen</button></span></label>
             <label>Schritt <input id="p-setpoint-step" type="number" step="0.1" value="0.5"></label>
@@ -360,6 +357,14 @@
             <label>Wert Aus <input id="p-value-off" type="number" step="any"></label>
           </div>
           <label><input id="p-confirm" type="checkbox"> Bestätigung an der Anzeige</label>
+          </fieldset>
+          <fieldset id="p-value-rules" class="font-box">
+            <legend>Werte</legend>
+            <div class="rule-head" id="p-value-rules-head"></div>
+            <div id="p-value-rules-rows"></div>
+            <p class="hint">Leeres Von oder Bis gilt als offen. Die erste passende Zeile gewinnt, eine Zeile ohne Von und Bis gilt immer.</p>
+            <button type="button" id="p-value-rules-add">Zeile hinzufügen</button>
+          </fieldset>
         </div>
         <div data-for="nav">
           <label>Zielseite <select id="p-target"></select></label>

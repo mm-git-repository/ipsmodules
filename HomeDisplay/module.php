@@ -26,7 +26,7 @@ class HomeDisplay extends IPSModuleStrict
         $this->RegisterPropertyBoolean('Active', true);
         $this->RegisterPropertyString('ClaimCode', '');
         $this->RegisterPropertyString('DeviceToken', '');
-        $this->RegisterPropertyString('LayoutId', 'layout-start');
+        $this->RegisterPropertyString('LayoutId', '');
         $this->RegisterPropertyString('DisplayProfile', 'waveshare-5b-1024x600');
         $this->RegisterPropertyString('ConfigId', 'config-standard');
         $this->RegisterPropertyInteger('IdleMode', 0);
@@ -42,7 +42,6 @@ class HomeDisplay extends IPSModuleStrict
         $this->RegisterPropertyInteger('MaintenanceFrom', 3);
         $this->RegisterPropertyInteger('MaintenanceTo', 5);
         $this->RegisterPropertyString('DeviceId', '');
-        $this->RegisterPropertyString('FallbackTiles', '[]');
         $this->RegisterPropertyBoolean('EpdServerFrame', false);
         $this->RegisterTimer('RefreshCameraCache', 0, 'IPS_RequestAction($_IPS[\'TARGET\'], \'RefreshCameraCache\', \'\');');
 
@@ -96,7 +95,7 @@ class HomeDisplay extends IPSModuleStrict
                 continue;
             }
             if (($element['name'] ?? '') === 'LayoutId') {
-                $element['options'] = $this->optionsFrom($catalog['layouts']);
+                $element['options'] = $this->layoutOptions($catalog['layouts']);
             }
             if (($element['name'] ?? '') === 'DisplayProfile') {
                 $options = [];
@@ -481,12 +480,6 @@ class HomeDisplay extends IPSModuleStrict
             case 'PublishConfig':
                 $this->PublishConfig($json);
                 return;
-            case 'ApplyPreset':
-                $this->ApplyPreset(is_string($Value) ? $Value : '');
-                return;
-            case 'PublishFallback':
-                $this->PublishFallback();
-                return;
             case 'RestartPanel':
                 $this->RestartPanel();
                 return;
@@ -520,6 +513,9 @@ class HomeDisplay extends IPSModuleStrict
                 }
             }
             return '{"ok":true}';
+        } catch (HomeDisplayTileException $e) {
+            $this->SendDebug('Editor', $e->getMessage(), 0);
+            return $this->encode(['ok' => false, 'error' => $e->getMessage(), 'pageId' => $e->pageId, 'tileId' => $e->tileId]);
         } catch (Throwable $e) {
             $this->SendDebug('Editor', $e->getMessage(), 0);
             return $this->encode(['ok' => false, 'error' => $e->getMessage()]);
@@ -642,7 +638,16 @@ class HomeDisplay extends IPSModuleStrict
     /** @param array<string, mixed> $catalog */
     private function updateFormOptions(array $catalog): void
     {
-        $this->UpdateFormField('LayoutId', 'options', json_encode($this->optionsFrom($catalog['layouts'])));
+        $this->UpdateFormField('LayoutId', 'options', json_encode($this->layoutOptions($catalog['layouts'])));
+    }
+
+    /** @param array<int, mixed> $layouts @return list<array{caption: string, value: string}> */
+    private function layoutOptions(array $layouts): array
+    {
+        return array_merge(
+            [['caption' => 'Keine Ansicht', 'value' => '']],
+            $this->optionsFrom($layouts)
+        );
     }
 
     /** @param array<int, mixed> $items @return list<array{caption: string, value: string}> */
@@ -1057,7 +1062,7 @@ class HomeDisplay extends IPSModuleStrict
 
     /**
      * Ansicht, die das Gerät gerade zeigen soll: Vorschau (zeitlich begrenzt, auch unveröffentlicht),
-     * sonst die zugewiesene veröffentlichte Ansicht, sonst die Kachelliste der Instanz.
+     * sonst die zugewiesene veröffentlichte Ansicht.
      *
      * @return array<string, mixed>|null
      */
@@ -1071,14 +1076,7 @@ class HomeDisplay extends IPSModuleStrict
                 return $draft;
             }
         }
-        $layout = $this->assigned($instanceId, 'layouts', 'LayoutId');
-        if ($layout === null || $this->layoutTileCount($layout) === 0) {
-            $fallback = $this->fallbackLayout($instanceId);
-            if ($fallback !== null) {
-                return $fallback;
-            }
-        }
-        return $layout;
+        return $this->assigned($instanceId, 'layouts', 'LayoutId');
     }
 
     /** @param array{id: int, token: string} $device @return array<string, mixed> */
@@ -3289,38 +3287,6 @@ PHP;
         }
     }
 
-    public function ApplyPreset(string $Name): string
-    {
-        $rows = HomeDisplayPanelSchema::presetRows($Name);
-        $json = json_encode($rows, JSON_UNESCAPED_UNICODE);
-        if ($json === false) {
-            return 'Vorlage konnte nicht erzeugt werden.';
-        }
-        IPS_SetProperty($this->InstanceID, 'FallbackTiles', $json);
-        IPS_ApplyChanges($this->InstanceID);
-        return 'Vorlage eingetragen. Variablen in der Liste zuordnen und danach veröffentlichen.';
-    }
-
-    public function PublishFallback(): string
-    {
-        $rows = json_decode($this->ReadPropertyString('FallbackTiles'), true);
-        if (!is_array($rows) || $rows === []) {
-            return 'Die Kachelliste ist leer.';
-        }
-        $layout = HomeDisplayPanelSchema::layoutFromRows($rows, IPS_GetName($this->InstanceID));
-        $layout['id'] = 'layout-device-' . $this->ReadPropertyString('DeviceId');
-        $existing = HomeDisplayCatalogStore::find(HomeDisplayCatalogStore::load(), 'layouts', $layout['id']);
-        $layout['baseVersion'] = (int) ($existing['version'] ?? 0);
-        try {
-            $this->storeCatalogItem('layouts', $layout, true);
-        } catch (Throwable $e) {
-            return $e->getMessage();
-        }
-        IPS_SetProperty($this->InstanceID, 'LayoutId', $layout['id']);
-        IPS_ApplyChanges($this->InstanceID);
-        return 'Kachelliste veröffentlicht.';
-    }
-
     private function subscribeLayoutVariables(): void
     {
         $layout = $this->activeLayout($this->InstanceID) ?? [];
@@ -3399,26 +3365,6 @@ PHP;
         $runtime = $this->runtime();
         $installed = (string) ($runtime[(string) $instanceId]['firmware'] ?? '0.0.0');
         return version_compare($installed, (string) ($layout['minFirmware'] ?? '0.1.0'), '<');
-    }
-
-    /** @return array<string, mixed>|null */
-    private function fallbackLayout(int $instanceId): ?array
-    {
-        $rows = json_decode((string) IPS_GetProperty($instanceId, 'FallbackTiles'), true);
-        if (!is_array($rows) || $rows === []) {
-            return null;
-        }
-        try {
-            $layout = HomeDisplayPanelSchema::layoutFromRows($rows, 'Liste');
-            HomeDisplayPanelSchema::validateLayout($layout, false);
-            $layout['id'] = 'fallback';
-            $layout['version'] = 1;
-            $layout['published'] = true;
-            return $layout;
-        } catch (Throwable $e) {
-            $this->SendDebug('Liste', $e->getMessage(), 0);
-            return null;
-        }
     }
 
     /** @param array<string, mixed> $body */
