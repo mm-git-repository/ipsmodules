@@ -718,6 +718,16 @@ dialog button[value=ok], dialog button[value=publish] { background: var(--accent
 .image-card button { margin-top: 4px; font-size: 12px; padding: 3px 8px; }
 .image-card input[type="text"] { width: 100%; margin-top: 4px; text-align: center; }
 #settings-dialog { max-width: 720px; max-height: 90vh; overflow: auto; }
+#firmware-dialog { max-width: 820px; width: calc(100vw - 40px); max-height: 90vh; overflow: auto; }
+#firmware-dialog label { display: block; margin: 8px 0; font-size: 13px; }
+#firmware-dialog label input:not([type="checkbox"]), #firmware-dialog label select { display: block; margin-top: 3px; }
+#firmware-dialog label input[type="number"] { width: 120px; }
+#firmware-dialog fieldset.fw-upload { border: 1px solid var(--line); border-radius: 6px; margin: 8px 0 12px; padding: 4px 12px 8px; }
+#firmware-dialog fieldset.fw-upload legend { font-size: 13px; font-weight: 600; padding: 0 6px; }
+#firmware-dialog table.panels button { font-size: 12px; padding: 3px 8px; }
+#firmware-dialog table.panels tr.fw-invalid td { color: #b3261e; }
+#firmware-dialog .fw-badge { color: var(--accent); font-size: 12px; }
+#firmware-dialog .fw-note { color: var(--muted); font-size: 12px; }
 /* Editor zeigt die Kacheln wie das Display */
 #grid .tile { cursor: default; }
 #grid .tile.chart { padding: 4px; }

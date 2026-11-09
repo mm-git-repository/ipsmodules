@@ -6,6 +6,7 @@ require_once __DIR__ . '/libs/CatalogStore.php';
 require_once __DIR__ . '/libs/Media.php';
 require_once __DIR__ . '/libs/PanelActionGuard.php';
 require_once __DIR__ . '/libs/EpdFrame.php';
+require_once __DIR__ . '/libs/FirmwareStore.php';
 
 class HomeDisplay extends IPSModuleStrict
 {
@@ -41,6 +42,7 @@ class HomeDisplay extends IPSModuleStrict
         $this->RegisterPropertyInteger('IdleStateIntervalSec', 15);
         $this->RegisterPropertyInteger('MaintenanceFrom', 3);
         $this->RegisterPropertyInteger('MaintenanceTo', 5);
+        $this->RegisterPropertyBoolean('FirmwareAutoUpdate', true);
         $this->RegisterPropertyString('DeviceId', '');
         $this->RegisterPropertyBoolean('EpdServerFrame', false);
         $this->RegisterTimer('RefreshCameraCache', 0, 'IPS_RequestAction($_IPS[\'TARGET\'], \'RefreshCameraCache\', \'\');');
@@ -123,6 +125,9 @@ class HomeDisplay extends IPSModuleStrict
                     $element['caption'] = (string) ($element['caption'] ?? '')
                         . ' Hinweis: GD ist auf diesem IPS-Host nicht verfügbar — Server-Rendering kann nicht genutzt werden.';
                 }
+            }
+            if ($name === 'FirmwareInfo') {
+                $element['caption'] = $this->firmwareSummary();
             }
         }
         unset($element);
@@ -950,6 +955,13 @@ class HomeDisplay extends IPSModuleStrict
             $this->saveRuntime($runtime);
             $command = null;
         }
+        // Ohne automatische Aktualisierung kennt die Anzeige die neue Version, bekommt aber Prüfsumme und
+        // Signatur nur, solange der Befehl „update“ ansteht. Das gilt auch für Anzeigen mit älterem Programm.
+        $updateNow = is_array($command) && (string) ($command['name'] ?? '') === 'update';
+        if (!$this->firmwareAuto($device['id']) && !$updateNow) {
+            $firmware['sha256'] = '';
+            $firmware['signature'] = '';
+        }
         return [
             'contract' => self::CONTRACT,
             'now' => time(),
@@ -1003,6 +1015,7 @@ class HomeDisplay extends IPSModuleStrict
             'cameraLive' => $this->anyCameraLive(),
             'maintenanceFrom' => (int) IPS_GetProperty($instanceId, 'MaintenanceFrom'),
             'maintenanceTo' => (int) IPS_GetProperty($instanceId, 'MaintenanceTo'),
+            'firmwareCheckMinutes' => HomeDisplayFirmwareStore::checkMinutes(),
             'displayProfile' => (string) IPS_GetProperty($instanceId, 'DisplayProfile'),
         ];
         $profileId = (string) IPS_GetProperty($instanceId, 'DisplayProfile');
@@ -2303,6 +2316,48 @@ PHP;
         return $this->queueCommand('resync');
     }
 
+    /** Die Anzeige lädt das bereitgestellte Programm sofort statt im Wartungsfenster. */
+    public function UpdateFirmware(): string
+    {
+        $firmware = $this->firmwareDescriptor($this->InstanceID);
+        if (!$firmware['available'] || $firmware['signature'] === '') {
+            return 'Kein passendes Programm bereitgestellt. In der Verwaltung unter „Firmware“ ein Programm hochladen oder das Modul aktualisieren.';
+        }
+        $installed = (string) ($this->runtime()[(string) $this->InstanceID]['firmware'] ?? '');
+        if ($installed !== '' && version_compare($installed, $firmware['version'], '>=')) {
+            return 'Die Anzeige hat bereits Programm ' . $installed . ' (bereitgestellt: ' . $firmware['version'] . ').';
+        }
+        return $this->queueCommand('update');
+    }
+
+    private function firmwareSummary(): string
+    {
+        $firmware = $this->firmwareDescriptor($this->InstanceID);
+        $installed = (string) ($this->runtime()[(string) $this->InstanceID]['firmware'] ?? '');
+        $offered = $firmware['available'] && $firmware['signature'] !== '' ? $firmware['version'] : 'keins';
+        return 'Programm installiert: ' . ($installed !== '' ? $installed : 'unbekannt') . ' · bereitgestellt: ' . $offered
+            . '. Programme und Prüfintervall stehen in der Verwaltung unter „Firmware“.';
+    }
+
+    /** Stand des Programms für die Verwaltung: installierte und angebotene Version, automatische Aktualisierung. */
+    public function FirmwareStatus(): string
+    {
+        $profile = (string) $this->ReadPropertyString('DisplayProfile');
+        $ota = !str_starts_with($profile, 'firebeetle-epd-');
+        $runtime = $this->runtime()[(string) $this->InstanceID] ?? [];
+        $firmware = $ota ? $this->firmwareDescriptor($this->InstanceID) : ['version' => '', 'available' => false];
+        $command = is_array($runtime['command'] ?? null) ? (string) ($runtime['command']['name'] ?? '') : '';
+        return $this->encode([
+            'ok' => true,
+            'ota' => $ota,
+            'installed' => (string) ($runtime['firmware'] ?? ''),
+            'offered' => $firmware['available'] ? (string) $firmware['version'] : '',
+            'auto' => $this->ReadPropertyBoolean('FirmwareAutoUpdate'),
+            'updatePending' => $command === 'update',
+            'lastCheck' => (int) ($runtime['lastCheck'] ?? 0),
+        ]);
+    }
+
     /** Zeigt dem Panel 30 Minuten lang den aktuellen Entwurf der zugewiesenen Ansicht, auch wenn er noch nicht veröffentlicht ist. */
     public function SendPreview(): string
     {
@@ -2874,24 +2929,40 @@ PHP;
         if ($firebeetle) {
             $versionFile = __DIR__ . '/firmware-firebeetle/VERSION';
             $path = __DIR__ . '/firmware-firebeetle/build/firmware.bin';
-            $fallbackVersion = '0.1.0';
-            $target = 'firebeetle';
-        } else {
-            $versionFile = __DIR__ . '/firmware/VERSION';
-            $path = __DIR__ . '/firmware/build/homedisplay.bin';
-            $fallbackVersion = self::FIRMWARE_VERSION;
-            $target = 'waveshare';
+            $version = is_file($versionFile) ? trim((string) file_get_contents($versionFile)) : '';
+            $available = is_file($path);
+            return [
+                'version' => $version !== '' ? $version : '0.1.0',
+                'sha256' => $available ? hash_file('sha256', $path) : '',
+                'signature' => '',
+                'available' => $available,
+                'path' => $path,
+                'target' => 'firebeetle',
+            ];
         }
-        $version = is_file($versionFile) ? trim((string) file_get_contents($versionFile)) : $fallbackVersion;
-        $available = is_file($path);
+        $installed = $instanceId > 0 ? (string) ($this->runtime()[(string) $instanceId]['firmware'] ?? '') : '';
+        $release = HomeDisplayFirmwareStore::pick($installed);
+        if ($release === null) {
+            return ['version' => '', 'sha256' => '', 'signature' => '', 'available' => false, 'path' => '', 'target' => 'waveshare'];
+        }
         return [
-            'version' => $version !== '' ? $version : $fallbackVersion,
-            'sha256' => $available ? hash_file('sha256', $path) : '',
-            'signature' => $available ? $this->firmwareSignature($path) : '',
-            'available' => $available,
-            'path' => $path,
-            'target' => $target,
+            'version' => (string) $release['version'],
+            'sha256' => (string) $release['sha256'],
+            'signature' => (string) $release['signature'],
+            'available' => true,
+            'path' => (string) $release['path'],
+            'target' => 'waveshare',
         ];
+    }
+
+    /** Ob diese Anzeige neue Programme von selbst übernimmt. Ohne Einstellung gilt: ja. */
+    private function firmwareAuto(int $instanceId): bool
+    {
+        try {
+            return (bool) IPS_GetProperty($instanceId, 'FirmwareAutoUpdate');
+        } catch (Throwable $e) {
+            return true;
+        }
     }
 
     /** @param array{id: int, token: string} $device */
@@ -3249,7 +3320,7 @@ PHP;
         $firmware = $this->firmwareDescriptor($instanceId);
         if (!$firmware['available']) {
             http_response_code(404);
-            $this->json(['error' => 'Programmdatei fehlt. Zuerst lokal bauen.']);
+            $this->json(['error' => 'Kein passendes Programm bereitgestellt.']);
             return;
         }
         header('Content-Type: application/octet-stream');
@@ -3449,24 +3520,6 @@ PHP;
             }
         }
         $this->saveRuntime($runtime);
-    }
-
-    private function firmwareSignature(string $path): string
-    {
-        $keyPath = __DIR__ . '/firmware/keys/ota-private.pem';
-        if (!is_file($keyPath) || !function_exists('openssl_sign')) {
-            return '';
-        }
-        $key = openssl_pkey_get_private((string) file_get_contents($keyPath));
-        $data = file_get_contents($path);
-        if ($key === false || !is_string($data)) {
-            return '';
-        }
-        $signature = '';
-        if (!openssl_sign($data, $signature, $key, OPENSSL_ALGO_SHA256)) {
-            return '';
-        }
-        return base64_encode($signature);
     }
 
     private function versionLabel(): string

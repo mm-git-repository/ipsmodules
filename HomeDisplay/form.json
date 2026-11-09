@@ -73,6 +73,16 @@
             "caption": "Programmaktualisierung bis Stunde (exkl.)",
             "minimum": 0,
             "maximum": 23
+        },
+        {
+            "type": "CheckBox",
+            "name": "FirmwareAutoUpdate",
+            "caption": "Programm automatisch aktualisieren (im Wartungsfenster)"
+        },
+        {
+            "type": "Label",
+            "name": "FirmwareInfo",
+            "caption": "Programm"
         }
     ],
     "actions": [
@@ -119,6 +129,12 @@
                     "caption": "Anzeige neu starten",
                     "confirm": "Die Anzeige startet beim nächsten Abruf neu. Fortfahren?",
                     "onClick": "echo HDISP_RestartPanel($id);"
+                },
+                {
+                    "type": "Button",
+                    "caption": "Programm jetzt aktualisieren",
+                    "confirm": "Die Anzeige lädt das bereitgestellte Programm beim nächsten Abruf, auch außerhalb des Wartungsfensters, und startet neu. Fortfahren?",
+                    "onClick": "echo HDISP_UpdateFirmware($id);"
                 }
             ]
         }

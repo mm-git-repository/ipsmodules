@@ -45,7 +45,7 @@ Es gibt zwei Firmware-Pfade:
 
 | Hardware | Ordner | Binary für OTA |
 |----------|--------|----------------|
-| Waveshare ESP32-S3 5B (1024×600, Touch) | `firmware/` (ESP-IDF) | `firmware/build/homedisplay.bin` |
+| Waveshare ESP32-S3 5B (1024×600, Touch) | `firmware/` (ESP-IDF) | `firmware/release/homedisplay.bin` + `firmware.json` |
 | FireBeetle 2 + E-Ink 4,2"/7,5" | `firmware-firebeetle/` (PlatformIO) | `firmware-firebeetle/build/firmware.bin` |
 
 In der Instanz **Hausanzeige** das passende **Display-Profil** wählen; OTA und Manifest liefern dann die richtige Datei. Details E-Ink: [`firmware-firebeetle/README.md`](firmware-firebeetle/README.md).
@@ -63,4 +63,17 @@ idf.py build
 idf.py -p COM5 flash monitor
 ```
 
-`COM5` durch den angezeigten USB-Anschluss ersetzen. Benötigt wird ESP-IDF 5.3 oder neuer. Die Datei für die spätere Aktualisierung entsteht unter `firmware/build/homedisplay.bin`. Die Anzeige lädt sie nur im Wartungsfenster, prüft SHA-256 und die Signatur aus `firmware/keys` und bestätigt den Start. Ohne diese Bestätigung startet die vorherige Partition.
+`COM5` durch den angezeigten USB-Anschluss ersetzen. Benötigt wird ESP-IDF 5.3 oder neuer.
+
+### Aktualisierung über das Netz (Waveshare)
+
+1. Code ändern und `firmware/VERSION` sowie `HOMEDISPLAY_FIRMWARE_VERSION` in `homedisplay.h` erhöhen.
+2. `powershell -File firmware/tools/release.ps1` ausführen. Das Skript baut, kopiert das Programm nach `firmware/release/homedisplay.bin` und schreibt `firmware/release/firmware.json` mit Version, SHA-256 und Signatur.
+3. Entweder committen und pushen und in IP-Symcon die Bibliothek aktualisieren, oder `release/homedisplay.bin` und `release/firmware.json` in der Verwaltungsseite unter **Firmware** hochladen. Der Upload prüft Größe, SHA-256 und Signatur gegen die öffentlichen Schlüssel in `firmware/keys`.
+4. Jede Anzeige prüft in dem unter **Firmware** eingestellten Abstand (Standard 60 Minuten) auf eine neue Version und installiert sie, wenn **Programm automatisch aktualisieren** in ihrer Instanz eingeschaltet ist, im Wartungsfenster der Instanz. „Jetzt aktualisieren“ (Verwaltung oder Instanz) gilt sofort. Angeboten wird nur eine höhere Version als die installierte.
+
+Unter **Firmware** lässt sich außerdem die höchste angebotene Version festlegen („Neueste“ oder eine feste). Ein Release, das mit dem aktuellen Schlüssel signiert ist, trägt `requires` in `firmware.json`. Eine Anzeige mit älterem Programm bekommt dann zuerst die Zwischenversion. Hochgeladene Programme liegen in `config/HomeDisplay/firmware` im Symcon-Verzeichnis und überstehen Modul-Updates.
+
+Die Anzeige prüft SHA-256 und die RSA-Signatur gegen den öffentlichen Schlüssel in `firmware/main/ota_pub.h` und bestätigt den Start nach dem ersten Kontakt mit dem Dienst. Ohne diese Bestätigung startet nach 180 Sekunden die vorherige Partition, und der Anzeigestatus meldet den Rückfall.
+
+Der private Schlüssel liegt nicht im Repository, sondern unter `%USERPROFILE%\.homedisplay\ota-private.pem` (anderer Ort über `-Key` oder `HOMEDISPLAY_OTA_KEY`). Ohne ihn lässt sich kein Release signieren. Programme bis 0.6.77 kennen noch den alten Schlüssel `ota-private-legacy.pem`. Das Release 0.6.78 ist damit signiert und bringt den neuen öffentlichen Schlüssel mit. Ab 0.6.79 gilt nur noch `ota-private.pem`.

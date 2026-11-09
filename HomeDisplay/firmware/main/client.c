@@ -62,6 +62,10 @@ static char rollback_reason[80];
 static int last_http_status;
 static esp_err_t last_transport_error;
 static char last_command[24];
+static bool update_requested;
+static bool firmware_newer;
+static int64_t next_firmware_check;
+static int firmware_check_minutes = 60;
 static int progress;
 static int state_interval = 3;
 static int idle_interval = 15;
@@ -1192,6 +1196,8 @@ static void apply_config_document(const char *json)
     if (item) maintenance_from = item->valueint;
     item = cJSON_GetObjectItem(document, "maintenanceTo");
     if (item) maintenance_to = item->valueint;
+    item = cJSON_GetObjectItem(document, "firmwareCheckMinutes");
+    if (item && item->valueint >= 5 && item->valueint <= 1440) firmware_check_minutes = item->valueint;
     cJSON_Delete(document);
 }
 
@@ -1212,7 +1218,7 @@ static void restore_cache(char *buffer, size_t length)
     }
 }
 
-/* Befehle aus dem Manifest: restart, testPattern, resync. Jeder Befehl wird nur einmal ausgeführt. */
+/* Befehle aus dem Manifest: restart, testPattern, resync, update. Jeder Befehl wird nur einmal ausgeführt. */
 static void run_command(cJSON *root)
 {
     cJSON *command = cJSON_GetObjectItem(root, "command");
@@ -1239,6 +1245,8 @@ static void run_command(cJSON *root)
         layout_sha[0] = '\0';
         config_sha[0] = '\0';
         last_seq = -1;
+    } else if (strcmp(name, "update") == 0) {
+        update_requested = true;
     }
 }
 
@@ -1385,11 +1393,28 @@ static void send_health(char *response, size_t length)
     request("/v1/health", "POST", body, response, length);
 }
 
+/* Auf neue Programme wird nur alle firmware_check_minutes geprüft. Ist eine neuere Version gefunden, wartet die
+   Anzeige auf das Wartungsfenster, ohne erneut zu warten. „update“ aus der Verwaltung gilt sofort. */
 static void maybe_update(void)
 {
-    if (firmware_sha[0] == '\0' || firmware_signature[0] == '\0') return;
-    if (strcmp(firmware_version, HOMEDISPLAY_FIRMWARE_VERSION) == 0) return;
-    if (!maintenance_open()) {
+    int64_t now = esp_timer_get_time();
+    if (!update_requested && !firmware_newer && now < next_firmware_check) return;
+    if (!update_requested && !firmware_newer) {
+        next_firmware_check = now + (int64_t) firmware_check_minutes * 60 * 1000000LL;
+    }
+    if (firmware_sha[0] == '\0' || firmware_signature[0] == '\0') {
+        update_requested = false;
+        firmware_newer = false;
+        return;
+    }
+    if (version_of(firmware_version) <= version_of(HOMEDISPLAY_FIRMWARE_VERSION)) {
+        update_requested = false;
+        firmware_newer = false;
+        update_error[0] = '\0';
+        return;
+    }
+    firmware_newer = true;
+    if (!update_requested && !maintenance_open()) {
         snprintf(update_error, sizeof(update_error), "Wartet auf das Wartungsfenster");
         return;
     }
@@ -1402,9 +1427,14 @@ static void maybe_update(void)
     progress = 0;
     char url[220];
     snprintf(url, sizeof(url), "%s/v1/firmware", base_url);
+    update_requested = false;
     esp_err_t error = homedisplay_ota_run(url, token, firmware_sha, firmware_signature, &progress);
     homedisplay_ui_lock(false);
-    if (error != ESP_OK) snprintf(update_error, sizeof(update_error), "Aktualisierung fehlgeschlagen");
+    if (error != ESP_OK) {
+        /* Nächster Versuch bei der nächsten Prüfung, nicht im Minutentakt. */
+        firmware_newer = false;
+        snprintf(update_error, sizeof(update_error), "Aktualisierung fehlgeschlagen");
+    }
 }
 
 static void confirm_boot(void)

@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once dirname(__DIR__) . '/HomeDisplay/libs/FirmwareStore.php';
+
 class HomeDisplayVerwaltung extends IPSModuleStrict
 {
     private const PANEL_MODULE = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
@@ -478,6 +480,9 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             }
             return ['ok' => true, 'result' => $this->decodeCall(HDISP_SimulateAction($id, (string) ($body['tileId'] ?? ''), (string) ($body['actionId'] ?? ''), $value, $tileJson))];
         }
+        if (str_ends_with($method, 'Firmware') || $method === 'firmware') {
+            return $this->firmwareApi($method, $body);
+        }
         $panel = $this->panelId();
         if ($panel === 0) {
             return ['ok' => false, 'error' => 'Keine HomeDisplay-Instanz gefunden.'];
@@ -558,6 +563,88 @@ class HomeDisplayVerwaltung extends IPSModuleStrict
             return ['ok' => true, 'result' => $this->decodeCall($raw)];
         }
         return ['ok' => false, 'error' => 'Unbekannte Aktion.'];
+    }
+
+    /**
+     * Firmware-Verwaltung: Programme hochladen und löschen, Angebot und Prüfintervall einstellen,
+     * pro Anzeige die automatische Aktualisierung schalten oder sofort aktualisieren.
+     *
+     * @param array<string, mixed> $body @return array<string, mixed>
+     */
+    private function firmwareApi(string $method, array $body): array
+    {
+        try {
+            if ($method === 'uploadFirmware') {
+                $binary = base64_decode((string) ($body['bin'] ?? ''), true);
+                $descriptor = json_decode((string) ($body['descriptor'] ?? ''), true);
+                if (!is_string($binary) || $binary === '') {
+                    return ['ok' => false, 'error' => 'Programmdatei (homedisplay.bin) fehlt.'];
+                }
+                if (!is_array($descriptor)) {
+                    return ['ok' => false, 'error' => 'Beschreibung (firmware.json) fehlt oder ist kein gültiges JSON.'];
+                }
+                HomeDisplayFirmwareStore::add($binary, $descriptor, (string) ($body['note'] ?? ''));
+            } elseif ($method === 'deleteFirmware') {
+                HomeDisplayFirmwareStore::remove((string) ($body['id'] ?? ''));
+            } elseif ($method === 'saveFirmware') {
+                HomeDisplayFirmwareStore::saveSettings((string) ($body['offered'] ?? 'latest'), (int) ($body['checkMinutes'] ?? 0));
+                foreach ((array) ($body['panels'] ?? []) as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+                    $id = $this->panelOrFail((int) ($row['id'] ?? 0));
+                    $auto = !empty($row['auto']);
+                    if ((bool) IPS_GetProperty($id, 'FirmwareAutoUpdate') !== $auto) {
+                        IPS_SetProperty($id, 'FirmwareAutoUpdate', $auto);
+                        IPS_ApplyChanges($id);
+                    }
+                }
+            } elseif ($method === 'updateFirmware') {
+                $id = $this->panelOrFail((int) ($body['id'] ?? 0));
+                if (!function_exists('HDISP_UpdateFirmware')) {
+                    return ['ok' => false, 'error' => 'HomeDisplay ist nicht geladen (Bibliothek aktualisieren).'];
+                }
+                return ['ok' => true, 'result' => $this->firmwareOverview() + ['message' => (string) HDISP_UpdateFirmware($id)]];
+            } elseif ($method !== 'firmware') {
+                return ['ok' => false, 'error' => 'Unbekannte Aktion.'];
+            }
+            return ['ok' => true, 'result' => $this->firmwareOverview()];
+        } catch (Throwable $e) {
+            return ['ok' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /** @return array<string, mixed> */
+    private function firmwareOverview(): array
+    {
+        $releases = [];
+        foreach (HomeDisplayFirmwareStore::releases() as $release) {
+            $releases[] = HomeDisplayFirmwareStore::describe($release);
+        }
+        $panels = [];
+        foreach ($this->panelIds() as $id) {
+            $status = function_exists('HDISP_FirmwareStatus') ? $this->decodeCall(HDISP_FirmwareStatus($id)) : [];
+            $panels[] = [
+                'id' => $id,
+                'name' => IPS_GetName($id),
+                'active' => (bool) $this->panelProperty($id, 'Active', false),
+                'ota' => $status['ota'] ?? true,
+                'installed' => (string) ($status['installed'] ?? ''),
+                'offered' => (string) ($status['offered'] ?? ''),
+                'auto' => (bool) ($status['auto'] ?? true),
+                'updatePending' => !empty($status['updatePending']),
+                'lastCheck' => (int) ($status['lastCheck'] ?? 0),
+                'status' => $this->variableText($id, 'PanelStatus'),
+            ];
+        }
+        $settings = HomeDisplayFirmwareStore::settings();
+        return [
+            'releases' => $releases,
+            'offered' => $settings['offered'],
+            'checkMinutes' => $settings['checkMinutes'],
+            'maxBytes' => HomeDisplayFirmwareStore::MAX_BYTES,
+            'panels' => $panels,
+        ];
     }
 
     /** @return array<string, mixed> */

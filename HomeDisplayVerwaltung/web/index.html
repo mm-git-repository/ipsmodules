@@ -38,6 +38,9 @@
       <button type="button" id="open-images">Bilder</button>
     </div>
     <div class="menu">
+      <button type="button" id="open-firmware">Firmware</button>
+    </div>
+    <div class="menu">
       <button type="button" id="open-settings">Einstellungen</button>
     </div>
     <span id="title" class="title"></span>
@@ -588,6 +591,47 @@
       <div id="image-list"></div>
       <div class="row right">
         <button value="close">Schließen</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="firmware-dialog">
+    <form method="dialog">
+      <h3>Firmware</h3>
+      <p class="hint">Programme der Waveshare-Anzeige. Eine Anzeige prüft in dem eingestellten Abstand auf eine neue Version und installiert sie bei eingeschalteter Automatik im Wartungsfenster ihrer Instanz. „Jetzt aktualisieren“ gilt sofort, auch außerhalb des Wartungsfensters.</p>
+      <p id="fw-message" class="hint" role="status"></p>
+
+      <h4>Programme</h4>
+      <table id="fw-releases" class="panels">
+        <thead><tr><th>Version</th><th>Herkunft</th><th>Größe</th><th>Gebaut</th><th>Hinweis</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <fieldset class="fw-upload">
+        <legend>Programm hochladen</legend>
+        <p class="hint">Beide Dateien aus <code>HomeDisplay/firmware/release</code>, die <code>release.ps1</code> erzeugt hat: das Programm und die Beschreibung mit Signatur.</p>
+        <label>Programm <input id="fw-bin" type="file" accept=".bin"></label>
+        <label>Beschreibung <input id="fw-json" type="file" accept=".json,application/json"></label>
+        <label>Notiz (optional) <input id="fw-note" maxlength="120" placeholder="z. B. Energiefluss"></label>
+        <div class="row right"><button type="button" id="fw-upload">Hochladen</button></div>
+      </fieldset>
+
+      <h4>Angebot und Prüfung</h4>
+      <label>Höchste angebotene Version
+        <select id="fw-offered"></select>
+      </label>
+      <label>Prüfung auf neue Firmware alle (Minuten)
+        <input id="fw-check" type="number" min="5" max="1440" step="5">
+      </label>
+      <p class="hint">Eine Anzeige mit älterem Programm bekommt bei Bedarf zuerst eine Zwischenversion, wenn das neuere Release ihren Schlüssel nicht kennt.</p>
+
+      <h4>Anzeigen</h4>
+      <table id="fw-panels" class="panels">
+        <thead><tr><th>Anzeige</th><th>Installiert</th><th>Angeboten</th><th>Automatisch</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row right">
+        <button value="cancel">Schließen</button>
+        <button value="ok">Speichern</button>
       </div>
     </form>
   </dialog>

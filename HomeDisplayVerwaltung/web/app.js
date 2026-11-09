@@ -5300,6 +5300,200 @@ async function openSettings() {
 
 $("open-settings").addEventListener("click", openSettings);
 
+/* ---------- Firmware ---------- */
+
+function fwVersionLess(a, b) {
+  const left = String(a || "0").split(".").map(Number);
+  const right = String(b || "0").split(".").map(Number);
+  for (let index = 0; index < 3; index++) {
+    const diff = (left[index] || 0) - (right[index] || 0);
+    if (diff !== 0) return diff < 0;
+  }
+  return false;
+}
+
+function fwCell(row, content) {
+  const cell = document.createElement("td");
+  if (content instanceof Node) cell.appendChild(content);
+  else cell.textContent = content;
+  row.appendChild(cell);
+  return cell;
+}
+
+function fwButton(label, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function fwMessage(text) {
+  $("fw-message").textContent = text || "";
+}
+
+/** Merkt sich ungespeicherte Eingaben, damit Hochladen und Löschen sie nicht verwerfen. */
+function collectFirmwareForm() {
+  const panels = [...$("fw-panels").querySelectorAll("tbody tr[data-panel]")].map((row) => ({
+    id: Number(row.dataset.panel),
+    auto: row.querySelector("input[type=checkbox]").checked
+  }));
+  return { offered: $("fw-offered").value, checkMinutes: Number($("fw-check").value), panels };
+}
+
+function renderFirmware(data, keep) {
+  const releases = $("fw-releases").querySelector("tbody");
+  releases.innerHTML = "";
+  for (const release of data.releases || []) {
+    const row = document.createElement("tr");
+    if (!release.valid) row.classList.add("fw-invalid");
+    const version = document.createElement("span");
+    version.textContent = release.version;
+    const cell = fwCell(row, version);
+    if (release.requires) {
+      const note = document.createElement("div");
+      note.className = "fw-note";
+      note.textContent = `braucht ab ${release.requires}`;
+      cell.appendChild(note);
+    }
+    fwCell(row, release.source === "bundled" ? "Im Modul" : `Hochgeladen ${release.uploaded ? new Date(release.uploaded * 1000).toLocaleString("de-DE") : ""}`);
+    fwCell(row, `${(release.size / 1048576).toFixed(2).replace(".", ",")} MB`);
+    fwCell(row, release.built ? release.built.replace("T", " ").replace("Z", " UTC") : "–");
+    fwCell(row, release.valid ? (release.note || "") : `Ungültig: ${release.error}`);
+    const actions = fwCell(row, "");
+    if (release.source === "upload") {
+      actions.appendChild(fwButton("Löschen", async () => {
+        if (!window.confirm(`Programm ${release.version} löschen?`)) return;
+        await fwAction("deleteFirmware", { id: release.id }, `Programm ${release.version} gelöscht.`);
+      }));
+    }
+    releases.appendChild(row);
+  }
+  if (!(data.releases || []).length) {
+    releases.innerHTML = '<tr><td colspan="6" class="hint">Noch kein Programm vorhanden. Unten eines hochladen oder release.ps1 ausführen und das Modul aktualisieren.</td></tr>';
+  }
+
+  const offered = $("fw-offered");
+  offered.innerHTML = "";
+  const choices = [["latest", "Neueste (automatisch)"]];
+  for (const release of data.releases || []) {
+    if (release.valid && !choices.some(([value]) => value === release.version)) choices.push([release.version, `bis ${release.version}`]);
+  }
+  const wanted = keep ? keep.offered : data.offered;
+  if (!choices.some(([value]) => value === wanted)) choices.push([wanted, `bis ${wanted} (nicht vorhanden)`]);
+  for (const [value, label] of choices) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    offered.appendChild(option);
+  }
+  offered.value = wanted;
+  $("fw-check").value = keep && keep.checkMinutes ? keep.checkMinutes : data.checkMinutes;
+
+  const panels = $("fw-panels").querySelector("tbody");
+  panels.innerHTML = "";
+  for (const panel of data.panels || []) {
+    const row = document.createElement("tr");
+    row.dataset.panel = String(panel.id);
+    if (!panel.active) row.classList.add("inactive");
+    fwCell(row, `${panel.name} (${panel.id})${panel.active ? "" : " – inaktiv"}`);
+    fwCell(row, panel.ota ? (panel.installed || "unbekannt") : "E-Ink, per USB");
+    fwCell(row, panel.ota ? (panel.offered || "–") : "–");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    const kept = keep && keep.panels.find((entry) => entry.id === panel.id);
+    box.checked = kept ? kept.auto : panel.auto;
+    box.disabled = !panel.ota;
+    fwCell(row, box);
+    const actions = fwCell(row, "");
+    const newer = panel.ota && panel.offered && fwVersionLess(panel.installed, panel.offered);
+    if (panel.updatePending) {
+      const pending = document.createElement("span");
+      pending.className = "fw-badge";
+      pending.textContent = "wartet auf Abruf";
+      actions.appendChild(pending);
+    } else if (newer) {
+      actions.appendChild(fwButton("Jetzt aktualisieren", async () => {
+        await fwAction("updateFirmware", { id: panel.id }, "");
+      }));
+    }
+    panels.appendChild(row);
+  }
+  if (!(data.panels || []).length) {
+    panels.innerHTML = '<tr><td colspan="5" class="hint">Noch keine Anzeige-Instanz angelegt.</td></tr>';
+  }
+}
+
+async function fwAction(method, extra, done) {
+  try {
+    const keep = collectFirmwareForm();
+    const result = await call(method, extra);
+    renderFirmware(result, keep);
+    fwMessage(result.message || done);
+    return true;
+  } catch (error) {
+    fwMessage(error.message);
+    return false;
+  }
+}
+
+async function openFirmware() {
+  const dialog = $("firmware-dialog");
+  try {
+    fwMessage("");
+    renderFirmware(await call("firmware"));
+  } catch (error) {
+    setStatus(error.message);
+    return;
+  }
+  dialog.returnValue = "";
+  dialog.showModal();
+  dialog.onclose = async () => {
+    if (dialog.returnValue !== "ok") return;
+    try {
+      const form = collectFirmwareForm();
+      await call("saveFirmware", form);
+      setStatus(`Firmware-Einstellungen gespeichert. Prüfung alle ${form.checkMinutes} Minuten.`);
+    } catch (error) {
+      setStatus(error.message);
+    }
+  };
+}
+
+function fwReadBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(new Error("Datei konnte nicht gelesen werden."));
+    reader.readAsDataURL(file);
+  });
+}
+
+$("fw-upload").addEventListener("click", async () => {
+  const bin = $("fw-bin").files[0];
+  const descriptor = $("fw-json").files[0];
+  if (!bin || !descriptor) {
+    fwMessage("Programm (homedisplay.bin) und Beschreibung (firmware.json) auswählen.");
+    return;
+  }
+  fwMessage("Programm wird hochgeladen …");
+  $("fw-upload").disabled = true;
+  try {
+    const payload = { bin: await fwReadBase64(bin), descriptor: await descriptor.text(), note: $("fw-note").value.trim() };
+    const ok = await fwAction("uploadFirmware", payload, "Programm hochgeladen und geprüft.");
+    if (ok) {
+      $("fw-bin").value = "";
+      $("fw-json").value = "";
+      $("fw-note").value = "";
+    }
+  } catch (error) {
+    fwMessage(error.message);
+  }
+  $("fw-upload").disabled = false;
+});
+
+$("open-firmware").addEventListener("click", openFirmware);
+
 /* ---------- Prüfen ---------- */
 
 const PROBE_IMAGE_ERROR_TEXT = {

@@ -31,7 +31,7 @@ cd firmware-firebeetle
 pio run
 ```
 
-Artefakt: `build/firmware.bin` — auf den Symcon-Host nach `HomeDisplay/firmware-firebeetle/build/` kopieren für OTA (Manifest liefert SHA-256 und Signatur aus `firmware/keys`).
+Artefakt: `build/firmware.bin`. Die FireBeetle-Firmware hat noch keine Aktualisierung über das Netz und wird per USB geschrieben.
 
 Version steht in `VERSION` und `platformio.ini` (`HOMEDISPLAY_FB_FIRMWARE_VERSION`).
 
