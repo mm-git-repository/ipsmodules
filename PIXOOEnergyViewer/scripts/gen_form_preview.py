@@ -67,7 +67,7 @@ SPRITES = [
         "O......O",
         "OOOOOOOO",
     ], {"O": (170, 170, 170)}),
-    (26, 40, [
+    (26, 45, [
         "......R......",
         ".....RRR.....",
         "....RRRRR....",
@@ -97,7 +97,7 @@ GLYPHS = {
     "9": ["###", "#.#", "###", "..#", "###"],
     "W": ["#...#", "#...#", "#.#.#", "#.#.#", ".#.#."],
     "k": ["#..", "#.#", "##.", "#.#", "#.#"],
-    "%": ["#.#", "..#", ".#.", "#..", "#.#"],
+    "%": ["#...#", "....#", "..#..", "#....", "#...#"],
     "€": [".###", "#...", "###.", "#...", ".###"],
     "-": ["...", "...", "###", "...", "..."],
     ",": [".", ".", ".", "#", "#"],
@@ -203,7 +203,7 @@ def flow_preview() -> str:
     hline(11, 31, 27, RED)
     arrow(21, 27, "r", RED)
     hline(33, 53, 27, DIM)
-    vline(32, 28, 38, HOUSE_LINE)
+    vline(32, 28, 43, HOUSE_LINE)
     arrow(32, 33, "d", HOUSE_LINE)
     put(32, 27, (200, 200, 200))
     for x0, y0, rows, palette in SPRITES:
@@ -235,12 +235,21 @@ def flow_preview() -> str:
                         put(x + dx, y + dy, fill)
             x += len(glyph[0]) + 1
 
-    text("100 W", 32, 10, "c", C_PV)
-    text("1256 W", 1, 34, "l", C_NET_IMPORT)
-    text("0 W", 62, 34, "r", (255, 220, 0))
-    text("80%", 62, 41, "r", C_WHITE)
-    text("1356 W", 32, 58, "c", C_WHITE)
-    text("0,12€", 1, 1, "l", C_SMARD_POS)
+    def text_unit(number: str, unit: str, x: int, y: int, align: str, fill) -> None:
+        total = width(number) + 2 + width(unit)
+        if align == "r":
+            x = x - total + 1
+        elif align == "c":
+            x = x - total // 2
+        text(number, x, y, "l", fill)
+        text(unit, x + width(number) + 2, y, "l", fill)
+
+    text_unit("100", "W", 32, 10, "c", C_PV)
+    text_unit("1256", "W", 1, 34, "l", C_NET_IMPORT)
+    text_unit("0", "W", 62, 34, "r", (255, 220, 0))
+    text_unit("80", "%", 62, 41, "r", C_WHITE)
+    text_unit("1356", "W", 32, 58, "c", C_WHITE)
+    text("0,12€", 1, 41, "l", C_SMARD_POS)
 
     small = Image.new("RGB", (64, 64), BG)
     small.putdata([c for row in px for c in row])
