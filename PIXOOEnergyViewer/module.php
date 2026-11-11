@@ -6,9 +6,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
-    private const MODULE_VERSION = '1.3';
+    private const MODULE_VERSION = '1.4';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 36;
+    private const MODULE_BUILD = 37;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -28,7 +28,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
     private const FONT_LABEL = 26;
-    private const FONT_VALUE = 2;
+    /** Kleinere Wertschrift, damit vier Zeilen auf 64 Pixel passen. Font 0 zeichnet oft gar nicht. */
+    private const FONT_VALUE = 1;
+    private const LABEL_HEIGHT = 6;
+    private const VALUE_HEIGHT = 8;
+    private const ROW_STEP = 16;
     /**
      * Divoom ItemList: Font 0 / sehr kleine Höhen werden oft gar nicht gezeichnet.
      * Font 26 = gleiche kleine Label-Schrift wie „VERBRAUCH“ (standalone/sma_pixoo_display.py).
@@ -43,7 +47,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private const SMARD_CORNER_TEXT_ALIGN = 3;
 
     /** Zeile des Labels „NETZ“ (und optional SMARD-Uhrzeit rechts in derselben Zeile) */
-    private const NETZ_LABEL_Y = 46;
+    private const NETZ_LABEL_Y = 32;
+    private const BATTERY_TEXT_ID = 8;
+    private const BATTERY_POWER_TEXT_ID = 9;
 
     /** |Netz| unter diesem Wert (W) gilt auf dem Pixoo als „0“ → gelb */
     private const NET_ZERO_EPSILON_W = 0.5;
@@ -157,6 +163,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterPropertyInteger('Wr1String2Var', 0);
         $this->RegisterPropertyInteger('Wr2String1Var', 0);
         $this->RegisterPropertyInteger('Wr2String2Var', 0);
+        $this->RegisterPropertyInteger('BatterySocVar', 0);
+        $this->RegisterPropertyInteger('BatteryPowerVar', 0);
 
         $this->RegisterPropertyBoolean('PixooShowSmardPrice', true);
         $this->RegisterPropertyBoolean('PixooSmardShowUnit', true);
@@ -169,6 +177,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!IPS_VariableProfileExists('SMAPX.EurKWh')) {
             IPS_CreateVariableProfile('SMAPX.EurKWh', 2);
             IPS_SetVariableProfileText('SMAPX.EurKWh', '', ' €');
+        }
+        if (!IPS_VariableProfileExists('SMAPX.Percent')) {
+            IPS_CreateVariableProfile('SMAPX.Percent', 2);
+            IPS_SetVariableProfileText('SMAPX.Percent', '', ' %');
         }
         if (!IPS_VariableProfileExists('SMAPX.Text')) {
             IPS_CreateVariableProfile('SMAPX.Text', 3);
@@ -183,16 +195,20 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $wattPres = ['PROFILE' => 'SMAPX.Watt'];
             $eurPres = ['PROFILE' => 'SMAPX.EurKWh'];
             $textPres = ['PROFILE' => 'SMAPX.Text'];
+            $percentPres = ['PROFILE' => 'SMAPX.Percent'];
         } else {
             $wattPres = 'SMAPX.Watt';
             $eurPres = 'SMAPX.EurKWh';
             $textPres = 'SMAPX.Text';
+            $percentPres = 'SMAPX.Percent';
         }
         $this->RegisterVariableFloat('Consumption', 'Verbrauch', $wattPres, 0);
         $this->RegisterVariableFloat('Generation', 'Erzeugung', $wattPres, 1);
         $this->RegisterVariableFloat('Net', 'Netz', $wattPres, 2);
         $this->RegisterVariableFloat('SmardSpotCt', 'SMARD Spot (€)', $eurPres, 3);
         $this->RegisterVariableString('ModuleVersion', 'Modulversion', $textPres, 4);
+        $this->RegisterVariableFloat('BatteryPercent', 'Batterieladestand', $percentPres, 5);
+        $this->RegisterVariableFloat('BatteryPower', 'Batterieleistung', $wattPres, 6);
 
         // SMAPX_*: Symcon erzeugt globale Funktionen aus public-Methoden (scripts/__generated.inc.php).
         $this->RegisterTimer('Update', 0, 'SMAPX_UpdateValues($_IPS[\'TARGET\']);');
@@ -245,6 +261,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'Wr1String2Var' => 0,
             'Wr2String1Var' => 0,
             'Wr2String2Var' => 0,
+            'BatterySocVar' => 0,
+            'BatteryPowerVar' => 0,
             'PixooShowSmardPrice' => true,
             'PixooSmardShowUnit' => true,
             'PixooSmardShowTime' => false,
@@ -474,6 +492,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             }
             $this->ensureTimerDefinitions();
             $this->ensureModuleVersionVariable();
+            $this->ensureBatteryVariables();
             $this->applyModuleVersionInfo();
             $this->ensureKernelLifecycleMessages();
 
@@ -1088,6 +1107,28 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterVariableString('ModuleVersion', 'Modulversion', $textPres, 4);
     }
 
+    /** Bestehende Instanzen: Batterie-Variablen nach Modul-Update anlegen. */
+    private function ensureBatteryVariables(): void
+    {
+        if (!IPS_VariableProfileExists('SMAPX.Percent')) {
+            IPS_CreateVariableProfile('SMAPX.Percent', 2);
+            IPS_SetVariableProfileText('SMAPX.Percent', '', ' %');
+        }
+        if (!IPS_VariableProfileExists('SMAPX.Watt')) {
+            IPS_CreateVariableProfile('SMAPX.Watt', 2);
+            IPS_SetVariableProfileText('SMAPX.Watt', '', ' W');
+        }
+        $usePresArray = false;
+        if (function_exists('IPS_GetKernelVersion')) {
+            $kv = IPS_GetKernelVersion();
+            $usePresArray = is_string($kv) && $kv !== '' && version_compare($kv, '8.0', '>=');
+        }
+        $percentPres = $usePresArray ? ['PROFILE' => 'SMAPX.Percent'] : 'SMAPX.Percent';
+        $wattPres = $usePresArray ? ['PROFILE' => 'SMAPX.Watt'] : 'SMAPX.Watt';
+        $this->RegisterVariableFloat('BatteryPercent', 'Batterieladestand', $percentPres, 5);
+        $this->RegisterVariableFloat('BatteryPower', 'Batterieleistung', $wattPres, 6);
+    }
+
     /** Modulversion nur anzeigen, nicht manuell editierbar. */
     private function lockModuleVersionVariable(): void
     {
@@ -1552,7 +1593,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /**
-     * @param array{consumption: float, generation: float, net: float} $values
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
      */
     private function getPixooDisplayStateHash(array $values): string
     {
@@ -1560,6 +1601,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             (string) (int) round($values['consumption']),
             (string) (int) round($values['generation']),
             (string) (int) round($values['net']),
+            $values['batteryPercent'] === null ? '' : (string) (int) round($values['batteryPercent']),
+            $values['batteryPower'] === null ? '' : (string) (int) round($values['batteryPower']),
             (string) $this->getEffectivePixooBrightness(),
         ];
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
@@ -1570,7 +1613,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /**
-     * @param array{consumption: float, generation: float, net: float} $values
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
      */
     private function shouldSkipDuplicatePixooSync(array $values): bool
     {
@@ -1584,7 +1627,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /**
-     * @param array{consumption: float, generation: float, net: float} $values
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
      */
     private function markPixooSyncCompleted(array $values): void
     {
@@ -1593,14 +1636,19 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /**
-     * @return array{consumption: float, generation: float, net: float}
+     * @return array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float}
      */
     private function getCachedEnergyValuesForPixoo(): array
     {
+        $percentId = $this->readConfiguredPropertyInteger('BatterySocVar');
+        $powerId = $this->readConfiguredPropertyInteger('BatteryPowerVar');
+
         return [
             'consumption' => (float) $this->GetValue('Consumption'),
             'generation' => (float) $this->GetValue('Generation'),
             'net' => (float) $this->GetValue('Net'),
+            'batteryPercent' => $percentId > 0 ? $this->readModuleFloat('BatteryPercent') : null,
+            'batteryPower' => $powerId > 0 ? $this->readModuleFloat('BatteryPower') : null,
         ];
     }
 
@@ -1624,7 +1672,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /**
      * Liest Quellvariablen und schreibt Modul-Variablen. Läuft ohne Netzwerk.
      *
-     * @return array{consumption: float, generation: float, net: float}|null
+     * @return array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float}|null
      */
     private function updateEnergyValues(): ?array
     {
@@ -1682,17 +1730,43 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SetValue('Consumption', $consumption);
         $this->SetValue('Generation', $generation);
         $this->SetValue('Net', $netW);
+
+        $batteryPercent = null;
+        $socId = $this->readConfiguredPropertyInteger('BatterySocVar');
+        if ($socId > 0) {
+            $rawSoc = $this->readWattFromVariable($socId);
+            if ($rawSoc === null) {
+                $batteryPercent = $this->readModuleFloat('BatteryPercent');
+            } else {
+                $batteryPercent = max(0.0, min(100.0, $rawSoc));
+                $this->SetValue('BatteryPercent', $batteryPercent);
+            }
+        }
+        $batteryPower = null;
+        $powerId = $this->readConfiguredPropertyInteger('BatteryPowerVar');
+        if ($powerId > 0) {
+            $rawPower = $this->readWattFromVariable($powerId);
+            if ($rawPower === null) {
+                $batteryPower = $this->readModuleFloat('BatteryPower');
+            } else {
+                $batteryPower = $rawPower;
+                $this->SetValue('BatteryPower', $batteryPower);
+            }
+        }
+
         $this->SetBuffer('LastValuesAt', (string) time());
 
         return [
             'consumption' => $consumption,
             'generation' => $generation,
             'net' => $netW,
+            'batteryPercent' => $batteryPercent,
+            'batteryPower' => $batteryPower,
         ];
     }
 
     /**
-     * @param array{consumption: float, generation: float, net: float} $values
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
      * @param bool $lightSync Werte-Zyklus: nur Texte, solange das GIF noch gilt
      * @param bool $heavyInit Frame erzwingen (zuerst Kanal Custom, dann GIF und Texte)
      * @param bool $bypassCooldown manuelles/stündliches Reinit und Watchdog ignorieren HTTP-Pause
@@ -1733,7 +1807,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 $this->SetBuffer('PixooLastBrightness', (string) $eff);
             }
 
-            $this->PixooSendItemList($pixooIp, $values['consumption'], $values['generation'], $values['net']);
+            $this->PixooSendItemList(
+                $pixooIp,
+                $values['consumption'],
+                $values['generation'],
+                $values['net'],
+                $values['batteryPercent'],
+                $values['batteryPower']
+            );
             $this->recordPixooHttpSuccess($lightSync);
             $this->markPixooSyncCompleted($values);
         } catch (\Throwable $e) {
@@ -2132,6 +2213,15 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 $snapshot[$key] = $id;
             }
         }
+        foreach ($this->optionalSourceVariableKeys() as $key) {
+            if ($values === null || !array_key_exists($key, $values)) {
+                continue;
+            }
+            $id = $this->coerceVariableIdFromStoredValue($values[$key]);
+            if ($id > 0) {
+                $snapshot[$key] = $id;
+            }
+        }
 
         return $snapshot;
     }
@@ -2147,8 +2237,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return 0;
         }
         $restored = 0;
+        $keys = $this->optionalSourceVariableKeys();
         foreach ($this->getVariableSlotDefinitions() as $def) {
-            $key = $def['property'];
+            $keys[] = $def['property'];
+        }
+        foreach ($keys as $key) {
             if (!isset($snapshot[$key]) || $snapshot[$key] <= 0) {
                 continue;
             }
@@ -2178,9 +2271,28 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return !$this->hasCompleteSourceVariableIdBackup();
     }
 
+    /** @return list<string> */
+    private function optionalSourceVariableKeys(): array
+    {
+        return ['BatterySocVar', 'BatteryPowerVar'];
+    }
+
+    /** @param array<string, int> $ids */
+    private function backupHasRequiredSourceVariables(array $ids): bool
+    {
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            if (!isset($ids[$key]) || $ids[$key] <= 0) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private function hasCompleteSourceVariableIdBackup(): bool
     {
-        return count($this->loadSourceVariableIdBackup()) === count($this->getVariableSlotDefinitions());
+        return $this->backupHasRequiredSourceVariables($this->loadSourceVariableIdBackup());
     }
 
     private function getSourceVariableBackupFilePath(): string
@@ -2242,6 +2354,15 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             }
             $normalized[$key] = $id;
         }
+        foreach ($this->optionalSourceVariableKeys() as $key) {
+            if (!array_key_exists($key, $data)) {
+                continue;
+            }
+            $id = self::migrateCoerceInt($data[$key]);
+            if ($id > 0) {
+                $normalized[$key] = $id;
+            }
+        }
 
         return $normalized;
     }
@@ -2251,7 +2372,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private function writeSourceVariableIdBackup(array $ids): void
     {
-        if (count($ids) !== count($this->getVariableSlotDefinitions())) {
+        if (!$this->backupHasRequiredSourceVariables($ids)) {
             return;
         }
         $encoded = json_encode($ids, JSON_UNESCAPED_UNICODE);
@@ -2274,6 +2395,22 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $result = [];
         foreach ($this->getVariableSlotDefinitions() as $def) {
             $key = $def['property'];
+            $id = 0;
+            if (function_exists('IPS_GetProperty')) {
+                $id = self::migrateCoerceInt(IPS_GetProperty($this->InstanceID, $key));
+            }
+            if ($id <= 0) {
+                $id = $this->ReadPropertyInteger($key);
+            }
+            $values = $this->getPersistedConfigurationValues();
+            if ($id <= 0 && $values !== null && array_key_exists($key, $values)) {
+                $id = $this->coerceVariableIdFromStoredValue($values[$key]);
+            }
+            if ($id > 0) {
+                $result[$key] = $id;
+            }
+        }
+        foreach ($this->optionalSourceVariableKeys() as $key) {
             $id = 0;
             if (function_exists('IPS_GetProperty')) {
                 $id = self::migrateCoerceInt(IPS_GetProperty($this->InstanceID, $key));
@@ -2508,6 +2645,20 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         };
     }
 
+    private function readModuleFloat(string $ident): ?float
+    {
+        try {
+            $value = $this->GetValue($ident);
+        } catch (\Throwable) {
+            return null;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
+
+        return null;
+    }
+
     /** Integer, Float oder String (mit Zahl im Text) */
     private function isAllowedWattVariable(int $variableId): bool
     {
@@ -2554,7 +2705,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      * Zuerst Custom öffnen, dort Bild und Texte schreiben.
      * Ein SetIndex nach dem GIF lädt die Testkarte und verwirft das gerade gesendete Bild.
      *
-     * @param array{consumption: float, generation: float, net: float} $values
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
      */
     private function pushPixooFrame(string $ip, array $values): void
     {
@@ -2570,7 +2721,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'Brightness' => max(0, min(100, $eff)),
         ]);
         $this->SetBuffer('PixooLastBrightness', (string) $eff);
-        $this->PixooSendItemList($ip, $values['consumption'], $values['generation'], $values['net']);
+        $this->PixooSendItemList(
+            $ip,
+            $values['consumption'],
+            $values['generation'],
+            $values['net'],
+            $values['batteryPercent'],
+            $values['batteryPower']
+        );
         try {
             $this->pixooPostCommand($ip, [
                 'Command' => 'Channel/OnOffScreen',
@@ -2675,11 +2833,17 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return $h >= $from || $h < $to;
     }
 
-    private function PixooSendItemList(string $ip, float $consumption, float $generation, float $netW): void
-    {
+    private function PixooSendItemList(
+        string $ip,
+        float $consumption,
+        float $generation,
+        float $netW,
+        ?float $batteryPercent,
+        ?float $batteryPower
+    ): void {
         $this->pixooPostCommand($ip, [
             'Command' => 'Draw/SendHttpItemList',
-            'ItemList' => $this->BuildItems($consumption, $generation, $netW),
+            'ItemList' => $this->BuildItems($consumption, $generation, $netW, $batteryPercent, $batteryPower),
         ]);
     }
 
@@ -2777,19 +2941,47 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /** @return list<array<string,mixed>> */
-    private function BuildItems(float $consumption, float $generation, float $netW): array
-    {
+    private function BuildItems(
+        float $consumption,
+        float $generation,
+        float $netW,
+        ?float $batteryPercent,
+        ?float $batteryPower
+    ): array {
         $cLabel = $this->RgbHex(140, 140, 140);
         $cWhite = $this->RgbHex(255, 255, 255);
         $cNet = $this->NetGridColorHex($netW);
+        $valueH = self::VALUE_HEIGHT;
+        $labelH = self::LABEL_HEIGHT;
 
         $items = [
-            $this->makeTextItem(1, 'VERBRAUCH', self::LEFT_PAD, 2, $cLabel, self::FONT_LABEL, 7),
-            $this->makeTextItem(2, sprintf('%.0f W', $consumption), self::LEFT_PAD, 8, $cWhite, self::FONT_VALUE, 16),
-            $this->makeTextItem(3, 'ERZEUGUNG', self::LEFT_PAD, 24, $cLabel, self::FONT_LABEL, 7),
-            $this->makeTextItem(4, sprintf('%.0f W', $generation), self::LEFT_PAD, 30, $cWhite, self::FONT_VALUE, 16),
-            $this->makeTextItem(5, 'NETZ', self::LEFT_PAD, self::NETZ_LABEL_Y, $cLabel, self::FONT_LABEL, 7),
-            $this->makeTextItem(6, sprintf('%.0f W', abs($netW)), self::LEFT_PAD, 52, $cNet, self::FONT_VALUE, 16),
+            $this->makeTextItem(1, 'VERBRAUCH', self::LEFT_PAD, 0, $cLabel, self::FONT_LABEL, $labelH),
+            $this->makeTextItem(2, sprintf('%.0f W', $consumption), self::LEFT_PAD, 6, $cWhite, self::FONT_VALUE, $valueH),
+            $this->makeTextItem(3, 'ERZEUGUNG', self::LEFT_PAD, self::ROW_STEP, $cLabel, self::FONT_LABEL, $labelH),
+            $this->makeTextItem(4, sprintf('%.0f W', $generation), self::LEFT_PAD, self::ROW_STEP + 6, $cWhite, self::FONT_VALUE, $valueH),
+            $this->makeTextItem(5, 'NETZ', self::LEFT_PAD, self::NETZ_LABEL_Y, $cLabel, self::FONT_LABEL, $labelH),
+            $this->makeTextItem(6, sprintf('%.0f W', abs($netW)), self::LEFT_PAD, self::NETZ_LABEL_Y + 6, $cNet, self::FONT_VALUE, $valueH),
+            $this->makeTextItem(7, 'BATTERIE', self::LEFT_PAD, self::ROW_STEP * 3, $cLabel, self::FONT_LABEL, $labelH),
+            $this->makeTextItem(
+                self::BATTERY_TEXT_ID,
+                $batteryPercent === null ? '--' : sprintf('%.0f%%', $batteryPercent),
+                self::LEFT_PAD,
+                self::ROW_STEP * 3 + 6,
+                $cWhite,
+                self::FONT_VALUE,
+                $valueH
+            ),
+            $this->makeTextItem(
+                self::BATTERY_POWER_TEXT_ID,
+                $batteryPower === null ? '--' : sprintf('%.0f W', abs($batteryPower)),
+                self::DATETIME_X,
+                self::ROW_STEP * 3 + 6,
+                $batteryPower === null ? $cLabel : $this->BatteryPowerColorHex($batteryPower),
+                self::FONT_VALUE,
+                $valueH,
+                self::PIXEL_SIZE,
+                self::SMARD_CORNER_TEXT_ALIGN
+            ),
         ];
 
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
@@ -2799,13 +2991,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $dDir = 1;
             $dSpeed = 0;
 
-            $priceFont = self::FONT_VALUE;
-            $priceH = 16;
-            $priceY = 52;
-
             if ($this->ReadPropertyBoolean('PixooSmardShowTime')) {
                 $timeStr = $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
-                // Gleiche Font-ID wie Verbrauch/Erzeugung/Netz (FONT_VALUE), damit Ziffern (z. B. „0“) nicht wie bei FONT_LABEL 26 dicker wirken
                 $items[] = $this->makeTextItem(
                     self::SMARD_TIME_TEXT_ID,
                     $timeStr,
@@ -2813,7 +3000,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                     self::NETZ_LABEL_Y,
                     $cLabel,
                     self::FONT_VALUE,
-                    10,
+                    $labelH,
                     $tw,
                     $al,
                     $dDir,
@@ -2834,10 +3021,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 self::SMARD_TEXT_ID,
                 $txt,
                 $ax,
-                $priceY,
+                self::NETZ_LABEL_Y + 6,
                 $col,
-                $priceFont,
-                $priceH,
+                self::FONT_VALUE,
+                $valueH,
                 $tw,
                 $al,
                 $dDir,
@@ -2846,6 +3033,19 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
 
         return $items;
+    }
+
+    /** Laden (plus) → grün, Entladen (minus) → rot, nahe 0 → gelb */
+    private function BatteryPowerColorHex(float $powerW): string
+    {
+        if (abs($powerW) < self::NET_ZERO_EPSILON_W) {
+            return $this->RgbHex(255, 220, 0);
+        }
+        if ($powerW > 0.0) {
+            return $this->RgbHex(50, 220, 50);
+        }
+
+        return $this->RgbHex(255, 50, 50);
     }
 
     /** Netzbezug → rot, Einspeisung → grün, nahe 0 → gelb */
