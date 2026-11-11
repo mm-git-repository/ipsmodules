@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.9';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 50;
+    private const MODULE_BUILD = 51;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -3768,10 +3768,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             '9' => ['###', '#.#', '###', '..#', '###'],
             'W' => ['#...#', '#...#', '#.#.#', '#.#.#', '.#.#.'],
             'k' => ['#..', '#.#', '##.', '#.#', '#.#'],
-            '%' => ['#...#', '....#', '..#..', '#....', '#...#'],
+            '%' => ['##...', '##.#.', '..#..', '.#.##', '...##'],
             '€' => ['.###', '#...', '###.', '#...', '.###'],
             '-' => ['...', '...', '###', '...', '...'],
-            ',' => ['.', '.', '.', '#', '#'],
+            ',' => ['.', '.', '.', '.', '#'],
             ':' => ['.', '#', '.', '#', '.'],
             ' ' => ['.', '.', '.', '.', '.'],
         ];
