@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.9';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 49;
+    private const MODULE_BUILD = 50;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -63,10 +63,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private const FLOW_ACTIVE_W = 30.0;
     /**
-     * Schritte des hellen Abschnitts. Je Aktualisierung geht genau ein Bild,
+     * Schritte des hellen Abschnitts. Alle 2 Sekunden geht genau ein Bild,
      * dieselbe Größe wie das Standbild bei ausgeschalteter Animation.
      */
     private const FLOW_FRAMES = 8;
+    private const FLOW_STEP_SEC = 2;
     /**
      * Zahlen stehen im Bild. Ein neues Standbild öfter als das wirkt wie ein Neustart.
      * Richtungswechsel und der nächste Animationsschritt gehen sofort.
@@ -3413,14 +3414,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return $this->renderFlowFrame($values, $this->currentFlowPhase());
     }
 
-    /** Aus: Pfeile. An: ein heller Abschnitt, der bei jeder Aktualisierung einen Schritt weiterwandert. */
+    /** Aus: Pfeile. An: ein heller Abschnitt, der alle 2 Sekunden einen Schritt weiterwandert. */
     private function currentFlowPhase(): ?int
     {
         if (!$this->isFlowAnimation()) {
             return null;
         }
 
-        return intdiv(time(), $this->getUpdateIntervalSec()) % self::FLOW_FRAMES;
+        return intdiv(time(), self::FLOW_STEP_SEC) % self::FLOW_FRAMES;
     }
 
     private function flowPhaseKey(): string
