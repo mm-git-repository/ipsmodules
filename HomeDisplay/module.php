@@ -2032,18 +2032,42 @@ class HomeDisplay extends IPSModuleStrict
             if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
                 return null;
             }
-            $raw = GetValue($variableId);
-            if (is_int($raw) || is_float($raw)) {
-                return (float) $raw;
-            }
-            if (is_bool($raw)) {
-                return $raw ? 1.0 : 0.0;
-            }
-            if (is_string($raw) && is_numeric(trim($raw))) {
-                return (float) trim($raw);
-            }
-            return null;
+            return $this->energyFlowNumber(GetValue($variableId));
         };
+    }
+
+    /** Zahl aus einer IPS-Variable, auch aus Texten wie "1.234,5 W" oder "1234 W". */
+    private function energyFlowNumber(mixed $raw): ?float
+    {
+        if (is_int($raw) || is_float($raw)) {
+            return (float) $raw;
+        }
+        if (is_bool($raw)) {
+            return $raw ? 1.0 : 0.0;
+        }
+        if (!is_string($raw)) {
+            return null;
+        }
+        $text = trim(str_replace(["\xc2\xa0", ' '], '', $raw));
+        if ($text === '' || !preg_match('/[+-]?\d[\d.,]*/', $text, $match)) {
+            return null;
+        }
+        $token = $match[0];
+        $dot = strrpos($token, '.');
+        $comma = strrpos($token, ',');
+        if ($dot !== false && $comma !== false) {
+            if ($comma > $dot) {
+                $token = str_replace('.', '', $token);
+                $token = str_replace(',', '.', $token);
+            } else {
+                $token = str_replace(',', '', $token);
+            }
+        } elseif ($comma !== false) {
+            $token = str_replace(',', '.', $token);
+        } elseif ($dot !== false && preg_match('/^[+-]?\d{1,3}(\.\d{3})+$/', $token)) {
+            $token = str_replace('.', '', $token);
+        }
+        return is_numeric($token) ? (float) $token : null;
     }
 
     /** @param array<string, mixed> $tile */

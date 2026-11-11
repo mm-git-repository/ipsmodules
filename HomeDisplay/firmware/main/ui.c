@@ -5248,11 +5248,44 @@ static lv_obj_t *flow_circle(lv_obj_t *parent, int cx, int cy, int r, uint32_t r
     lv_obj_set_style_border_color(circle, lv_color_hex(color_mono ? 0xFFFFFF : ring), 0);
     lv_obj_set_style_border_opa(circle, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(circle, 0, 0);
-    lv_obj_set_style_pad_row(circle, 0, 0);
-    lv_obj_set_flex_flow(circle, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(circle, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(circle, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(circle, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     return circle;
+}
+
+/* Symbol und Werte mittig in den Kreis legen. Passt der Stapel nicht, fällt das Symbol weg,
+ * sonst schneidet der Kreis die Zahlen ab. */
+static void flow_stack(lv_obj_t *circle, int radius, bool has_icon)
+{
+    int count = lv_obj_get_child_cnt(circle);
+    if (count <= 0) return;
+    int inner = 2 * radius - 8;
+    if (inner < 16) inner = 16;
+    int height[6];
+    int total = 0;
+    int used = count > 6 ? 6 : count;
+    for (int index = 0; index < used; index++) {
+        lv_obj_t *child = lv_obj_get_child(circle, index);
+        const lv_font_t *font = lv_obj_get_style_text_font(child, LV_PART_MAIN);
+        int line = font ? lv_font_get_line_height(font) : 16;
+        height[index] = line;
+        total += line;
+        lv_obj_set_width(child, inner);
+        lv_obj_set_style_text_align(child, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(child, LV_LABEL_LONG_CLIP);
+    }
+    int first = 0;
+    if (has_icon && used > 1 && total > inner) {
+        lv_obj_add_flag(lv_obj_get_child(circle, 0), LV_OBJ_FLAG_HIDDEN);
+        total -= height[0];
+        first = 1;
+    }
+    int y = (2 * radius - total) / 2;
+    if (y < 1) y = 1;
+    int x = (2 * radius - inner) / 2;
+    for (int index = first; index < used; index++) {
+        lv_obj_set_pos(lv_obj_get_child(circle, index), x, y);
+        y += height[index];
+    }
 }
 
 static lv_obj_t *flow_text(lv_obj_t *parent, const lv_font_t *font, uint32_t ink, const char *text)
@@ -5462,6 +5495,7 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
         lv_obj_t *circle = flow_circle(view->card, cx, py, r, FLOW_RING_PV, fill);
         if (with_icon) flow_icon(circle, "solar", large_icon);
         slot->pv_val = flow_text(circle, value_font, text_fg(), "-");
+        flow_stack(circle, r, with_icon);
         flow_caption(view->card, "PV", 0, py - 10, cx - r - 8, LV_TEXT_ALIGN_RIGHT);
     }
     if (has_grid) {
@@ -5469,6 +5503,7 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
         if (with_icon) flow_icon(circle, "transmissionTower", large_icon && !(grid_in && grid_out));
         if (grid_out) slot->grid_out = flow_text(circle, value_font, FLOW_INK_EXPORT, "-");
         if (grid_in) slot->grid_in = flow_text(circle, value_font, FLOW_INK_IMPORT, "-");
+        flow_stack(circle, r, with_icon);
         flow_caption(view->card, "Netz", gx - r - 2, ym - r - label_h, 2 * r + 4, LV_TEXT_ALIGN_CENTER);
     }
     if (has_bat) {
@@ -5476,6 +5511,7 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
         if (with_icon) flow_icon(circle, "batteryIcon", large_icon && !(bat_in && bat_out));
         if (bat_in) slot->bat_in = flow_text(circle, value_font, FLOW_INK_CHARGE, "-");
         if (bat_out) slot->bat_out = flow_text(circle, value_font, FLOW_INK_DISCHARGE, "-");
+        flow_stack(circle, r, with_icon);
         int caption_y = has_soc ? by - 20 : by - 10;
         flow_caption(view->card, "Batterie", 0, caption_y, cx - r - 8, LV_TEXT_ALIGN_RIGHT);
         if (has_soc) slot->soc_val = flow_caption(view->card, "", 0, caption_y + 20, cx - r - 8, LV_TEXT_ALIGN_RIGHT);
@@ -5483,6 +5519,7 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
     lv_obj_t *home = flow_circle(view->card, hx, ym, r, FLOW_RING_HOME, fill);
     if (with_icon) flow_icon(home, "home", large_icon);
     slot->home_val = flow_text(home, value_font, text_fg(), "-");
+    flow_stack(home, r, with_icon);
     flow_caption(view->card, "Zuhause", hx - r - 20, ym - r - label_h, 2 * r + 22, LV_TEXT_ALIGN_CENTER);
     static const uint32_t mix_ink[3] = {FLOW_RING_PV, FLOW_INK_DISCHARGE, FLOW_RING_GRID};
     for (int part = 0; part < 3; part++) {
@@ -5551,10 +5588,11 @@ static void paint_energy_flow(tile_view_t *view, cJSON *flow)
     flow_slot_t *slot = view->flow;
     if (!slot || !cJSON_IsObject(flow)) return;
     flow_set(slot->pv_val, NULL, flow, "pv");
-    flow_set(slot->grid_out, LV_SYMBOL_LEFT " ", flow, "gridOut");
-    flow_set(slot->grid_in, LV_SYMBOL_RIGHT " ", flow, "gridIn");
-    flow_set(slot->bat_in, LV_SYMBOL_DOWN " ", flow, "batIn");
-    flow_set(slot->bat_out, LV_SYMBOL_UP " ", flow, "batOut");
+    /* Pfeile aus der Anzeigeschrift. Die LVGL-Symbole fehlen in Montserrat und verdrängen die Zahl. */
+    flow_set(slot->grid_out, "< ", flow, "gridOut");
+    flow_set(slot->grid_in, "> ", flow, "gridIn");
+    flow_set(slot->bat_in, "+ ", flow, "batIn");
+    flow_set(slot->bat_out, "- ", flow, "batOut");
     flow_set(slot->home_val, NULL, flow, "home");
     if (slot->soc_val) flow_set(slot->soc_val, NULL, flow, "soc");
     cJSON *lines = cJSON_GetObjectItem(flow, "l");

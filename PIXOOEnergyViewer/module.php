@@ -6,9 +6,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 {
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
-    private const MODULE_VERSION = '1.4';
+    private const MODULE_VERSION = '1.7';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 37;
+    private const MODULE_BUILD = 40;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -28,11 +28,17 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private const PIXEL_SIZE = 64;
     private const LEFT_PAD = 2;
     private const FONT_LABEL = 26;
-    /** Kleinere Wertschrift, damit vier Zeilen auf 64 Pixel passen. Font 0 zeichnet oft gar nicht. */
-    private const FONT_VALUE = 1;
-    private const LABEL_HEIGHT = 6;
+    /**
+     * Dieselbe kleine Schrift wie die Überschriften. Font 2 braucht etwa 16 Pixel Höhe
+     * und passt nicht viermal untereinander. Font 1 mit Höhe 8 zeichnet das Pixoo oft gar nicht.
+     */
+    private const FONT_VALUE = 26;
+    /** Höhe 7 zeigt Font 26 vollständig. Höhe 6 schneidet die Überschrift ab. */
+    private const LABEL_HEIGHT = 7;
     private const VALUE_HEIGHT = 8;
     private const ROW_STEP = 16;
+    /** Wert beginnt unter der Überschrift, ohne in die nächste Zeile zu ragen. */
+    private const VALUE_OFFSET = 8;
     /**
      * Divoom ItemList: Font 0 / sehr kleine Höhen werden oft gar nicht gezeichnet.
      * Font 26 = gleiche kleine Label-Schrift wie „VERBRAUCH“ (standalone/sma_pixoo_display.py).
@@ -46,10 +52,21 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** 1 = links, 2 = mitte, 3 = rechts — fest für SMARD-Eck */
     private const SMARD_CORNER_TEXT_ALIGN = 3;
 
-    /** Zeile des Labels „NETZ“ (und optional SMARD-Uhrzeit rechts in derselben Zeile) */
-    private const NETZ_LABEL_Y = 32;
+    /** Unterste Zeile: „NETZ“ (und optional SMARD rechts daneben). */
+    private const NETZ_LABEL_Y = 48;
     private const BATTERY_TEXT_ID = 8;
     private const BATTERY_POWER_TEXT_ID = 9;
+
+    /**
+     * Grafikmodus: Fluss gilt erst ab dieser Leistung als aktiv.
+     * Jeder Richtungswechsel sendet ein neues Hintergrundbild, deshalb nicht zu klein.
+     */
+    private const FLOW_ACTIVE_W = 30.0;
+    private const FLOW_PV_TEXT_ID = 1;
+    private const FLOW_GRID_TEXT_ID = 2;
+    private const FLOW_BATTERY_TEXT_ID = 3;
+    private const FLOW_BATTERY_PERCENT_TEXT_ID = 4;
+    private const FLOW_HOUSE_TEXT_ID = 5;
 
     /** |Netz| unter diesem Wert (W) gilt auf dem Pixoo als „0“ → gelb */
     private const NET_ZERO_EPSILON_W = 0.5;
@@ -164,7 +181,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterPropertyInteger('Wr2String1Var', 0);
         $this->RegisterPropertyInteger('Wr2String2Var', 0);
         $this->RegisterPropertyInteger('BatterySocVar', 0);
-        $this->RegisterPropertyInteger('BatteryPowerVar', 0);
+        $this->RegisterPropertyInteger('BatteryChargeVar', 0);
+        $this->RegisterPropertyInteger('BatteryDischargeVar', 0);
 
         $this->RegisterPropertyBoolean('PixooShowSmardPrice', true);
         $this->RegisterPropertyBoolean('PixooSmardShowUnit', true);
@@ -208,7 +226,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterVariableFloat('SmardSpotCt', 'SMARD Spot (€)', $eurPres, 3);
         $this->RegisterVariableString('ModuleVersion', 'Modulversion', $textPres, 4);
         $this->RegisterVariableFloat('BatteryPercent', 'Batterieladestand', $percentPres, 5);
-        $this->RegisterVariableFloat('BatteryPower', 'Batterieleistung', $wattPres, 6);
+        $this->RegisterVariableFloat('BatteryCharge', 'Batterieladung', $wattPres, 6);
+        $this->RegisterVariableFloat('BatteryDischarge', 'Batterieentladung', $wattPres, 7);
+        $this->RegisterVariableBoolean('GraphicMode', 'Grafikmodus (Energiefluss)', $usePresArray ? ['PROFILE' => '~Switch'] : '~Switch', 8);
+        $this->EnableAction('GraphicMode');
 
         // SMAPX_*: Symcon erzeugt globale Funktionen aus public-Methoden (scripts/__generated.inc.php).
         $this->RegisterTimer('Update', 0, 'SMAPX_UpdateValues($_IPS[\'TARGET\']);');
@@ -232,6 +253,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'PixooDateTimeFont',
             'PixooDateTimeTextHeight',
             'PixooDateTimeAlign',
+            'BatteryPowerVar',
         ];
     }
 
@@ -262,7 +284,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'Wr2String1Var' => 0,
             'Wr2String2Var' => 0,
             'BatterySocVar' => 0,
-            'BatteryPowerVar' => 0,
+            'BatteryChargeVar' => 0,
+            'BatteryDischargeVar' => 0,
             'PixooShowSmardPrice' => true,
             'PixooSmardShowUnit' => true,
             'PixooSmardShowTime' => false,
@@ -493,6 +516,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->ensureTimerDefinitions();
             $this->ensureModuleVersionVariable();
             $this->ensureBatteryVariables();
+            $this->ensureGraphicModeVariable();
             $this->applyModuleVersionInfo();
             $this->ensureKernelLifecycleMessages();
 
@@ -1125,8 +1149,76 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $percentPres = $usePresArray ? ['PROFILE' => 'SMAPX.Percent'] : 'SMAPX.Percent';
         $wattPres = $usePresArray ? ['PROFILE' => 'SMAPX.Watt'] : 'SMAPX.Watt';
+        $this->dropModuleVariable('BatteryPower');
         $this->RegisterVariableFloat('BatteryPercent', 'Batterieladestand', $percentPres, 5);
-        $this->RegisterVariableFloat('BatteryPower', 'Batterieleistung', $wattPres, 6);
+        $this->RegisterVariableFloat('BatteryCharge', 'Batterieladung', $wattPres, 6);
+        $this->RegisterVariableFloat('BatteryDischarge', 'Batterieentladung', $wattPres, 7);
+    }
+
+    /** Bestehende Instanzen: Schalter für den Grafikmodus nach Modul-Update anlegen. */
+    private function ensureGraphicModeVariable(): void
+    {
+        $usePresArray = false;
+        if (function_exists('IPS_GetKernelVersion')) {
+            $kv = IPS_GetKernelVersion();
+            $usePresArray = is_string($kv) && $kv !== '' && version_compare($kv, '8.0', '>=');
+        }
+        $this->RegisterVariableBoolean('GraphicMode', 'Grafikmodus (Energiefluss)', $usePresArray ? ['PROFILE' => '~Switch'] : '~Switch', 8);
+        $this->EnableAction('GraphicMode');
+    }
+
+    public function RequestAction(string $Ident, mixed $Value): void
+    {
+        if ($Ident === 'GraphicMode') {
+            $this->setGraphicMode((bool) $Value);
+            return;
+        }
+        throw new \Exception('Ungültige Aktion: ' . $Ident);
+    }
+
+    /** Formular-Knopf: zwischen Textansicht und Energiefluss wechseln. */
+    public function ToggleGraphicMode(): string
+    {
+        $this->setGraphicMode(!$this->isGraphicMode());
+
+        return $this->isGraphicMode() ? 'Grafikmodus (Energiefluss) aktiv' : 'Textansicht aktiv';
+    }
+
+    private function setGraphicMode(bool $enabled): void
+    {
+        $this->SetValue('GraphicMode', $enabled);
+        $this->SetBuffer('PixooFrameKey', '');
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        try {
+            $this->syncPixooDisplay($this->getCachedEnergyValuesForPixoo(), false, true, true);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Grafikmodus', 'Umschalten: ' . $e->getMessage(), 0);
+        }
+    }
+
+    private function isGraphicMode(): bool
+    {
+        try {
+            return (bool) $this->GetValue('GraphicMode');
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /** Alte Modulvariable entfernen, falls sie noch an der Instanz hängt. */
+    private function dropModuleVariable(string $ident): void
+    {
+        $id = @IPS_GetObjectIDByIdent($ident, $this->InstanceID);
+        if (!is_int($id) || $id <= 0) {
+            return;
+        }
+        try {
+            $this->UnregisterVariable($ident);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Batterie', 'Variable ' . $ident . ' konnte nicht entfernt werden: ' . $e->getMessage(), 0);
+        }
     }
 
     /** Modulversion nur anzeigen, nicht manuell editierbar. */
@@ -1604,6 +1696,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $values['batteryPercent'] === null ? '' : (string) (int) round($values['batteryPercent']),
             $values['batteryPower'] === null ? '' : (string) (int) round($values['batteryPower']),
             (string) $this->getEffectivePixooBrightness(),
+            $this->getPixooFrameKey($values),
         ];
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
             $smard = $this->getSmardEurPerMwhForDisplay();
@@ -1641,14 +1734,15 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private function getCachedEnergyValuesForPixoo(): array
     {
         $percentId = $this->readConfiguredPropertyInteger('BatterySocVar');
-        $powerId = $this->readConfiguredPropertyInteger('BatteryPowerVar');
+        $charge = $this->cachedPositiveWatt('BatteryChargeVar', 'BatteryCharge');
+        $discharge = $this->cachedPositiveWatt('BatteryDischargeVar', 'BatteryDischarge');
 
         return [
             'consumption' => (float) $this->GetValue('Consumption'),
             'generation' => (float) $this->GetValue('Generation'),
             'net' => (float) $this->GetValue('Net'),
             'batteryPercent' => $percentId > 0 ? $this->readModuleFloat('BatteryPercent') : null,
-            'batteryPower' => $powerId > 0 ? $this->readModuleFloat('BatteryPower') : null,
+            'batteryPower' => $this->signedBatteryPower($charge, $discharge),
         ];
     }
 
@@ -1742,17 +1836,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 $this->SetValue('BatteryPercent', $batteryPercent);
             }
         }
-        $batteryPower = null;
-        $powerId = $this->readConfiguredPropertyInteger('BatteryPowerVar');
-        if ($powerId > 0) {
-            $rawPower = $this->readWattFromVariable($powerId);
-            if ($rawPower === null) {
-                $batteryPower = $this->readModuleFloat('BatteryPower');
-            } else {
-                $batteryPower = $rawPower;
-                $this->SetValue('BatteryPower', $batteryPower);
-            }
-        }
+        $batteryCharge = $this->readOptionalPositiveWatt('BatteryChargeVar', 'BatteryCharge');
+        $batteryDischarge = $this->readOptionalPositiveWatt('BatteryDischargeVar', 'BatteryDischarge');
+        $batteryPower = $this->signedBatteryPower($batteryCharge, $batteryDischarge);
 
         $this->SetBuffer('LastValuesAt', (string) time());
 
@@ -1781,7 +1867,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if ($pixooIp === '') {
             return;
         }
-        $needFrame = $heavyInit || $this->pixooFrameNeedsPush($pixooIp);
+        $needFrame = $heavyInit
+            || $this->getPixooFrameKey($values) !== $this->GetBuffer('PixooFrameKey')
+            || $this->pixooFrameNeedsPush($pixooIp);
         if (!$needFrame && $lightSync && $this->shouldSkipDuplicatePixooSync($values)) {
             return;
         }
@@ -2274,7 +2362,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** @return list<string> */
     private function optionalSourceVariableKeys(): array
     {
-        return ['BatterySocVar', 'BatteryPowerVar'];
+        return ['BatterySocVar', 'BatteryChargeVar', 'BatteryDischargeVar'];
     }
 
     /** @param array<string, int> $ids */
@@ -2714,13 +2802,18 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'Command' => 'Channel/SetCustomPageIndex',
             'CustomPageIndex' => self::PIXOO_CUSTOM_PAGE,
         ]);
-        $this->PixooSendBackground($ip);
+        $this->PixooSendBackground($ip, $this->renderBackgroundFrame($values));
         $eff = $this->getEffectivePixooBrightness();
         $this->pixooPostCommand($ip, [
             'Command' => 'Channel/SetBrightness',
             'Brightness' => max(0, min(100, $eff)),
         ]);
         $this->SetBuffer('PixooLastBrightness', (string) $eff);
+        try {
+            $this->pixooPostCommand($ip, ['Command' => 'Draw/ClearHttpText']);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Pixoo', 'Draw/ClearHttpText: ' . $e->getMessage(), 0);
+        }
         $this->PixooSendItemList(
             $ip,
             $values['consumption'],
@@ -2740,6 +2833,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SetBuffer('PixooGifReady', '1');
         $this->SetBuffer('PixooInited', '1');
         $this->SetBuffer('PixooLastHeavyGifAt', (string) time());
+        $this->SetBuffer('PixooFrameKey', $this->getPixooFrameKey($values));
     }
 
     /** @return bool|null true = Custom, false = anderer Kanal, null = Abfrage fehlgeschlagen */
@@ -2841,20 +2935,23 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         ?float $batteryPercent,
         ?float $batteryPower
     ): void {
+        $items = $this->isGraphicMode()
+            ? $this->BuildFlowItems($consumption, $generation, $netW, $batteryPercent, $batteryPower)
+            : $this->BuildItems($consumption, $generation, $netW, $batteryPercent, $batteryPower);
         $this->pixooPostCommand($ip, [
             'Command' => 'Draw/SendHttpItemList',
-            'ItemList' => $this->BuildItems($consumption, $generation, $netW, $batteryPercent, $batteryPower),
+            'ItemList' => $items,
         ]);
     }
 
-    private function PixooSendBackground(string $ip): void
+    private function PixooSendBackground(string $ip, string $frame): void
     {
         $picId = $this->PixooGetPicId($ip) + 1;
         if ($picId < 1 || $picId > 100) {
             $picId = 1;
         }
         try {
-            $this->sendBackgroundGif($ip, $picId);
+            $this->sendBackgroundGif($ip, $picId, $frame);
         } catch (\Throwable $e) {
             $this->SendDebug('Pixoo', 'SendHttpGif erneut nach ResetHttpGifId: ' . $e->getMessage(), 0);
             try {
@@ -2862,14 +2959,13 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             } catch (\Throwable $resetError) {
                 $this->SendDebug('Pixoo', 'Draw/ResetHttpGifId: ' . $resetError->getMessage(), 0);
             }
-            $this->sendBackgroundGif($ip, 1);
+            $this->sendBackgroundGif($ip, 1, $frame);
         }
     }
 
-    private function sendBackgroundGif(string $ip, int $picId): void
+    /** @param string $frame 64×64 RGB, zeilenweise, 3 Byte pro Pixel */
+    private function sendBackgroundGif(string $ip, int $picId, string $frame): void
     {
-        $frameLen = self::PIXEL_SIZE * self::PIXEL_SIZE * 3;
-        $frame = str_repeat("\x00", $frameLen);
         $this->pixooPostCommand($ip, [
             'Command' => 'Draw/SendHttpGif',
             'PicNum' => 1,
@@ -2954,19 +3050,21 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $valueH = self::VALUE_HEIGHT;
         $labelH = self::LABEL_HEIGHT;
 
+        $yGeneration = 0;
+        $yBattery = self::ROW_STEP;
+        $yConsumption = self::ROW_STEP * 2;
+        $yNet = self::NETZ_LABEL_Y;
+        $valueDy = self::VALUE_OFFSET;
+
         $items = [
-            $this->makeTextItem(1, 'VERBRAUCH', self::LEFT_PAD, 0, $cLabel, self::FONT_LABEL, $labelH),
-            $this->makeTextItem(2, sprintf('%.0f W', $consumption), self::LEFT_PAD, 6, $cWhite, self::FONT_VALUE, $valueH),
-            $this->makeTextItem(3, 'ERZEUGUNG', self::LEFT_PAD, self::ROW_STEP, $cLabel, self::FONT_LABEL, $labelH),
-            $this->makeTextItem(4, sprintf('%.0f W', $generation), self::LEFT_PAD, self::ROW_STEP + 6, $cWhite, self::FONT_VALUE, $valueH),
-            $this->makeTextItem(5, 'NETZ', self::LEFT_PAD, self::NETZ_LABEL_Y, $cLabel, self::FONT_LABEL, $labelH),
-            $this->makeTextItem(6, sprintf('%.0f W', abs($netW)), self::LEFT_PAD, self::NETZ_LABEL_Y + 6, $cNet, self::FONT_VALUE, $valueH),
-            $this->makeTextItem(7, 'BATTERIE', self::LEFT_PAD, self::ROW_STEP * 3, $cLabel, self::FONT_LABEL, $labelH),
+            $this->makeTextItem(1, 'ERZEUGUNG', self::LEFT_PAD, $yGeneration, $cLabel, self::FONT_LABEL, $labelH),
+            $this->makeTextItem(2, sprintf('%.0f W', $generation), self::LEFT_PAD, $yGeneration + $valueDy, $cWhite, self::FONT_VALUE, $valueH),
+            $this->makeTextItem(3, 'BATTERIE', self::LEFT_PAD, $yBattery, $cLabel, self::FONT_LABEL, $labelH),
             $this->makeTextItem(
                 self::BATTERY_TEXT_ID,
                 $batteryPercent === null ? '--' : sprintf('%.0f%%', $batteryPercent),
                 self::LEFT_PAD,
-                self::ROW_STEP * 3 + 6,
+                $yBattery + $valueDy,
                 $cWhite,
                 self::FONT_VALUE,
                 $valueH
@@ -2975,13 +3073,17 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 self::BATTERY_POWER_TEXT_ID,
                 $batteryPower === null ? '--' : sprintf('%.0f W', abs($batteryPower)),
                 self::DATETIME_X,
-                self::ROW_STEP * 3 + 6,
+                $yBattery + $valueDy,
                 $batteryPower === null ? $cLabel : $this->BatteryPowerColorHex($batteryPower),
                 self::FONT_VALUE,
                 $valueH,
                 self::PIXEL_SIZE,
                 self::SMARD_CORNER_TEXT_ALIGN
             ),
+            $this->makeTextItem(4, 'VERBRAUCH', self::LEFT_PAD, $yConsumption, $cLabel, self::FONT_LABEL, $labelH),
+            $this->makeTextItem(5, sprintf('%.0f W', $consumption), self::LEFT_PAD, $yConsumption + $valueDy, $cWhite, self::FONT_VALUE, $valueH),
+            $this->makeTextItem(6, 'NETZ', self::LEFT_PAD, $yNet, $cLabel, self::FONT_LABEL, $labelH),
+            $this->makeTextItem(7, sprintf('%.0f W', abs($netW)), self::LEFT_PAD, $yNet + $valueDy, $cNet, self::FONT_VALUE, $valueH),
         ];
 
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
@@ -3021,7 +3123,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 self::SMARD_TEXT_ID,
                 $txt,
                 $ax,
-                self::NETZ_LABEL_Y + 6,
+                self::NETZ_LABEL_Y + self::VALUE_OFFSET,
                 $col,
                 self::FONT_VALUE,
                 $valueH,
@@ -3035,6 +3137,57 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return $items;
     }
 
+    /**
+     * Quelle in Watt, Betrag. null = keine Variable gewählt.
+     * Bei kurz unlesbarem Wert bleibt der letzte Modulwert.
+     */
+    private function readOptionalPositiveWatt(string $property, string $ident): ?float
+    {
+        $sourceId = $this->readConfiguredPropertyInteger($property);
+        if ($sourceId <= 0) {
+            return null;
+        }
+        $raw = $this->readWattFromVariable($sourceId);
+        if ($raw === null) {
+            $cached = $this->readModuleFloat($ident);
+
+            return $cached === null ? 0.0 : abs($cached);
+        }
+        $watts = abs($raw);
+        $this->SetValue($ident, $watts);
+
+        return $watts;
+    }
+
+    /** Letzter positiver Modulwert, null wenn die Quelle nicht gewählt ist. */
+    private function cachedPositiveWatt(string $property, string $ident): ?float
+    {
+        if ($this->readConfiguredPropertyInteger($property) <= 0) {
+            return null;
+        }
+        $cached = $this->readModuleFloat($ident);
+
+        return $cached === null ? 0.0 : abs($cached);
+    }
+
+    /**
+     * Plus = Laden, minus = Entladen. Die größere der beiden positiven Leistungen gewinnt.
+     * null, wenn weder Laden noch Entladen gewählt ist.
+     */
+    private function signedBatteryPower(?float $chargeW, ?float $dischargeW): ?float
+    {
+        if ($chargeW === null && $dischargeW === null) {
+            return null;
+        }
+        $charge = $chargeW ?? 0.0;
+        $discharge = $dischargeW ?? 0.0;
+        if ($charge >= $discharge) {
+            return $charge;
+        }
+
+        return -$discharge;
+    }
+
     /** Laden (plus) → grün, Entladen (minus) → rot, nahe 0 → gelb */
     private function BatteryPowerColorHex(float $powerW): string
     {
@@ -3046,6 +3199,372 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
 
         return $this->RgbHex(255, 50, 50);
+    }
+
+    /**
+     * Richtungen im Flussbild. 1 = zum Haus hin bzw. Laden, -1 = Einspeisen bzw. Entladen.
+     * battery null = keine Batteriequelle gewählt, fill = gefüllte Zeilen im Batteriesymbol.
+     *
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
+     * @return array{pv: bool, grid: int, battery: ?int, house: bool, fill: ?int}
+     */
+    private function flowState(array $values): array
+    {
+        $grid = 0;
+        if ($values['net'] >= self::FLOW_ACTIVE_W) {
+            $grid = 1;
+        } elseif ($values['net'] <= -self::FLOW_ACTIVE_W) {
+            $grid = -1;
+        }
+        $battery = null;
+        if ($values['batteryPower'] !== null) {
+            $battery = 0;
+            if ($values['batteryPower'] >= self::FLOW_ACTIVE_W) {
+                $battery = 1;
+            } elseif ($values['batteryPower'] <= -self::FLOW_ACTIVE_W) {
+                $battery = -1;
+            }
+        }
+        $fill = null;
+        if ($values['batteryPercent'] !== null) {
+            $fill = (int) round(max(0.0, min(100.0, $values['batteryPercent'])) / 100.0 * 9.0);
+        }
+
+        return [
+            'pv' => $values['generation'] >= self::FLOW_ACTIVE_W,
+            'grid' => $grid,
+            'battery' => $battery,
+            'house' => $values['consumption'] >= self::FLOW_ACTIVE_W,
+            'fill' => $fill,
+        ];
+    }
+
+    /**
+     * Alles, was das Hintergrundbild verändert. Ändert sich der Schlüssel, geht ein neues Bild ans Pixoo.
+     *
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
+     */
+    private function getPixooFrameKey(array $values): string
+    {
+        if (!$this->isGraphicMode()) {
+            return 'text';
+        }
+        $s = $this->flowState($values);
+
+        return implode('|', [
+            'flow',
+            $s['pv'] ? '1' : '0',
+            (string) $s['grid'],
+            $s['battery'] === null ? 'n' : (string) $s['battery'],
+            $s['house'] ? '1' : '0',
+            $s['fill'] === null ? 'n' : (string) $s['fill'],
+        ]);
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
+     */
+    private function renderBackgroundFrame(array $values): string
+    {
+        if (!$this->isGraphicMode()) {
+            return str_repeat("\x00", self::PIXEL_SIZE * self::PIXEL_SIZE * 3);
+        }
+
+        return $this->renderFlowFrame($this->flowState($values));
+    }
+
+    /**
+     * Energiefluss auf 64×64: PV oben, Netz links, Batterie rechts, Haus unten, Knoten in der Mitte.
+     *
+     * @param array{pv: bool, grid: int, battery: ?int, house: bool, fill: ?int} $s
+     */
+    private function renderFlowFrame(array $s): string
+    {
+        $size = self::PIXEL_SIZE;
+        $px = array_fill(0, $size * $size, 0x000000);
+        $dim = 0x323232;
+        $pvColor = 0xffc800;
+        $houseColor = 0x5a96ff;
+        $green = 0x32dc32;
+        $red = 0xff3232;
+
+        $hubX = 32;
+        $hubY = 27;
+
+        $c = $s['pv'] ? $pvColor : $dim;
+        $this->flowVLine($px, $hubX, 17, $hubY - 1, $c);
+        if ($s['pv']) {
+            $this->flowArrow($px, $hubX, 22, 'd', $c);
+        }
+
+        $c = $s['grid'] === 1 ? $red : ($s['grid'] === -1 ? $green : $dim);
+        $this->flowHLine($px, 11, $hubX - 1, $hubY, $c);
+        if ($s['grid'] !== 0) {
+            $this->flowArrow($px, 21, $hubY, $s['grid'] === 1 ? 'r' : 'l', $c);
+        }
+
+        $c = $s['battery'] === 1 ? $green : ($s['battery'] === -1 ? $red : $dim);
+        $this->flowHLine($px, $hubX + 1, 53, $hubY, $c);
+        if ($s['battery'] === 1 || $s['battery'] === -1) {
+            $this->flowArrow($px, 43, $hubY, $s['battery'] === 1 ? 'r' : 'l', $c);
+        }
+
+        $c = $s['house'] ? $houseColor : $dim;
+        $this->flowVLine($px, $hubX, $hubY + 1, 38, $c);
+        if ($s['house']) {
+            $this->flowArrow($px, $hubX, 33, 'd', $c);
+        }
+        $px[$hubY * $size + $hubX] = 0xc8c8c8;
+
+        $this->flowSprite($px, 26, 0, [
+            'LLLLLLLLLLLLL',
+            'LBBBLBBBLBBBL',
+            'LBBBLBBBLBBBL',
+            'LLLLLLLLLLLLL',
+            'LBBBLBBBLBBBL',
+            'LBBBLBBBLBBBL',
+            'LLLLLLLLLLLLL',
+            '......G......',
+        ], ['L' => 0x78a0dc, 'B' => 0x1e46c8, 'G' => 0x8c8c8c]);
+
+        $this->flowSprite($px, 1, 21, [
+            '....G....',
+            'GGGGGGGGG',
+            'G..GGG..G',
+            '...G.G...',
+            '..GGGGG..',
+            '...G.G...',
+            '..G.G.G..',
+            '..GG.GG..',
+            '.G.G.G.G.',
+            '.GG...GG.',
+            'G.......G',
+        ], ['G' => 0xaaaaaa]);
+
+        $this->flowSprite($px, 55, 20, [
+            '..OOOO..',
+            'OOOOOOOO',
+            'O......O',
+            'O......O',
+            'O......O',
+            'O......O',
+            'O......O',
+            'O......O',
+            'O......O',
+            'O......O',
+            'O......O',
+            'OOOOOOOO',
+        ], ['O' => 0xaaaaaa]);
+        if ($s['fill'] !== null && $s['fill'] > 0) {
+            $fillColor = $s['fill'] <= 2 ? $red : ($s['fill'] <= 4 ? 0xffa000 : $green);
+            for ($row = 0; $row < $s['fill']; $row++) {
+                $this->flowHLine($px, 56, 61, 30 - $row, $fillColor);
+            }
+        }
+
+        $this->flowSprite($px, 26, 40, [
+            '......R......',
+            '.....RRR.....',
+            '....RRRRR....',
+            '...RRRRRRR...',
+            '..RRRRRRRRR..',
+            '.RRRRRRRRRRR.',
+            '..WWWWWWWWW..',
+            '..WCCWWWCCW..',
+            '..WCCWWWCCW..',
+            '..WWWWWDDWW..',
+            '..WWWWWDDWW..',
+        ], ['R' => 0xc83c28, 'W' => 0xc8c8c8, 'C' => 0x50a0e6, 'D' => 0x785028]);
+
+        $out = '';
+        foreach ($px as $rgb) {
+            $out .= chr(($rgb >> 16) & 0xff) . chr(($rgb >> 8) & 0xff) . chr($rgb & 0xff);
+        }
+
+        return $out;
+    }
+
+    /** @param list<int> $px */
+    private function flowSet(array &$px, int $x, int $y, int $rgb): void
+    {
+        if ($x < 0 || $y < 0 || $x >= self::PIXEL_SIZE || $y >= self::PIXEL_SIZE) {
+            return;
+        }
+        $px[$y * self::PIXEL_SIZE + $x] = $rgb;
+    }
+
+    /** @param list<int> $px */
+    private function flowHLine(array &$px, int $x0, int $x1, int $y, int $rgb): void
+    {
+        for ($x = $x0; $x <= $x1; $x++) {
+            $this->flowSet($px, $x, $y, $rgb);
+        }
+    }
+
+    /** @param list<int> $px */
+    private function flowVLine(array &$px, int $x, int $y0, int $y1, int $rgb): void
+    {
+        for ($y = $y0; $y <= $y1; $y++) {
+            $this->flowSet($px, $x, $y, $rgb);
+        }
+    }
+
+    /**
+     * Pfeilspitze mit der Spitze auf ($x, $y).
+     *
+     * @param list<int> $px
+     */
+    private function flowArrow(array &$px, int $x, int $y, string $dir, int $rgb): void
+    {
+        $this->flowSet($px, $x, $y, $rgb);
+        switch ($dir) {
+            case 'd':
+                $this->flowSet($px, $x - 1, $y - 1, $rgb);
+                $this->flowSet($px, $x + 1, $y - 1, $rgb);
+                break;
+            case 'r':
+                $this->flowSet($px, $x - 1, $y - 1, $rgb);
+                $this->flowSet($px, $x - 1, $y + 1, $rgb);
+                break;
+            case 'l':
+                $this->flowSet($px, $x + 1, $y - 1, $rgb);
+                $this->flowSet($px, $x + 1, $y + 1, $rgb);
+                break;
+        }
+    }
+
+    /**
+     * @param list<int> $px
+     * @param list<string> $rows
+     * @param array<string, int> $palette
+     */
+    private function flowSprite(array &$px, int $x0, int $y0, array $rows, array $palette): void
+    {
+        foreach ($rows as $dy => $row) {
+            $len = strlen($row);
+            for ($dx = 0; $dx < $len; $dx++) {
+                $ch = $row[$dx];
+                if (isset($palette[$ch])) {
+                    $this->flowSet($px, $x0 + $dx, $y0 + $dy, $palette[$ch]);
+                }
+            }
+        }
+    }
+
+    /** Ab 10 kW mit einer Nachkommastelle in kW, damit der Text in die halbe Breite passt. */
+    private function formatFlowWatt(float $watts): string
+    {
+        $abs = abs($watts);
+        if ($abs >= 10000.0) {
+            return str_replace('.', ',', sprintf('%.1fkW', $abs / 1000.0));
+        }
+
+        return sprintf('%.0f W', $abs);
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function BuildFlowItems(
+        float $consumption,
+        float $generation,
+        float $netW,
+        ?float $batteryPercent,
+        ?float $batteryPower
+    ): array {
+        $cLabel = $this->RgbHex(140, 140, 140);
+        $cWhite = $this->RgbHex(255, 255, 255);
+        $font = self::FONT_VALUE;
+        $h = self::VALUE_HEIGHT;
+        $half = (int) (self::PIXEL_SIZE / 2);
+
+        $items = [
+            $this->makeTextItem(
+                self::FLOW_PV_TEXT_ID,
+                $this->formatFlowWatt($generation),
+                0,
+                8,
+                $generation >= self::FLOW_ACTIVE_W ? $this->RgbHex(255, 200, 0) : $cLabel,
+                $font,
+                $h,
+                self::PIXEL_SIZE,
+                2
+            ),
+            $this->makeTextItem(
+                self::FLOW_GRID_TEXT_ID,
+                $this->formatFlowWatt($netW),
+                1,
+                34,
+                $this->NetGridColorHex($netW),
+                $font,
+                $h,
+                $half - 1,
+                1
+            ),
+            $this->makeTextItem(
+                self::FLOW_BATTERY_TEXT_ID,
+                $batteryPower === null ? '--' : $this->formatFlowWatt($batteryPower),
+                $half,
+                34,
+                $batteryPower === null ? $cLabel : $this->BatteryPowerColorHex($batteryPower),
+                $font,
+                $h,
+                $half,
+                3
+            ),
+            $this->makeTextItem(
+                self::FLOW_HOUSE_TEXT_ID,
+                $this->formatFlowWatt($consumption),
+                0,
+                56,
+                $cWhite,
+                $font,
+                $h,
+                self::PIXEL_SIZE,
+                2
+            ),
+        ];
+        if ($batteryPercent !== null) {
+            $items[] = $this->makeTextItem(
+                self::FLOW_BATTERY_PERCENT_TEXT_ID,
+                sprintf('%.0f%%', $batteryPercent),
+                $half,
+                42,
+                $cWhite,
+                $font,
+                $h,
+                $half,
+                3
+            );
+        }
+
+        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            $eurMwh = $this->getSmardEurPerMwhForDisplay();
+            if ($eurMwh !== null) {
+                $num = number_format($eurMwh / 1000.0, 2, ',', '');
+                $txt = $this->ReadPropertyBoolean('PixooSmardShowUnit') ? ($num . '€') : $num;
+                $col = $this->smardPriceColorHex($eurMwh);
+            } else {
+                $txt = '--';
+                $col = $this->RgbHex(160, 160, 160);
+            }
+            $items[] = $this->makeTextItem(self::SMARD_TEXT_ID, $txt, 0, 0, $col, $font, $h, 25, 1, 1, 0);
+            if ($this->ReadPropertyBoolean('PixooSmardShowTime')) {
+                $items[] = $this->makeTextItem(
+                    self::SMARD_TIME_TEXT_ID,
+                    $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT),
+                    39,
+                    0,
+                    $cLabel,
+                    $font,
+                    $h,
+                    25,
+                    3,
+                    1,
+                    0
+                );
+            }
+        }
+
+        return $items;
     }
 
     /** Netzbezug → rot, Einspeisung → grün, nahe 0 → gelb */

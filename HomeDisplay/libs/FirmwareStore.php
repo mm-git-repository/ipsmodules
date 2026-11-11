@@ -159,10 +159,25 @@ final class HomeDisplayFirmwareStore
         return '';
     }
 
-    /** @return array<string, mixed>|null */
-    private static function bundled(): ?array
+    /** Mitgeliefertes Release und die Zwischenversion für Anzeigen, die den neuen Schlüssel noch nicht kennen. @return list<array<string, mixed>> */
+    private static function bundledAll(): array
     {
-        $dir = self::moduleDir() . DIRECTORY_SEPARATOR . 'release';
+        $base = self::moduleDir() . DIRECTORY_SEPARATOR . 'release';
+        $list = [];
+        $current = self::bundledAt($base, 'bundled');
+        if ($current !== null) {
+            $list[] = $current;
+        }
+        $bridge = self::bundledAt($base . DIRECTORY_SEPARATOR . 'bridge', 'bridge');
+        if ($bridge !== null) {
+            $list[] = $bridge;
+        }
+        return $list;
+    }
+
+    /** @return array<string, mixed>|null */
+    private static function bundledAt(string $dir, string $id): ?array
+    {
         $binary = $dir . DIRECTORY_SEPARATOR . 'homedisplay.bin';
         $descriptorFile = $dir . DIRECTORY_SEPARATOR . 'firmware.json';
         if (!is_file($binary) || !is_file($descriptorFile)) {
@@ -175,7 +190,7 @@ final class HomeDisplayFirmwareStore
         $data = (string) file_get_contents($binary);
         $error = self::check($data, $descriptor);
         return [
-            'id' => 'bundled',
+            'id' => $id,
             'source' => 'bundled',
             'version' => (string) ($descriptor['version'] ?? ''),
             'requires' => (string) ($descriptor['requires'] ?? ''),
@@ -214,8 +229,7 @@ final class HomeDisplayFirmwareStore
                 'error' => $present ? '' : 'Programmdatei fehlt',
             ];
         }
-        $bundled = self::bundled();
-        if ($bundled !== null) {
+        foreach (self::bundledAll() as $bundled) {
             $list[] = $bundled;
         }
         usort($list, static function (array $a, array $b): int {
