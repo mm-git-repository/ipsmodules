@@ -83,6 +83,29 @@ SPRITES = [
 ]
 
 
+# Matches module.php flowGlyphs
+GLYPHS = {
+    "0": ["###", "#.#", "#.#", "#.#", "###"],
+    "1": [".#.", "##.", ".#.", ".#.", "###"],
+    "2": ["###", "..#", "###", "#..", "###"],
+    "3": ["###", "..#", ".##", "..#", "###"],
+    "4": ["#.#", "#.#", "###", "..#", "..#"],
+    "5": ["###", "#..", "###", "..#", "###"],
+    "6": ["###", "#..", "###", "#.#", "###"],
+    "7": ["###", "..#", "..#", ".#.", ".#."],
+    "8": ["###", "#.#", "###", "#.#", "###"],
+    "9": ["###", "#.#", "###", "..#", "###"],
+    "W": ["#...#", "#...#", "#.#.#", "#.#.#", ".#.#."],
+    "k": ["#..", "#.#", "##.", "#.#", "#.#"],
+    "%": ["#.#", "..#", ".#.", "#..", "#.#"],
+    "€": [".###", "#...", "###.", "#...", ".###"],
+    "-": ["...", "...", "###", "...", "..."],
+    ",": [".", ".", ".", "#", "#"],
+    ":": [".", "#", ".", "#", "."],
+    " ": [".", ".", ".", ".", "."],
+}
+
+
 def load_font(size: int):
     candidates = [
         Path(r"C:\Windows\Fonts\segoeui.ttf"),
@@ -175,7 +198,7 @@ def flow_preview() -> str:
             put(x + 1, y + 1, c)
 
     # Example: PV 100 W, grid import 1256 W, battery idle 80 %, house 1356 W (like the reference picture)
-    vline(32, 17, 26, C_PV)
+    vline(32, 16, 26, C_PV)
     arrow(32, 22, "d", C_PV)
     hline(11, 31, 27, RED)
     arrow(21, 27, "r", RED)
@@ -188,31 +211,40 @@ def flow_preview() -> str:
             for dx, ch in enumerate(row):
                 if ch in palette:
                     put(x0 + dx, y0 + dy, palette[ch])
+    # 80 % = 7 of 9 rows, >= 75 % green
     for r in range(7):
         hline(56, 61, 30 - r, GREEN)
 
+    def width(t: str) -> int:
+        chars = [c for c in t if c in GLYPHS]
+        return sum(len(GLYPHS[c][0]) for c in chars) + max(len(chars) - 1, 0)
+
+    def text(t: str, x: int, y: int, align: str, fill) -> None:
+        w = width(t)
+        if align == "r":
+            x = x - w + 1
+        elif align == "c":
+            x = x - w // 2
+        for ch in t:
+            glyph = GLYPHS.get(ch)
+            if glyph is None:
+                continue
+            for dy, row in enumerate(glyph):
+                for dx, cell in enumerate(row):
+                    if cell == "#":
+                        put(x + dx, y + dy, fill)
+            x += len(glyph[0]) + 1
+
+    text("100 W", 32, 10, "c", C_PV)
+    text("1256 W", 1, 34, "l", C_NET_IMPORT)
+    text("0 W", 62, 34, "r", (255, 220, 0))
+    text("80%", 62, 41, "r", C_WHITE)
+    text("1356 W", 32, 58, "c", C_WHITE)
+    text("0,12€", 1, 1, "l", C_SMARD_POS)
+
     small = Image.new("RGB", (64, 64), BG)
     small.putdata([c for row in px for c in row])
-    img = small.resize((W, H), Image.NEAREST)
-    dr = ImageDraw.Draw(img)
-    f_value = load_font(8 * SCALE)
-
-    def text(t: str, x: int, y: int, w: int, align: int, fill) -> None:
-        bbox = dr.textbbox((0, 0), t, font=f_value)
-        tw = bbox[2] - bbox[0]
-        if align == 2:
-            x = x + (w - tw / SCALE) / 2
-        elif align == 3:
-            x = x + w - tw / SCALE - 1
-        dr.text((x * SCALE, y * SCALE), t, fill=fill, font=f_value)
-
-    text("100 W", 0, 8, 64, 2, C_PV)
-    text("1256 W", 1, 34, 31, 1, C_NET_IMPORT)
-    text("0 W", 32, 34, 32, 3, (255, 220, 0))
-    text("80%", 32, 42, 32, 3, C_WHITE)
-    text("1356 W", 0, 56, 64, 2, C_WHITE)
-    text("0,12€", 0, 0, 25, 1, C_SMARD_POS)
-    return to_data_uri(img)
+    return to_data_uri(small.resize((W, H), Image.NEAREST))
 
 
 def main() -> None:
