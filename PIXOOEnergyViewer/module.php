@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.9';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 51;
+    private const MODULE_BUILD = 52;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -1869,7 +1869,13 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
 
         $generation = $wr1W + $wr2W;
-        $consumption = $generation + $netW;
+
+        $batteryCharge = $this->readOptionalPositiveWatt('BatteryChargeVar', 'BatteryCharge');
+        $batteryDischarge = $this->readOptionalPositiveWatt('BatteryDischargeVar', 'BatteryDischarge');
+        $batteryPower = $this->signedBatteryPower($batteryCharge, $batteryDischarge);
+
+        // Haus = Erzeugung + Netz (Bezug +) + Entladung - Ladung. batteryPower: Plus = Laden, Minus = Entladen.
+        $consumption = max(0.0, $generation + $netW - ($batteryPower ?? 0.0));
 
         $this->SetValue('Consumption', $consumption);
         $this->SetValue('Generation', $generation);
@@ -1886,10 +1892,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 $this->SetValue('BatteryPercent', $batteryPercent);
             }
         }
-        $batteryCharge = $this->readOptionalPositiveWatt('BatteryChargeVar', 'BatteryCharge');
-        $batteryDischarge = $this->readOptionalPositiveWatt('BatteryDischargeVar', 'BatteryDischarge');
-        $batteryPower = $this->signedBatteryPower($batteryCharge, $batteryDischarge);
-
         $this->SetBuffer('LastValuesAt', (string) time());
 
         return [
