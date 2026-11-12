@@ -136,25 +136,39 @@ final class HomeDisplayPanelSchema
     }
 
     /**
-     * Helligkeit und Ruheanzeige der Ansicht. Null, solange die Ansicht diese Werte noch nicht trägt.
+     * Ausschaltfenster und Ruheanzeige der Ansicht. Null, solange die Ansicht diese Werte noch nicht trägt.
      *
      * @param array<string, mixed> $layout
-     * @return array{nightDim: bool, dayBrightness: int, nightBrightness: int, nightFrom: int, nightTo: int, idleMode: int, idleClockStyle: string, idleTimeoutSec: int}|null
+     * @return array{backlightOffFrom: string, backlightOffTo: string, offMode: string, idleMode: int, idleClockStyle: string, idleTimeoutSec: int}|null
      */
     public static function displayBehavior(array $layout): ?array
     {
-        if (!array_key_exists('dayBrightness', $layout)) {
+        $hasNew = array_key_exists('backlightOffFrom', $layout)
+            || array_key_exists('backlightOffTo', $layout)
+            || array_key_exists('offMode', $layout);
+        $hasOld = array_key_exists('dayBrightness', $layout);
+        if (!$hasNew && !$hasOld) {
             return null;
         }
-        $day = (int) $layout['dayBrightness'];
-        $night = (int) ($layout['nightBrightness'] ?? 15);
-        if ($day < 0 || $day > 100 || $night < 0 || $night > 100) {
-            throw new InvalidArgumentException('Helligkeit liegt zwischen 0 und 100.');
+        if ($hasNew) {
+            $from = self::clockTime($layout['backlightOffFrom'] ?? '22:00', '22:00');
+            $to = self::clockTime($layout['backlightOffTo'] ?? '06:00', '06:00');
+            $mode = (string) ($layout['offMode'] ?? 'backlight');
+        } else {
+            $day = (int) $layout['dayBrightness'];
+            $night = (int) ($layout['nightBrightness'] ?? 15);
+            if ($day < 0 || $day > 100 || $night < 0 || $night > 100) {
+                throw new InvalidArgumentException('Helligkeit liegt zwischen 0 und 100.');
+            }
+            $fromHour = self::clockHour($layout['nightFrom'] ?? 22);
+            $toHour = self::clockHour($layout['nightTo'] ?? 6);
+            $from = sprintf('%02d:00', $fromHour);
+            $nightOff = ($layout['nightDim'] ?? true) !== false && $night === 0;
+            $to = $nightOff ? sprintf('%02d:00', $toHour) : $from;
+            $mode = 'backlight';
         }
-        $from = (int) ($layout['nightFrom'] ?? 22);
-        $to = (int) ($layout['nightTo'] ?? 6);
-        if ($from < 0 || $from > 23 || $to < 0 || $to > 23) {
-            throw new InvalidArgumentException('Stunde liegt zwischen 0 und 23.');
+        if (!in_array($mode, ['backlight', 'display'], true)) {
+            throw new InvalidArgumentException('Unbekannte Ausschaltart.');
         }
         $idle = (int) ($layout['idleMode'] ?? 0);
         if ($idle < 0 || $idle > 2) {
@@ -169,15 +183,44 @@ final class HomeDisplayPanelSchema
             throw new InvalidArgumentException('Die Ruheanzeige startet nach 5 bis 3600 Sekunden.');
         }
         return [
-            'nightDim' => ($layout['nightDim'] ?? true) !== false,
-            'dayBrightness' => $day,
-            'nightBrightness' => $night,
-            'nightFrom' => $from,
-            'nightTo' => $to,
+            'backlightOffFrom' => $from,
+            'backlightOffTo' => $to,
+            'offMode' => $mode,
             'idleMode' => $idle,
             'idleClockStyle' => $style,
             'idleTimeoutSec' => $timeout,
         ];
+    }
+
+    private static function clockHour(mixed $value): int
+    {
+        $hour = (int) $value;
+        if ($hour < 0 || $hour > 23) {
+            throw new InvalidArgumentException('Stunde liegt zwischen 0 und 23.');
+        }
+
+        return $hour;
+    }
+
+    private static function clockTime(mixed $value, string $fallback): string
+    {
+        if (is_int($value) || (is_string($value) && preg_match('/^\d{1,2}$/', $value) === 1)) {
+            return sprintf('%02d:00', self::clockHour($value));
+        }
+        $text = trim((string) $value);
+        if ($text === '') {
+            return $fallback;
+        }
+        if (preg_match('/^(\d{1,2}):(\d{2})(?::\d{2})?$/', $text, $match) !== 1) {
+            throw new InvalidArgumentException('Uhrzeit im Format HH:MM.');
+        }
+        $hour = self::clockHour($match[1]);
+        $minute = (int) $match[2];
+        if ($minute > 59) {
+            throw new InvalidArgumentException('Uhrzeit liegt zwischen 00:00 und 23:59.');
+        }
+
+        return sprintf('%02d:%02d', $hour, $minute);
     }
 
     /** @param array<string, mixed> $layout */
@@ -1018,11 +1061,9 @@ final class HomeDisplayPanelSchema
             'name' => $name,
             'displayProfile' => $profileId,
             'showTabs' => false,
-            'nightDim' => true,
-            'dayBrightness' => 70,
-            'nightBrightness' => 15,
-            'nightFrom' => 22,
-            'nightTo' => 6,
+            'backlightOffFrom' => '22:00',
+            'backlightOffTo' => '06:00',
+            'offMode' => 'backlight',
             'idleMode' => 0,
             'idleClockStyle' => 'digital',
             'idleTimeoutSec' => 60,

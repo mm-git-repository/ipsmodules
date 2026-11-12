@@ -13,7 +13,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 33;
+    private const MODULE_BUILD = 34;
 
     private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
@@ -753,7 +753,7 @@ class HomeDisplay extends IPSModuleStrict
                     return [];
                 }
                 $id = (string) ($item['id'] ?? '');
-                if ($id !== '' && !array_key_exists('dayBrightness', $item) && isset($carried[$id])) {
+                if ($id !== '' && !array_key_exists('dayBrightness', $item) && !array_key_exists('backlightOffFrom', $item) && isset($carried[$id])) {
                     $item = array_merge($item, $carried[$id]);
                 }
                 return $item;
@@ -992,10 +992,11 @@ class HomeDisplay extends IPSModuleStrict
         return $this->configDocument($device['id']);
     }
 
-    /** Helligkeit und Ruheanzeige kommen aus der Ansicht, sonst aus den bisherigen Instanzwerten. @return array<string, mixed> */
+    /** Ausschaltfenster und Ruheanzeige kommen aus der Ansicht, sonst aus den bisherigen Instanzwerten. @return array<string, mixed> */
     private function configDocument(int $instanceId): array
     {
         $behavior = $this->displayBehavior($instanceId);
+        $legacyNight = $this->legacyNightDocument($behavior['backlightOffFrom'], $behavior['backlightOffTo']);
         $document = [
             'contract' => self::CONTRACT,
             'id' => 'anzeige-' . $instanceId,
@@ -1004,11 +1005,14 @@ class HomeDisplay extends IPSModuleStrict
             'idleClockStyle' => $behavior['idleClockStyle'],
             'idleTimeoutSec' => $behavior['idleTimeoutSec'],
             'manifestIntervalSec' => 60,
-            'nightDim' => $behavior['nightDim'],
-            'dayBrightness' => $behavior['dayBrightness'],
-            'nightBrightness' => $behavior['nightBrightness'],
-            'nightFrom' => $behavior['nightFrom'],
-            'nightTo' => $behavior['nightTo'],
+            'nightDim' => $legacyNight['nightDim'],
+            'dayBrightness' => $legacyNight['dayBrightness'],
+            'nightBrightness' => $legacyNight['nightBrightness'],
+            'nightFrom' => $legacyNight['nightFrom'],
+            'nightTo' => $legacyNight['nightTo'],
+            'backlightOffFrom' => $behavior['backlightOffFrom'],
+            'backlightOffTo' => $behavior['backlightOffTo'],
+            'offMode' => $behavior['offMode'],
             'stateIntervalSec' => max(2, (int) IPS_GetProperty($instanceId, 'StateIntervalSec')),
             'idleStateIntervalSec' => max(5, (int) IPS_GetProperty($instanceId, 'IdleStateIntervalSec')),
             'cameraLiveFps' => $this->fastestLiveFps(),
@@ -1037,7 +1041,7 @@ class HomeDisplay extends IPSModuleStrict
     /**
      * Werte der Ansicht. Fehlen sie dort noch, gelten die bisher an der Instanz gespeicherten.
      *
-     * @return array{nightDim: bool, dayBrightness: int, nightBrightness: int, nightFrom: int, nightTo: int, idleMode: int, idleClockStyle: string, idleTimeoutSec: int}
+     * @return array{backlightOffFrom: string, backlightOffTo: string, offMode: string, idleMode: int, idleClockStyle: string, idleTimeoutSec: int}
      */
     private function displayBehavior(int $instanceId): array
     {
@@ -1049,15 +1053,62 @@ class HomeDisplay extends IPSModuleStrict
             }
         }
         $style = (string) @IPS_GetProperty($instanceId, 'IdleClockStyle');
-        return [
-            'nightDim' => (bool) @IPS_GetProperty($instanceId, 'NightDim'),
+        $legacy = [
             'dayBrightness' => (int) @IPS_GetProperty($instanceId, 'DayBrightness'),
             'nightBrightness' => (int) @IPS_GetProperty($instanceId, 'NightBrightness'),
+            'nightDim' => (bool) @IPS_GetProperty($instanceId, 'NightDim'),
             'nightFrom' => (int) @IPS_GetProperty($instanceId, 'NightFrom'),
             'nightTo' => (int) @IPS_GetProperty($instanceId, 'NightTo'),
             'idleMode' => (int) @IPS_GetProperty($instanceId, 'IdleMode'),
             'idleClockStyle' => in_array($style, ['digital', 'analog', 'word', 'swabian'], true) ? $style : 'digital',
             'idleTimeoutSec' => max(5, min(3600, (int) @IPS_GetProperty($instanceId, 'IdleTimeoutSec') ?: 60)),
+        ];
+        $derived = HomeDisplayPanelSchema::displayBehavior($legacy);
+        if ($derived !== null) {
+            return $derived;
+        }
+
+        return [
+            'backlightOffFrom' => '22:00',
+            'backlightOffTo' => '06:00',
+            'offMode' => 'backlight',
+            'idleMode' => 0,
+            'idleClockStyle' => 'digital',
+            'idleTimeoutSec' => 60,
+        ];
+    }
+
+    /**
+     * Stundenfenster für Firmware, die nur Helligkeit kennt. Gleiche Stunde schaltet nicht aus.
+     *
+     * @return array{nightDim: bool, dayBrightness: int, nightBrightness: int, nightFrom: int, nightTo: int}
+     */
+    private function legacyNightDocument(string $from, string $to): array
+    {
+        $keptOn = [
+            'nightDim' => false,
+            'dayBrightness' => 100,
+            'nightBrightness' => 100,
+            'nightFrom' => 0,
+            'nightTo' => 0,
+        ];
+        if (preg_match('/^(\d{2}):(\d{2})$/', $from, $fromMatch) !== 1 || preg_match('/^(\d{2}):(\d{2})$/', $to, $toMatch) !== 1) {
+            return $keptOn;
+        }
+        $fromMin = ((int) $fromMatch[1]) * 60 + (int) $fromMatch[2];
+        $toMin = ((int) $toMatch[1]) * 60 + (int) $toMatch[2];
+        $fromHour = intdiv($fromMin, 60);
+        $toHour = intdiv($toMin, 60);
+        if ($fromMin === $toMin || $fromHour === $toHour) {
+            return $keptOn;
+        }
+
+        return [
+            'nightDim' => true,
+            'dayBrightness' => 100,
+            'nightBrightness' => 0,
+            'nightFrom' => $fromHour,
+            'nightTo' => $toHour,
         ];
     }
 

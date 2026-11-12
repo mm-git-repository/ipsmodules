@@ -360,6 +360,7 @@ static lv_obj_t *home_button;
 static lv_obj_t *page_bar;
 static lv_obj_t *grid;
 static lv_obj_t *clock_layer;
+static lv_obj_t *wake_layer;
 static lv_obj_t *clock_label;
 static lv_obj_t *test_layer;
 static lv_obj_t *test_label;
@@ -444,6 +445,10 @@ static int night_brightness = 15;
 static int night_from = 22;
 static int night_to = 6;
 static bool night_dim = true;
+static int off_from_min = 22 * 60;
+static int off_to_min = 6 * 60;
+static bool off_display;
+static bool off_schedule_set;
 static bool locked;
 static bool online = true;
 static int wifi_rssi;
@@ -1101,9 +1106,16 @@ static void reveal_idle_soon(lv_timer_t *timer)
 
 /* Tippen auf die Uhrzeit rechts oben schaltet die Ruheanzeige sofort ein.
  * Erst nach dem aktuellen Tipp: dieselbe Berührung würde die Uhr sonst im selben Ablauf wieder schließen. */
+static bool off_window_now(void);
+static void apply_backlight(void);
+
 static void show_idle_now(lv_event_t *event)
 {
     (void) event;
+    if (off_window_now()) {
+        note_touch();
+        return;
+    }
     force_idle = true;
     idle_guard_until = esp_timer_get_time() + 800000;
     touch_counter++;
@@ -3925,28 +3937,96 @@ static void show_page(int index)
         }
     }
     refresh_now = true;
+    apply_backlight();
     ESP_LOGI(TAG_UI, "Seite fertig (%d Kacheln)", tile_count);
 }
 
 /* Anzeige in MEZ: fester Versatz zur UTC-Zeit, ohne Sommerzeit. Uhr und RTC bleiben UTC. */
 #define DISPLAY_TZ_OFFSET_S 3600
 
-static bool night_now(void)
+static int local_day_seconds(void)
 {
     int64_t now = clock_base + (esp_timer_get_time() - clock_set_at) / 1000000 + DISPLAY_TZ_OFFSET_S;
     if (now < 0) now = 0;
-    int hour = (int) ((now % 86400) / 3600);
+    return (int) (now % 86400);
+}
+
+static bool night_now(void)
+{
+    int hour = local_day_seconds() / 3600;
     if (night_from == night_to) return true;
     if (night_from < night_to) return hour >= night_from && hour < night_to;
     return hour >= night_from || hour < night_to;
 }
 
+static int parse_hhmm(const char *text, int fallback)
+{
+    int hour = 0;
+    int minute = 0;
+    if (!text || sscanf(text, "%d:%d", &hour, &minute) != 2) return fallback;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return fallback;
+    return hour * 60 + minute;
+}
+
+static bool off_window_now(void)
+{
+    if (!off_schedule_set || off_from_min == off_to_min) return false;
+    int minutes = local_day_seconds() / 60;
+    if (off_from_min < off_to_min) return minutes >= off_from_min && minutes < off_to_min;
+    return minutes >= off_from_min || minutes < off_to_min;
+}
+
+static void apply_backlight(void);
+
+static void set_wake_layer(bool shown, bool black)
+{
+    if (!wake_layer) return;
+    if (!shown) {
+        lv_obj_add_flag(wake_layer, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_set_style_bg_color(wake_layer, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(wake_layer, black ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(wake_layer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(wake_layer);
+}
+
+/* Der erste Tipp im ausgeschalteten Fenster weckt nur. Die Kachel darunter bleibt unberührt. */
+static void wake_from_off(lv_event_t *event)
+{
+    if (event) lv_event_stop_bubbling(event);
+    touched_at = esp_timer_get_time();
+    force_idle = false;
+    touch_counter++;
+    if (idle_active) set_idle_visible(false);
+    apply_backlight();
+    refresh_now = true;
+}
+
 static void apply_backlight(void)
 {
-    bool idle_off = idle_mode == 2 && homedisplay_ui_busy() == false
+    if (boot_screen_active) {
+        set_wake_layer(false, false);
+        if (!backlight_on) refresh_now = true;
+        backlight_on = true;
+        homedisplay_board_backlight(true);
+        return;
+    }
+    bool window = off_window_now();
+    bool held = esp_timer_get_time() - touched_at <= idle_timeout_us;
+    bool idle_off = !window && idle_mode == 2 && homedisplay_ui_busy() == false
         && (force_idle || esp_timer_get_time() - touched_at > idle_timeout_us);
-    int level = (night_dim && night_now()) ? night_brightness : day_brightness;
-    bool on = !idle_off && level > 0;
+    bool scheduled_off = window && !held;
+    bool on;
+    if (off_schedule_set) {
+        if (scheduled_off && idle_active) set_idle_visible(false);
+        on = !idle_off && !scheduled_off;
+        set_wake_layer(scheduled_off, off_display);
+    } else {
+        int level = (night_dim && night_now()) ? night_brightness : day_brightness;
+        on = !idle_off && level > 0;
+        set_wake_layer(false, false);
+    }
     if (on && !backlight_on) refresh_now = true;
     backlight_on = on;
     homedisplay_board_backlight(on);
@@ -4256,10 +4336,13 @@ static void clock_tick(lv_timer_t *timer)
         apply_backlight();
         return;
     }
-    if (info_label) {
+    /* Display aus: keine Minutenaktualisierung, solange die Fläche schwarz liegt. */
+    bool display_quiet = off_display && off_window_now()
+        && esp_timer_get_time() - touched_at > idle_timeout_us;
+    if (!display_quiet && info_label) {
         lv_obj_set_style_text_color(info_label, lv_color_hex(online ? 0xF4F7FB : 0x6E849C), 0);
     }
-    if (strcmp(last_info_line, info) != 0) {
+    if (!display_quiet && strcmp(last_info_line, info) != 0) {
         snprintf(last_info_line, sizeof(last_info_line), "%s", info);
         lv_label_set_text(info_label, info);
     }
@@ -4274,6 +4357,13 @@ static void clock_tick(lv_timer_t *timer)
         return;
     }
     if (locked || !layout_root) {
+        apply_backlight();
+        return;
+    }
+    /* Im Ausschaltfenster bleibt die Uhr aus. Nach einem Tipp gilt die Wartezeit, danach wird es wieder dunkel. */
+    if (off_window_now()) {
+        force_idle = false;
+        if (idle_active) set_idle_visible(false);
         apply_backlight();
         return;
     }
@@ -4549,6 +4639,16 @@ void homedisplay_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t to
     lv_obj_center(pin_cancel_lbl);
     lv_obj_add_event_cb(pin_cancel, pin_cancel_event, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(pin_popup, LV_OBJ_FLAG_HIDDEN);
+    wake_layer = lv_obj_create(screen);
+    lv_obj_set_pos(wake_layer, 0, 0);
+    lv_obj_set_size(wake_layer, HOMEDISPLAY_LCD_H_RES, HOMEDISPLAY_LCD_V_RES);
+    lv_obj_set_style_bg_color(wake_layer, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(wake_layer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_radius(wake_layer, 0, 0);
+    style_flat(wake_layer);
+    lv_obj_add_flag(wake_layer, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(wake_layer, wake_from_off, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_flag(wake_layer, LV_OBJ_FLAG_HIDDEN);
     build_test_layer(screen);
     build_boot_layer(screen);
     set_boot_message("Hausanzeige startet", "Anzeige bereit");
@@ -4723,6 +4823,21 @@ void homedisplay_ui_apply_config(const char *json)
     if (item) night_to = item->valueint;
     item = cJSON_GetObjectItem(root, "nightDim");
     if (cJSON_IsBool(item)) night_dim = cJSON_IsTrue(item);
+    item = cJSON_GetObjectItem(root, "backlightOffFrom");
+    if (cJSON_IsString(item) && item->valuestring && item->valuestring[0]) {
+        off_from_min = parse_hhmm(item->valuestring, off_from_min);
+        off_schedule_set = true;
+    }
+    item = cJSON_GetObjectItem(root, "backlightOffTo");
+    if (cJSON_IsString(item) && item->valuestring && item->valuestring[0]) {
+        off_to_min = parse_hhmm(item->valuestring, off_to_min);
+        off_schedule_set = true;
+    }
+    item = cJSON_GetObjectItem(root, "offMode");
+    if (cJSON_IsString(item) && item->valuestring) {
+        off_display = strcmp(item->valuestring, "display") == 0;
+        off_schedule_set = true;
+    }
     cJSON_Delete(root);
     apply_backlight();
 }

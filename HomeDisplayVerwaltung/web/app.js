@@ -4188,6 +4188,21 @@ function pageField(label, control) {
   return wrap;
 }
 
+function clockTime(value, fallback) {
+  const text = String(value ?? "").trim();
+  const match = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(text);
+  if (match) {
+    const hour = Math.min(23, Math.max(0, Number(match[1])));
+    const minute = Math.min(59, Math.max(0, Number(match[2])));
+    return String(hour).padStart(2, "0") + ":" + String(minute).padStart(2, "0");
+  }
+  if (/^\d{1,2}$/.test(text)) {
+    const hour = Math.min(23, Math.max(0, Number(text)));
+    return String(hour).padStart(2, "0") + ":00";
+  }
+  return fallback;
+}
+
 function readDisplayBehavior(layout) {
   const source = layout || {};
   const hour = (value, fallback) => {
@@ -4200,12 +4215,23 @@ function readDisplayBehavior(layout) {
   };
   const timeout = Number(source.idleTimeoutSec);
   const idle = Number(source.idleMode);
+  const hasNew = source.backlightOffFrom != null || source.backlightOffTo != null || source.offMode != null;
+  const hasOld = source.dayBrightness != null || source.nightDim != null || source.nightFrom != null || source.nightBrightness != null;
+  let backlightOffFrom = "22:00";
+  let backlightOffTo = "06:00";
+  if (hasNew) {
+    backlightOffFrom = clockTime(source.backlightOffFrom, "22:00");
+    backlightOffTo = clockTime(source.backlightOffTo, "06:00");
+  } else if (hasOld) {
+    const from = clockTime(hour(source.nightFrom, 22), "22:00");
+    const nightOn = source.nightDim !== false && brightness(source.nightBrightness, 15) === 0;
+    backlightOffFrom = from;
+    backlightOffTo = nightOn ? clockTime(hour(source.nightTo, 6), "06:00") : from;
+  }
   return {
-    nightDim: source.nightDim !== false,
-    dayBrightness: brightness(source.dayBrightness, 70),
-    nightBrightness: brightness(source.nightBrightness, 15),
-    nightFrom: hour(source.nightFrom, 22),
-    nightTo: hour(source.nightTo, 6),
+    backlightOffFrom,
+    backlightOffTo,
+    offMode: source.offMode === "display" ? "display" : "backlight",
     idleMode: idle === 1 || idle === 2 ? idle : 0,
     idleClockStyle: ["analog", "word", "swabian"].includes(source.idleClockStyle) ? source.idleClockStyle : "digital",
     idleTimeoutSec: Number.isFinite(timeout) ? Math.min(3600, Math.max(5, Math.round(timeout))) : 60
@@ -4214,22 +4240,23 @@ function readDisplayBehavior(layout) {
 
 function writeDisplayBehavior(layout, behavior) {
   if (!layout || !behavior) return;
-  layout.nightDim = behavior.nightDim;
-  layout.dayBrightness = behavior.dayBrightness;
-  layout.nightBrightness = behavior.nightBrightness;
-  layout.nightFrom = behavior.nightFrom;
-  layout.nightTo = behavior.nightTo;
+  layout.backlightOffFrom = behavior.backlightOffFrom;
+  layout.backlightOffTo = behavior.backlightOffTo;
+  layout.offMode = behavior.offMode;
+  delete layout.nightDim;
+  delete layout.dayBrightness;
+  delete layout.nightBrightness;
+  delete layout.nightFrom;
+  delete layout.nightTo;
   layout.idleMode = behavior.idleMode;
   layout.idleClockStyle = behavior.idleClockStyle;
   layout.idleTimeoutSec = behavior.idleTimeoutSec;
 }
 
 function fillDisplayBehavior(behavior) {
-  if ($("l-night-dim")) $("l-night-dim").checked = behavior.nightDim;
-  if ($("l-day-brightness")) $("l-day-brightness").checked = behavior.dayBrightness > 0;
-  if ($("l-night-brightness")) $("l-night-brightness").checked = behavior.nightBrightness > 0;
-  if ($("l-night-from")) $("l-night-from").value = behavior.nightFrom;
-  if ($("l-night-to")) $("l-night-to").value = behavior.nightTo;
+  if ($("l-off-from")) $("l-off-from").value = behavior.backlightOffFrom;
+  if ($("l-off-to")) $("l-off-to").value = behavior.backlightOffTo;
+  if ($("l-off-mode")) $("l-off-mode").value = behavior.offMode;
   if ($("l-idle-mode")) $("l-idle-mode").value = String(behavior.idleMode);
   if ($("l-idle-clock")) $("l-idle-clock").value = behavior.idleClockStyle;
   if ($("l-idle-timeout")) $("l-idle-timeout").value = behavior.idleTimeoutSec;
@@ -4237,11 +4264,9 @@ function fillDisplayBehavior(behavior) {
 
 function collectDisplayBehavior() {
   return readDisplayBehavior({
-    nightDim: Boolean($("l-night-dim")?.checked),
-    dayBrightness: $("l-day-brightness")?.checked ? 100 : 0,
-    nightBrightness: $("l-night-brightness")?.checked ? 100 : 0,
-    nightFrom: $("l-night-from")?.value,
-    nightTo: $("l-night-to")?.value,
+    backlightOffFrom: $("l-off-from")?.value,
+    backlightOffTo: $("l-off-to")?.value,
+    offMode: $("l-off-mode")?.value,
     idleMode: Number($("l-idle-mode")?.value),
     idleClockStyle: $("l-idle-clock")?.value,
     idleTimeoutSec: $("l-idle-timeout")?.value

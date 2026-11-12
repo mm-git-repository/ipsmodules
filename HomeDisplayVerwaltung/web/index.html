@@ -535,14 +535,17 @@
         <label>PIN 1 <input id="l-pin1" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="4–8 Ziffern"></label>
         <label>PIN 2 <input id="l-pin2" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="4–8 Ziffern"></label>
       </div>
-      <h4>Helligkeit und Ruheanzeige</h4>
-      <p class="hint">Gilt für diese Ansicht. Die Beleuchtung ist an oder aus. Nachts gilt der Nachtschalter, wenn „Nachts dimmen“ an ist.</p>
+      <h4>Ausschalten und Ruheanzeige</h4>
+      <p class="hint">Gilt für diese Ansicht. Gleiche Uhrzeit lässt die Anzeige an. Über Mitternacht z. B. 22:00 bis 06:00. Im Zeitraum gibt es keine Uhranzeige. Ein Tipp schaltet nur wieder ein.</p>
       <div class="general-grid">
-        <label class="check"><input id="l-night-dim" type="checkbox" checked> Nachts dimmen</label>
-        <label class="check"><input id="l-day-brightness" type="checkbox" checked> Tag an</label>
-        <label class="check"><input id="l-night-brightness" type="checkbox"> Nacht an</label>
-        <label>Nacht ab Stunde <input id="l-night-from" type="number" min="0" max="23" value="22"></label>
-        <label>Nacht bis Stunde <input id="l-night-to" type="number" min="0" max="23" value="6"></label>
+        <label>Aus von <input id="l-off-from" type="time" value="22:00"></label>
+        <label>Aus bis <input id="l-off-to" type="time" value="06:00"></label>
+        <label>Im Zeitraum
+          <select id="l-off-mode">
+            <option value="backlight">Hintergrundbeleuchtung aus</option>
+            <option value="display">Display aus</option>
+          </select>
+        </label>
         <label>Ruheanzeige
           <select id="l-idle-mode">
             <option value="0">Uhrseite</option>
@@ -639,7 +642,7 @@
   <dialog id="settings-dialog">
     <form method="dialog">
       <h3>Einstellungen</h3>
-      <p class="hint">Nur die Werte, die es einmal für alle Anzeigen gibt: Dienstadresse und diese Seite. Kopplung und Ansicht stehen in der jeweiligen Instanz „Hausanzeige“. Helligkeit und Ruheanzeige stehen in der Ansicht.</p>
+      <p class="hint">Nur die Werte, die es einmal für alle Anzeigen gibt: Dienstadresse und diese Seite. Kopplung und Ansicht stehen in der jeweiligen Instanz „Hausanzeige“. Ausschalten und Ruheanzeige stehen in der Ansicht.</p>
       <label>Dienstadresse (leer = automatisch, nur Hostname oder IP) <input id="s-host" placeholder="192.168.1.10" pattern="[A-Za-z0-9.-]*"></label>
       <dl class="facts">
         <dt>Dienst</dt><dd id="s-service-url">–</dd>
