@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.9';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 53;
+    private const MODULE_BUILD = 54;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -75,10 +75,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private const FLOW_GIF_MIN_SEC = 10;
     private const FLOW_VALUE_SEC = 3;
-    /** Freie Pixel im Batteriesymbol: 8 Zeilen mal 6 Spalten. Unten rot, Mitte gelb, oben grün. */
-    private const BATTERY_FILL_PIXELS = 48;
-    private const BATTERY_FILL_RED = 16;
-    private const BATTERY_FILL_YELLOW = 32;
+    /** Freie Pixel im Batteriesymbol: 9 Zeilen mal 6 Spalten, ab der untersten Innenzeile. Unten rot, Mitte gelb, oben grün. */
+    private const BATTERY_FILL_PIXELS = 54;
+    private const BATTERY_FILL_RED = 18;
+    private const BATTERY_FILL_YELLOW = 36;
     /**
      * Der Grafikmodus sendet bei Wertänderungen ein Bild. Das Pixoo hängt sich auf,
      * wenn die GIF-ID ohne ResetHttpGifId weiterzählt.
@@ -3310,7 +3310,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $fill = null;
         if ($values['batteryPercent'] !== null) {
             $percent = (int) round(max(0.0, min(100.0, $values['batteryPercent'])));
-            $fill = (int) round($percent * self::BATTERY_FILL_PIXELS / 100);
+            $fill = max(1, (int) round($percent * self::BATTERY_FILL_PIXELS / 100));
         }
 
         return [
@@ -3716,7 +3716,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $count = min(self::BATTERY_FILL_PIXELS, $count);
         for ($i = 0; $i < $count; $i++) {
-            $y = 29 - intdiv($i, 6);
+            $y = 30 - intdiv($i, 6);
             $x = 56 + ($i % 6);
             if ($i < self::BATTERY_FILL_RED) {
                 $color = 0xff3232;
