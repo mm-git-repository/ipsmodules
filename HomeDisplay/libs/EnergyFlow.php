@@ -220,19 +220,19 @@ final class HomeDisplayEnergyFlow
             $value = $consumerValues[$index] ?? null;
             $consumers[] = [
                 't' => $row['title'] !== '' ? $row['title'] : 'Verbraucher',
-                'v' => $value === null ? '-' : self::format(max(0.0, $value), $decimals, $unit),
+                'v' => $value === null ? '-' : self::format(max(0.0, $value)),
             ];
         }
 
         return [
             'quality' => $seen ? 'ok' : 'empty',
             'flow' => [
-                'pv' => self::format($sum['pv'], $decimals, $unit),
-                'gridIn' => self::format($sum['gridIn'], $decimals, $unit),
-                'gridOut' => self::format($sum['gridOut'], $decimals, $unit),
-                'batIn' => self::format($sum['batIn'], $decimals, $unit),
-                'batOut' => self::format($sum['batOut'], $decimals, $unit),
-                'home' => self::format($home, $decimals, $unit),
+                'pv' => self::format($sum['pv']),
+                'gridIn' => self::format($sum['gridIn']),
+                'gridOut' => self::format($sum['gridOut']),
+                'batIn' => self::format($sum['batIn']),
+                'batOut' => self::format($sum['batOut']),
+                'home' => self::format($home),
                 'soc' => $soc === null ? '' : number_format($soc, 0, ',', '') . ' %',
                 'l' => $pct,
                 'mix' => $mix,
@@ -241,12 +241,14 @@ final class HomeDisplayEnergyFlow
         ];
     }
 
-    private static function format(float $w, int $decimals, string $unit): string
+    /** Wie das Pixoo: unter 10 kW ganze Watt, darüber eine Nachkommastelle in kW. Die Kachel-Einheit wird nicht angehängt. */
+    private static function format(float $w): string
     {
-        $text = number_format($w, $decimals, ',', '.');
-        if ($unit !== '') {
-            $text .= ' ' . $unit;
+        $abs = abs($w);
+        if ($abs >= 10000.0) {
+            return str_replace('.', ',', sprintf('%.1f', $abs / 1000.0)) . ' kW';
         }
-        return $text;
+
+        return sprintf('%.0f', $abs) . ' W';
     }
 }

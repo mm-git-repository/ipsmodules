@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.9';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 52;
+    private const MODULE_BUILD = 53;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -69,10 +69,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private const FLOW_FRAMES = 8;
     private const FLOW_STEP_SEC = 2;
     /**
-     * Zahlen stehen im Bild. Ein neues Standbild öfter als das wirkt wie ein Neustart.
-     * Richtungswechsel und der nächste Animationsschritt gehen sofort.
+     * Zahlen, Richtungen und die Batteriefüllung stehen im Bild und wechseln höchstens alle 3 Sekunden.
+     * Der Animationsschritt geht sofort, ein neuer Wertestand ebenfalls.
+     * Diese Pause gilt nur, wenn der Schlüssel sich ändert, ohne dass der Stand neu war.
      */
     private const FLOW_GIF_MIN_SEC = 10;
+    private const FLOW_VALUE_SEC = 3;
+    /** Freie Pixel im Batteriesymbol: 8 Zeilen mal 6 Spalten. Unten rot, Mitte gelb, oben grün. */
+    private const BATTERY_FILL_PIXELS = 48;
+    private const BATTERY_FILL_RED = 16;
+    private const BATTERY_FILL_YELLOW = 32;
     /**
      * Der Grafikmodus sendet bei Wertänderungen ein Bild. Das Pixoo hängt sich auf,
      * wenn die GIF-ID ohne ResetHttpGifId weiterzählt.
@@ -1749,8 +1755,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->getPixooFrameKey($values),
         ];
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
-            $smard = $this->getSmardEurPerMwhForDisplay();
-            $parts[] = $smard !== null ? (string) round($smard, 2) : '';
+            $smard = array_key_exists('smard', $values) ? $values['smard'] : $this->getSmardEurPerMwhForDisplay();
+            $parts[] = is_float($smard) || is_int($smard) ? (string) round((float) $smard, 2) : '';
         }
         return sha1(implode('|', $parts));
     }
@@ -1918,6 +1924,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $pixooIp = trim($this->ReadPropertyString('PixooIp'));
         if ($pixooIp === '') {
             return;
+        }
+        if ($this->isGraphicMode()) {
+            $values = $this->graphicShownValues($values);
         }
         $frameKey = $this->getPixooFrameKey($values);
         $lastKey = $this->GetBuffer('PixooFrameKey');
@@ -3276,7 +3285,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     /**
      * Richtungen im Flussbild. 1 = zum Haus hin bzw. Laden, -1 = Einspeisen bzw. Entladen.
-     * battery null = keine Batteriequelle gewählt, fill = gefüllte Zeilen im Batteriesymbol.
+     * battery null = keine Batteriequelle gewählt, fill = gefüllte Innenpixel der Batterie.
      *
      * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
      * @return array{pv: bool, grid: int, battery: ?int, house: bool, fill: ?int}
@@ -3300,7 +3309,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         $fill = null;
         if ($values['batteryPercent'] !== null) {
-            $fill = (int) round(max(0.0, min(100.0, $values['batteryPercent'])) / 100.0 * 9.0);
+            $percent = (int) round(max(0.0, min(100.0, $values['batteryPercent'])));
+            $fill = (int) round($percent * self::BATTERY_FILL_PIXELS / 100);
         }
 
         return [
@@ -3309,6 +3319,89 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'battery' => $battery,
             'house' => $values['consumption'] >= self::FLOW_ACTIVE_W,
             'fill' => $fill,
+        ];
+    }
+
+    /**
+     * Grafikbild: Zahlen, Richtungen und Füllung bleiben 3 Sekunden stehen.
+     * Die Animation liest den Schritt weiterhin live.
+     *
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $live
+     * @return array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float, smard: ?float, time: string}
+     */
+    private function graphicShownValues(array $live): array
+    {
+        $now = time();
+        $at = (int) $this->GetBuffer('PixooShownAt');
+        $held = $this->decodeShownValues($this->GetBuffer('PixooShownValues'));
+        if ($held !== null && $at > 0 && ($now - $at) < self::FLOW_VALUE_SEC) {
+            return $held;
+        }
+
+        $shown = $this->captureShownPicture($live);
+        $encoded = json_encode($shown);
+        if ($encoded === false) {
+            return $shown;
+        }
+        $previous = $held !== null ? $this->graphicContentKey($held) : '';
+        if ($this->graphicContentKey($shown) !== $previous) {
+            $this->SetBuffer('PixooShownFresh', '1');
+        }
+        $this->SetBuffer('PixooShownValues', $encoded);
+        $this->SetBuffer('PixooShownAt', (string) $now);
+
+        return $shown;
+    }
+
+    /**
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $live
+     * @return array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float, smard: ?float, time: string}
+     */
+    private function captureShownPicture(array $live): array
+    {
+        $shown = [
+            'consumption' => (float) $live['consumption'],
+            'generation' => (float) $live['generation'],
+            'net' => (float) $live['net'],
+            'batteryPercent' => $live['batteryPercent'],
+            'batteryPower' => $live['batteryPower'],
+            'smard' => null,
+            'time' => '',
+        ];
+        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+            $shown['smard'] = $this->getSmardEurPerMwhForDisplay();
+            if ($this->ReadPropertyBoolean('PixooSmardShowTime')) {
+                $shown['time'] = $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
+            }
+        }
+
+        return $shown;
+    }
+
+    /**
+     * @return array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float, smard: ?float, time: string}|null
+     */
+    private function decodeShownValues(string $raw): ?array
+    {
+        if ($raw === '') {
+            return null;
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded) || !isset($decoded['consumption'], $decoded['generation'], $decoded['net'])) {
+            return null;
+        }
+        $percent = $decoded['batteryPercent'] ?? null;
+        $power = $decoded['batteryPower'] ?? null;
+        $smard = $decoded['smard'] ?? null;
+
+        return [
+            'consumption' => (float) $decoded['consumption'],
+            'generation' => (float) $decoded['generation'],
+            'net' => (float) $decoded['net'],
+            'batteryPercent' => is_float($percent) || is_int($percent) ? (float) $percent : null,
+            'batteryPower' => is_float($power) || is_int($power) ? (float) $power : null,
+            'smard' => is_float($smard) || is_int($smard) ? (float) $smard : null,
+            'time' => isset($decoded['time']) ? (string) $decoded['time'] : '',
         ];
     }
 
@@ -3323,10 +3416,19 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->isGraphicMode()) {
             return 'text';
         }
+
+        return 'flow|' . $this->flowPhaseKey() . '|' . $this->graphicContentKey($values);
+    }
+
+    /**
+     * Bildinhalt ohne den Animationsschritt. Daran hängt der festgehaltene Wertestand.
+     *
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
+     */
+    private function graphicContentKey(array $values): string
+    {
         $s = $this->flowState($values);
         $parts = [
-            'flow',
-            $this->flowPhaseKey(),
             (string) (int) round($values['consumption']),
             (string) (int) round($values['generation']),
             (string) (int) round($values['net']),
@@ -3339,10 +3441,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $s['fill'] === null ? 'n' : (string) $s['fill'],
         ];
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
-            $smard = $this->getSmardEurPerMwhForDisplay();
-            $parts[] = $smard !== null ? (string) round($smard, 2) : '';
+            $smard = array_key_exists('smard', $values) ? $values['smard'] : $this->getSmardEurPerMwhForDisplay();
+            $parts[] = is_float($smard) || is_int($smard) ? (string) round((float) $smard, 2) : '';
             if ($this->ReadPropertyBoolean('PixooSmardShowTime')) {
-                $parts[] = $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
+                $parts[] = array_key_exists('time', $values)
+                    ? (string) $values['time']
+                    : $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
             }
         }
 
@@ -3350,7 +3454,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     }
 
     /**
-     * Richtung, Füllstand und Animationsschalter. Das ändert das bewegte Bild, die Wattzahlen nicht.
+     * Animationsschritt. Richtungen und Füllung stammen aus dem festgehaltenen Stand.
      *
      * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
      */
@@ -3360,11 +3464,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return 'text';
         }
         $s = $this->flowState($values);
-        $band = 'n';
-        if ($values['batteryPercent'] !== null) {
-            $soc = $values['batteryPercent'];
-            $band = $soc < 25.0 ? 'r' : ($soc < 75.0 ? 'y' : 'g');
-        }
 
         return implode('|', [
             $this->flowPhaseKey(),
@@ -3373,7 +3472,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $s['battery'] === null ? 'n' : (string) $s['battery'],
             $s['house'] ? '1' : '0',
             $s['fill'] === null ? 'n' : (string) $s['fill'],
-            $band,
         ]);
     }
 
@@ -3386,6 +3484,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return false;
         }
         if ($this->getPixooFlowKey($values) !== $this->GetBuffer('PixooFlowKey')) {
+            return true;
+        }
+        if ($this->GetBuffer('PixooShownFresh') === '1') {
             return true;
         }
         $last = (int) $this->GetBuffer('PixooLastGifAt');
@@ -3401,6 +3502,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SetBuffer('PixooFrameKey', $frameKey);
         $this->SetBuffer('PixooFlowKey', $this->getPixooFlowKey($values));
         $this->SetBuffer('PixooLastGifAt', (string) time());
+        $this->SetBuffer('PixooShownFresh', '0');
     }
 
     /**
@@ -3538,17 +3640,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'O......O',
             'OOOOOOOO',
         ], ['O' => 0xaaaaaa]);
-        if ($s['fill'] !== null && $values['batteryPercent'] !== null) {
-            $soc = $values['batteryPercent'];
-            if ((int) round($soc) <= 0) {
-                $this->flowHLine($px, 56, 61, 30, $red);
-            } elseif ($s['fill'] > 0) {
-                $fillColor = $soc < 25.0 ? $red : ($soc < 75.0 ? 0xffdc00 : $green);
-                for ($row = 0; $row < $s['fill']; $row++) {
-                    $this->flowHLine($px, 56, 61, 30 - $row, $fillColor);
-                }
-            }
-        }
+        $this->paintBatteryFill($px, $s['fill']);
 
         $this->flowSprite($px, 26, $houseY, [
             '......R......',
@@ -3571,11 +3663,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $netY = 34;
         $this->flowValueUnit($px, $netNum, $netUnit, 1, $netY, 'l', $this->hexToRgb($this->NetGridColorHex($values['net'])));
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
-            $eurMwh = $this->getSmardEurPerMwhForDisplay();
-            if ($eurMwh !== null) {
-                $num = number_format($eurMwh / 1000.0, 2, ',', '');
+            $eurMwh = array_key_exists('smard', $values) ? $values['smard'] : $this->getSmardEurPerMwhForDisplay();
+            if (is_float($eurMwh) || is_int($eurMwh)) {
+                $num = number_format((float) $eurMwh / 1000.0, 2, ',', '');
                 $txt = $this->ReadPropertyBoolean('PixooSmardShowUnit') ? ($num . '€') : $num;
-                $col = $this->hexToRgb($this->smardPriceColorHex($eurMwh));
+                $col = $this->hexToRgb($this->smardPriceColorHex((float) $eurMwh));
             } else {
                 $txt = '--';
                 $col = 0xa0a0a0;
@@ -3604,7 +3696,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->flowValueUnit($px, $useNum, $useUnit, $hubX, 58, 'c', 0xffffff);
 
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice') && $this->ReadPropertyBoolean('PixooSmardShowTime')) {
-            $this->flowText($px, $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT), 62, 1, 'r', $label);
+            $clock = array_key_exists('time', $values) ? (string) $values['time'] : $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
+            $this->flowText($px, $clock, 62, 1, 'r', $label);
         }
 
         $out = '';
@@ -3613,6 +3706,27 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
 
         return $out;
+    }
+
+    /** @param list<int> $px */
+    private function paintBatteryFill(array &$px, ?int $count): void
+    {
+        if ($count === null || $count <= 0) {
+            return;
+        }
+        $count = min(self::BATTERY_FILL_PIXELS, $count);
+        for ($i = 0; $i < $count; $i++) {
+            $y = 29 - intdiv($i, 6);
+            $x = 56 + ($i % 6);
+            if ($i < self::BATTERY_FILL_RED) {
+                $color = 0xff3232;
+            } elseif ($i < self::BATTERY_FILL_YELLOW) {
+                $color = 0xffdc00;
+            } else {
+                $color = 0x32dc32;
+            }
+            $this->flowSet($px, $x, $y, $color);
+        }
     }
 
     /** @param list<int> $px */

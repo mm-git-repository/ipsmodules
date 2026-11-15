@@ -32,8 +32,8 @@ static const char *TAG_UI = "ui";
 #define FLOW_SLOT_MAX 4
 #define FLOW_CONS_MAX 6
 
-/* Energiefluss wie die Energieverteilung in Home Assistant: Kreise für PV, Netz, Haus und Batterie,
- * Linien dazwischen mit wandernden Punkten. Linien: PV→Haus, PV→Netz, PV→Batterie, Netz→Haus, Netz→Batterie, Batterie→Haus. */
+/* Energiefluss wie das Pixoo: PV oben, Netz links, Batterie rechts, Haus unten.
+ * Linien über den Knoten: PV→Haus, PV→Netz, PV→Batterie, Netz→Haus, Netz→Batterie, Batterie→Haus. */
 typedef struct flow_slot {
     lv_obj_t *card;
     lv_point_t pts[FLOW_LINES][FLOW_PTS];
@@ -5507,75 +5507,56 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
     int h = card_h - 20 - head;
     if (w < 80 || h < 60) return;
     const int label_h = 20;
-    int r;
-    if (has_pv && has_bat) r = (int) (h / 4.8f);
-    else if (has_pv || has_bat) r = (int) ((h - label_h) / 3.8f);
-    else r = (h - label_h) / 2 - 2;
-    if (r > w / 7) r = w / 7;
+    cJSON *consumers = cJSON_GetObjectItem(tile, "flowConsumers");
+    int wanted = cJSON_IsArray(consumers) ? cJSON_GetArraySize(consumers) : 0;
+    if (wanted > FLOW_CONS_MAX) wanted = FLOW_CONS_MAX;
+    int cons_h = wanted > 0 ? wanted * 20 + 8 : 0;
+    int area_h = h - cons_h;
+    if (area_h < 90) {
+        area_h = h;
+        cons_h = 0;
+        wanted = 0;
+    }
+    int r = area_h / 5;
+    if (r > w / 5) r = w / 5;
     if (r > 80) r = 80;
     if (r < 18) r = 18;
 
     int cx = w / 2;
-    int ym;
-    if (has_pv && has_bat) ym = head + h / 2;
-    else if (has_pv) ym = head + h - r - 2;
-    else if (has_bat) ym = head + label_h + r + 2;
-    else ym = head + label_h + (h - label_h) / 2;
     int py = head + r + 2;
-    int by = head + h - r - 2;
+    int hy = head + area_h - r - 2;
+    if (hy < py + r) hy = py + r;
+    int ym = (py + hy) / 2;
     int gx = r + 2;
-    int hx = w - r - 2;
-    int k = r * 2 / 5;
-    int dk = (int) lroundf(sqrtf((float) (r * r - k * k)));
-    int rc = r / 2;
+    int bx = w - r - 2;
 
     if (has_pv) {
-        int top = py + dk;
-        int rcl = rc;
-        int bend = ym - k - rcl;
-        if (bend < top) {
-            rcl -= top - bend;
-            if (rcl < 0) rcl = 0;
-            bend = ym - k - rcl;
-        }
-        flow_push(slot, 0, cx + k, top);
-        flow_push(slot, 0, cx + k, bend);
-        if (rcl > 0) flow_arc(slot, 0, cx + k + rcl, bend, rcl, 180, 90);
-        flow_push(slot, 0, hx - dk, ym - k);
+        flow_push(slot, 0, cx, py + r);
+        flow_push(slot, 0, cx, hy - r);
         if (grid_out) {
-            flow_push(slot, 1, cx - k, top);
-            flow_push(slot, 1, cx - k, bend);
-            if (rcl > 0) flow_arc(slot, 1, cx - k - rcl, bend, rcl, 0, 90);
-            flow_push(slot, 1, gx + dk, ym - k);
+            flow_push(slot, 1, cx, py + r);
+            flow_push(slot, 1, cx, ym);
+            flow_push(slot, 1, gx + r, ym);
         }
         if (has_bat) {
             flow_push(slot, 2, cx, py + r);
-            flow_push(slot, 2, cx, by - r);
+            flow_push(slot, 2, cx, ym);
+            flow_push(slot, 2, bx - r, ym);
         }
     }
     if (grid_in) {
         flow_push(slot, 3, gx + r, ym);
-        flow_push(slot, 3, hx - r, ym);
+        flow_push(slot, 3, cx, ym);
+        flow_push(slot, 3, cx, hy - r);
+    }
+    if (has_bat && has_grid) {
+        flow_push(slot, 4, gx + r, ym);
+        flow_push(slot, 4, bx - r, ym);
     }
     if (has_bat) {
-        int bottom = by - dk;
-        int rcl = rc;
-        int bend = ym + k + rcl;
-        if (bend > bottom) {
-            rcl -= bend - bottom;
-            if (rcl < 0) rcl = 0;
-            bend = ym + k + rcl;
-        }
-        if (has_grid) {
-            flow_push(slot, 4, gx + dk, ym + k);
-            flow_push(slot, 4, cx - k - rcl, ym + k);
-            if (rcl > 0) flow_arc(slot, 4, cx - k - rcl, bend, rcl, 270, 360);
-            flow_push(slot, 4, cx - k, bottom);
-        }
-        flow_push(slot, 5, cx + k, bottom);
-        flow_push(slot, 5, cx + k, bend);
-        if (rcl > 0) flow_arc(slot, 5, cx + k + rcl, bend, rcl, 180, 270);
-        flow_push(slot, 5, hx - dk, ym + k);
+        flow_push(slot, 5, bx - r, ym);
+        flow_push(slot, 5, cx, ym);
+        flow_push(slot, 5, cx, hy - r);
     }
 
     for (int line = 0; line < FLOW_LINES; line++) {
@@ -5622,26 +5603,25 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
         flow_caption(view->card, "Netz", gx - r - 2, ym - r - label_h, 2 * r + 4, LV_TEXT_ALIGN_CENTER);
     }
     if (has_bat) {
-        lv_obj_t *circle = flow_circle(view->card, cx, by, r, FLOW_RING_BAT, fill);
+        lv_obj_t *circle = flow_circle(view->card, bx, ym, r, FLOW_RING_BAT, fill);
         if (with_icon) flow_icon(circle, "batteryIcon", large_icon && !(bat_in && bat_out));
         if (bat_in) slot->bat_in = flow_text(circle, value_font, FLOW_INK_CHARGE, "-");
         if (bat_out) slot->bat_out = flow_text(circle, value_font, FLOW_INK_DISCHARGE, "-");
         flow_stack(circle, r, with_icon);
-        int caption_y = has_soc ? by - 20 : by - 10;
-        flow_caption(view->card, "Batterie", 0, caption_y, cx - r - 8, LV_TEXT_ALIGN_RIGHT);
-        if (has_soc) slot->soc_val = flow_caption(view->card, "", 0, caption_y + 20, cx - r - 8, LV_TEXT_ALIGN_RIGHT);
+        flow_caption(view->card, "Batterie", bx - r - 2, ym - r - label_h, 2 * r + 4, LV_TEXT_ALIGN_CENTER);
+        if (has_soc) slot->soc_val = flow_caption(view->card, "", bx - r - 2, ym + r + 2, 2 * r + 4, LV_TEXT_ALIGN_CENTER);
     }
-    lv_obj_t *home = flow_circle(view->card, hx, ym, r, FLOW_RING_HOME, fill);
+    lv_obj_t *home = flow_circle(view->card, cx, hy, r, FLOW_RING_HOME, fill);
     if (with_icon) flow_icon(home, "home", large_icon);
     slot->home_val = flow_text(home, value_font, text_fg(), "-");
     flow_stack(home, r, with_icon);
-    flow_caption(view->card, "Zuhause", hx - r - 20, ym - r - label_h, 2 * r + 22, LV_TEXT_ALIGN_CENTER);
+    flow_caption(view->card, "Zuhause", 0, hy - 10, cx - r - 8, LV_TEXT_ALIGN_RIGHT);
     static const uint32_t mix_ink[3] = {FLOW_RING_PV, FLOW_INK_DISCHARGE, FLOW_RING_GRID};
     for (int part = 0; part < 3; part++) {
         lv_obj_t *arc = lv_arc_create(view->card);
         lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
         lv_obj_set_size(arc, 2 * r, 2 * r);
-        lv_obj_set_pos(arc, hx - r, ym - r);
+        lv_obj_set_pos(arc, cx - r, hy - r);
         lv_obj_set_style_pad_all(arc, 0, LV_PART_MAIN);
         lv_obj_set_style_bg_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_arc_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);
@@ -5655,28 +5635,20 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
         slot->home_arc[part] = arc;
     }
 
-    /* Einzelne Verbraucher stehen unter dem Haus, sonst darüber. */
-    cJSON *consumers = cJSON_GetObjectItem(tile, "flowConsumers");
-    int wanted = cJSON_IsArray(consumers) ? cJSON_GetArraySize(consumers) : 0;
-    int x0 = cx + r + 8;
-    int col_w = w - x0;
-    if (wanted > 0 && col_w >= 70) {
-        int below_y = ym + r + 6;
-        int below_h = head + h - below_y;
-        int above_y = head;
-        int above_h = ym - r - label_h - 2 - head;
-        int y0 = below_h >= above_h ? below_y : above_y;
-        int room = below_h >= above_h ? below_h : above_h;
+    /* Verbraucher unter dem Haus, über die Breite der Kachel. */
+    if (wanted > 0 && cons_h > 0) {
+        int y0 = hy + r + 6;
+        int room = head + h - y0;
         int fit = room / 20;
         if (fit > wanted) fit = wanted;
         if (fit > FLOW_CONS_MAX) fit = FLOW_CONS_MAX;
-        int name_w = col_w * 55 / 100;
+        int name_w = w * 55 / 100;
         for (int index = 0; index < fit; index++) {
             cJSON *item = cJSON_GetArrayItem(consumers, index);
             const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(item, "title"));
             int y = y0 + index * 20;
-            flow_caption(view->card, name && name[0] ? name : "Verbraucher", x0, y, name_w, LV_TEXT_ALIGN_LEFT);
-            lv_obj_t *value = flow_caption(view->card, "-", x0 + name_w, y, col_w - name_w, LV_TEXT_ALIGN_RIGHT);
+            flow_caption(view->card, name && name[0] ? name : "Verbraucher", 0, y, name_w, LV_TEXT_ALIGN_LEFT);
+            lv_obj_t *value = flow_caption(view->card, "-", name_w, y, w - name_w, LV_TEXT_ALIGN_RIGHT);
             lv_obj_set_style_text_opa(value, LV_OPA_COVER, 0);
             slot->cons_val[index] = value;
         }

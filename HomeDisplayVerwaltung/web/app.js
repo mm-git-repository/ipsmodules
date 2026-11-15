@@ -184,54 +184,40 @@ function flowNodesOf(tile) {
 const FLOW_INK = ["#f0a030", "#a38be0", "#e0709a", "#5b8fc7", "#5b8fc7", "#6cc3b5"];
 
 /* Gleiche Geometrie wie build_energy_flow in der Firmware (Pixel der Kachel ohne Überschrift). */
-function flowGeometry(nodes, w, h) {
+function flowGeometry(nodes, w, h, consumerCount) {
   const hasGrid = nodes.gridIn || nodes.gridOut;
   const hasBat = nodes.batIn || nodes.batOut || nodes.soc;
   const labelH = 20;
-  let r;
-  if (nodes.pv && hasBat) r = Math.floor(h / 4.8);
-  else if (nodes.pv || hasBat) r = Math.floor((h - labelH) / 3.8);
-  else r = Math.floor((h - labelH) / 2) - 2;
-  r = Math.max(18, Math.min(r, Math.floor(w / 7), 80));
+  let wanted = Math.min(Math.max(0, consumerCount || 0), 6);
+  let consH = wanted > 0 ? wanted * 20 + 8 : 0;
+  let areaH = h - consH;
+  if (areaH < 90) {
+    areaH = h;
+    consH = 0;
+    wanted = 0;
+  }
+  let r = Math.floor(areaH / 5);
+  r = Math.max(18, Math.min(r, Math.floor(w / 5), 80));
   const cx = Math.floor(w / 2);
-  let ym;
-  if (nodes.pv && hasBat) ym = Math.floor(h / 2);
-  else if (nodes.pv) ym = h - r - 2;
-  else if (hasBat) ym = labelH + r + 2;
-  else ym = labelH + Math.floor((h - labelH) / 2);
   const py = r + 2;
-  const by = h - r - 2;
+  let hy = areaH - r - 2;
+  if (hy < py + r) hy = py + r;
+  const ym = Math.floor((py + hy) / 2);
   const gx = r + 2;
-  const hx = w - r - 2;
-  const k = Math.floor((r * 2) / 5);
-  const dk = Math.round(Math.sqrt(r * r - k * k));
-  const rc = Math.floor(r / 2);
+  const bx = w - r - 2;
   const paths = [null, null, null, null, null, null];
-  const corner = (rad, sweep, ex, ey) => (rad > 0 ? ` A ${rad} ${rad} 0 0 ${sweep} ${ex} ${ey}` : ` L ${ex} ${ey}`);
-  if (nodes.pv) {
-    const top = py + dk;
-    let rcl = rc;
-    let bend = ym - k - rcl;
-    if (bend < top) { rcl = Math.max(0, rcl - (top - bend)); bend = ym - k - rcl; }
-    paths[0] = `M ${cx + k} ${top} L ${cx + k} ${bend}${corner(rcl, 0, cx + k + rcl, ym - k)} L ${hx - dk} ${ym - k}`;
-    if (nodes.gridOut) paths[1] = `M ${cx - k} ${top} L ${cx - k} ${bend}${corner(rcl, 1, cx - k - rcl, ym - k)} L ${gx + dk} ${ym - k}`;
-    if (hasBat) paths[2] = `M ${cx} ${py + r} L ${cx} ${by - r}`;
-  }
-  if (nodes.gridIn) paths[3] = `M ${gx + r} ${ym} L ${hx - r} ${ym}`;
-  if (hasBat) {
-    const bottom = by - dk;
-    let rcl = rc;
-    let bend = ym + k + rcl;
-    if (bend > bottom) { rcl = Math.max(0, rcl - (bend - bottom)); bend = ym + k + rcl; }
-    if (hasGrid) paths[4] = `M ${gx + dk} ${ym + k} L ${cx - k - rcl} ${ym + k}${corner(rcl, 1, cx - k, bend)} L ${cx - k} ${bottom}`;
-    paths[5] = `M ${cx + k} ${bottom} L ${cx + k} ${bend}${corner(rcl, 1, cx + k + rcl, ym + k)} L ${hx - dk} ${ym + k}`;
-  }
-  return { r, cx, ym, py, by, gx, hx, labelH, hasGrid, hasBat, paths };
+  if (nodes.pv) paths[0] = `M ${cx} ${py + r} L ${cx} ${hy - r}`;
+  if (nodes.pv && nodes.gridOut) paths[1] = `M ${cx} ${py + r} L ${cx} ${ym} L ${gx + r} ${ym}`;
+  if (nodes.pv && hasBat) paths[2] = `M ${cx} ${py + r} L ${cx} ${ym} L ${bx - r} ${ym}`;
+  if (nodes.gridIn) paths[3] = `M ${gx + r} ${ym} L ${cx} ${ym} L ${cx} ${hy - r}`;
+  if (hasGrid && hasBat) paths[4] = `M ${gx + r} ${ym} L ${bx - r} ${ym}`;
+  if (hasBat) paths[5] = `M ${bx - r} ${ym} L ${cx} ${ym} L ${cx} ${hy - r}`;
+  return { r, cx, ym, py, hy, gx, bx, labelH, hasGrid, hasBat, paths, consTop: hy + r + 6, consCount: wanted };
 }
 
 function flowDemo(nodes) {
   return {
-    pv: "3.200 W", gridIn: "150 W", gridOut: "0 W", batIn: "500 W", batOut: "0 W", home: "2.850 W", soc: nodes.soc ? "63 %" : "",
+    pv: "3200 W", gridIn: "150 W", gridOut: "0 W", batIn: "500 W", batOut: "0 W", home: "2850 W", soc: nodes.soc ? "63 %" : "",
     l: [100, 0, 20, 5, 0, 0], mix: [95, 0, 5], c: []
   };
 }
@@ -246,7 +232,7 @@ function buildEnergyFlowHtml(tile, live, mode) {
   const head = showTitle ? Math.round((titlePxOf(tile) || 20) * 1.2) + 4 : 0;
   const w = Math.max(80, box.width - 20);
   const h = Math.max(60, box.height - 20 - head);
-  const g = flowGeometry(nodes, w, h);
+  const g = flowGeometry(nodes, w, h, flowConsumersOf(tile).length);
   const flow = (live && live.flow && typeof live.flow === "object") ? live.flow : flowDemo(nodes);
   const pct = Array.isArray(flow.l) ? flow.l : [];
   const valuePx = g.r >= 50 ? 20 : 16;
@@ -290,12 +276,11 @@ function buildEnergyFlowHtml(tile, live, mode) {
     parts.push(caption(g.gx, g.ym - g.r - 6, "Netz", "middle"));
   }
   if (g.hasBat) {
-    parts.push(circle(g.cx, g.by, "#e0709a", 0xF0079, [nodes.batIn && [`↓ ${text("batIn")}`, "#e88aae"], nodes.batOut && [`↑ ${text("batOut")}`, "#6cc3b5"]]));
-    const capY = nodes.soc ? g.by - 4 : g.by + 5;
-    parts.push(caption(g.cx - g.r - 8, capY, "Batterie", "end"));
-    if (nodes.soc) parts.push(caption(g.cx - g.r - 8, capY + 20, flow.soc || "", "end"));
+    parts.push(circle(g.bx, g.ym, "#e0709a", 0xF0079, [nodes.batIn && [`+ ${text("batIn")}`, "#e88aae"], nodes.batOut && [`− ${text("batOut")}`, "#6cc3b5"]]));
+    parts.push(caption(g.bx, g.ym - g.r - 6, "Batterie", "middle"));
+    if (nodes.soc) parts.push(caption(g.bx, g.ym + g.r + 16, flow.soc || "", "middle"));
   }
-  parts.push(circle(g.hx, g.ym, "#46566b", 0xF02DC, [[text("home"), "#f4f7fb"]]));
+  parts.push(circle(g.cx, g.hy, "#46566b", 0xF02DC, [[text("home"), "#f4f7fb"]]));
   const mix = Array.isArray(flow.mix) ? flow.mix : [];
   const mixInk = ["#f0a030", "#6cc3b5", "#5b8fc7"];
   const circumference = 2 * Math.PI * (g.r - 2);
@@ -304,23 +289,17 @@ function buildEnergyFlowHtml(tile, live, mode) {
     const part = Math.max(0, Math.min(100, Number(share) || 0));
     if (!part) return;
     const length = (circumference * part) / 100;
-    parts.push(`<circle cx="${g.hx}" cy="${g.ym}" r="${g.r - 2}" fill="none" stroke="${mixInk[index]}" stroke-width="4" stroke-dasharray="${length} ${circumference - length}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${g.hx} ${g.ym})"/>`);
+    parts.push(`<circle cx="${g.cx}" cy="${g.hy}" r="${g.r - 2}" fill="none" stroke="${mixInk[index]}" stroke-width="4" stroke-dasharray="${length} ${circumference - length}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${g.cx} ${g.hy})"/>`);
     offset += length;
   });
-  parts.push(caption(g.hx, g.ym - g.r - 6, "Zuhause", "middle"));
+  parts.push(caption(g.cx - g.r - 8, g.hy + 5, "Zuhause", "end"));
   const consumers = flowConsumersOf(tile);
-  const x0 = g.cx + g.r + 8;
-  const colW = w - x0;
-  if (consumers.length && colW >= 70) {
-    const belowY = g.ym + g.r + 6;
-    const belowH = h - belowY;
-    const aboveH = g.ym - g.r - g.labelH - 2;
-    const y0 = belowH >= aboveH ? belowY : 0;
-    const fit = Math.min(consumers.length, Math.floor(Math.max(belowH, aboveH) / 20), 6);
+  if (consumers.length && g.consCount > 0) {
+    const fit = Math.min(consumers.length, g.consCount);
     const values = Array.isArray(flow.c) ? flow.c : [];
     for (let index = 0; index < fit; index += 1) {
-      const y = y0 + index * 20 + 15;
-      parts.push(`<text x="${x0}" y="${y}" class="flow-caption">${escapeHtml(consumers[index].title || "Verbraucher")}</text>`);
+      const y = g.consTop + index * 20 + 15;
+      parts.push(`<text x="0" y="${y}" class="flow-caption">${escapeHtml(consumers[index].title || "Verbraucher")}</text>`);
       parts.push(`<text x="${w}" y="${y}" text-anchor="end" class="flow-consumer">${escapeHtml((values[index] && values[index].v) || "-")}</text>`);
     }
   }

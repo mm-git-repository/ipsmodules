@@ -3545,8 +3545,8 @@ PHP;
         if ($this->layoutUsesPin($layout) && version_compare($min, '0.6.76', '<')) {
             $min = '0.6.76';
         }
-        if ($this->layoutUsesKind($layout, 'energyflow') && version_compare($min, '0.6.77', '<')) {
-            $min = '0.6.77';
+        if ($this->layoutUsesKind($layout, 'energyflow') && version_compare($min, '0.6.81', '<')) {
+            $min = '0.6.81';
         }
         return $min;
     }
