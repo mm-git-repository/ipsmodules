@@ -100,9 +100,34 @@ GLYPHS = {
     "%": ["##...", "##.#.", "..#..", ".#.##", "...##"],
     "€": [".###", "#...", "###.", "#...", ".###"],
     "-": ["...", "...", "###", "...", "..."],
-    ",": [".", ".", ".", ".", "#"],
+    ",": ["..", "..", "..", "..", "#."],
     ":": [".", "#", ".", "#", "."],
     " ": [".", ".", ".", ".", "."],
+    "A": [".#.", "#.#", "###", "#.#", "#.#"],
+    "B": ["##.", "#.#", "##.", "#.#", "##."],
+    "C": [".##", "#..", "#..", "#..", ".##"],
+    "D": ["##.", "#.#", "#.#", "#.#", "##."],
+    "E": ["###", "#..", "##.", "#..", "###"],
+    "F": ["###", "#..", "##.", "#..", "#.."],
+    "G": [".##", "#..", "#.#", "#.#", ".##"],
+    "H": ["#.#", "#.#", "###", "#.#", "#.#"],
+    "I": ["###", ".#.", ".#.", ".#.", "###"],
+    "J": ["..#", "..#", "..#", "#.#", ".#."],
+    "K": ["#.#", "##.", "#..", "##.", "#.#"],
+    "L": ["#..", "#..", "#..", "#..", "###"],
+    "M": ["#.#", "###", "#.#", "#.#", "#.#"],
+    "N": ["##.", "#.#", "#.#", "#.#", "#.#"],
+    "O": [".#.", "#.#", "#.#", "#.#", ".#."],
+    "P": ["##.", "#.#", "##.", "#..", "#.."],
+    "Q": [".#.", "#.#", "#.#", ".##", "..#"],
+    "R": ["##.", "#.#", "##.", "#.#", "#.#"],
+    "S": [".##", "#..", ".#.", "..#", "##."],
+    "T": ["###", ".#.", ".#.", ".#.", ".#."],
+    "U": ["#.#", "#.#", "#.#", "#.#", ".##"],
+    "V": ["#.#", "#.#", "#.#", "#.#", ".#."],
+    "X": ["#.#", "#.#", ".#.", "#.#", "#.#"],
+    "Y": ["#.#", "#.#", ".#.", ".#.", ".#."],
+    "Z": ["###", "..#", ".#.", "#..", "###"],
 }
 
 
@@ -135,39 +160,58 @@ def to_data_uri(img: Image.Image) -> str:
 
 
 def text_preview() -> str:
-    consumption = 500
-    generation = 1000
-    net_w = 500.0
-    smard_txt = "0,12€"
-    battery_pct = "80%"
-    battery_w = "400 W"
+    px = [[BG for _ in range(64)] for _ in range(64)]
 
-    img = Image.new("RGB", (W, H), BG)
-    dr = ImageDraw.Draw(img)
-    draw_grid(dr)
+    def put(x: int, y: int, c: tuple[int, int, int]) -> None:
+        if 0 <= x < 64 and 0 <= y < 64:
+            px[y][x] = c
 
-    f_label = load_font(7 * SCALE)
-    f_value = load_font(8 * SCALE)
+    def width(t: str) -> int:
+        chars = [c for c in t if c in GLYPHS]
+        return sum(len(GLYPHS[c][0]) for c in chars) + max(len(chars) - 1, 0)
 
-    x0 = 2 * SCALE
+    def text(t: str, x: int, y: int, align: str, fill) -> None:
+        w = width(t)
+        if align == "r":
+            x = x - w + 1
+        elif align == "c":
+            x = x - w // 2
+        for ch in t:
+            glyph = GLYPHS.get(ch)
+            if glyph is None:
+                continue
+            for dy, row in enumerate(glyph):
+                for dx, cell in enumerate(row):
+                    if cell == "#":
+                        put(x + dx, y + dy, fill)
+            x += len(glyph[0]) + 1
+
+    def text_unit(number: str, unit: str, x: int, y: int, align: str, fill) -> None:
+        total = width(number) + 2 + width(unit)
+        if align == "r":
+            x = x - total + 1
+        elif align == "c":
+            x = x - total // 2
+        text(number, x, y, "l", fill)
+        text(unit, x + width(number) + 2, y, "l", fill)
+
     rows = [
-        (0, "ERZEUGUNG", f"{generation:.0f} W", C_WHITE),
-        (16, "BATTERIE", battery_pct, C_WHITE),
-        (32, "VERBRAUCH", f"{consumption:.0f} W", C_WHITE),
-        (48, "NETZ", f"{abs(net_w):.0f} W", C_NET_IMPORT),
+        (0, "ERZEUGUNG", "1000", C_WHITE),
+        (32, "VERBRAUCH", "500", C_WHITE),
+        (48, "NETZ", "500", C_NET_IMPORT),
     ]
-    for y, label, value, color in rows:
-        dr.text((x0, y * SCALE), label, fill=C_LABEL, font=f_label)
-        dr.text((x0, (y + 8) * SCALE), value, fill=color, font=f_value)
+    for y, label, number, color in rows:
+        text(label, 2, y, "l", C_LABEL)
+        text_unit(number, "W", 2, y + 6, "l", color)
+    text("BATTERIE", 2, 16, "l", C_LABEL)
+    text_unit("80", "%", 2, 22, "l", C_WHITE)
+    text_unit("400", "W", 62, 22, "r", C_CHARGE)
+    text("14:30", 62, 48, "r", C_LABEL)
+    text_unit("0,12", "€", 62, 54, "r", C_SMARD_POS)
 
-    def right_text(text: str, y: int, fill: tuple[int, int, int]) -> None:
-        bbox = dr.textbbox((0, 0), text, font=f_value)
-        width = bbox[2] - bbox[0]
-        dr.text((W - width - 2 * SCALE, y * SCALE), text, fill=fill, font=f_value)
-
-    right_text(battery_w, 24, C_CHARGE)
-    right_text(smard_txt, 56, C_SMARD_POS)
-    return to_data_uri(img)
+    small = Image.new("RGB", (64, 64), BG)
+    small.putdata([c for row in px for c in row])
+    return to_data_uri(small.resize((W, H), Image.NEAREST))
 
 
 def flow_preview() -> str:
@@ -211,9 +255,26 @@ def flow_preview() -> str:
             for dx, ch in enumerate(row):
                 if ch in palette:
                     put(x0 + dx, y0 + dy, palette[ch])
-    # 80 % = 7 of 9 rows, >= 75 % green
-    for r in range(7):
-        hline(56, 61, 30 - r, GREEN)
+    # 80 % von 54 Innenpixeln, ab y=30 aufwärts, 6 Pixel je Zeile: rot, gelb, grün
+    yellow = (255, 220, 0)
+    for i in range(43):
+        y = 30 - (i // 6)
+        x = 56 + (i % 6)
+        color = RED if i < 18 else yellow if i < 36 else GREEN
+        put(x, y, color)
+    sun = [
+        "....Y....",
+        ".Y..Y..Y.",
+        "..YYYYY..",
+        "YYYYYYYYY",
+        "..YYYYY..",
+        ".Y..Y..Y.",
+        "....Y....",
+    ]
+    for dy, row in enumerate(sun):
+        for dx, ch in enumerate(row):
+            if ch == "Y":
+                put(8 + dx, 1 + dy, yellow)
 
     def width(t: str) -> int:
         chars = [c for c in t if c in GLYPHS]
@@ -249,7 +310,8 @@ def flow_preview() -> str:
     text_unit("0", "W", 62, 34, "r", (255, 220, 0))
     text_unit("80", "%", 62, 41, "r", C_WHITE)
     text_unit("1356", "W", 32, 58, "c", C_WHITE)
-    text("0,12€", 1, 41, "l", C_SMARD_POS)
+    text("14:30", 62, 1, "r", C_LABEL)
+    text_unit("0,12", "€", 1, 41, "l", C_SMARD_POS)
 
     small = Image.new("RGB", (64, 64), BG)
     small.putdata([c for row in px for c in row])
@@ -262,11 +324,22 @@ def main() -> None:
     form_path = Path(__file__).resolve().parents[1] / "form.json"
     form = json.loads(form_path.read_text(encoding="utf-8"))
     found = set()
-    for element in form.get("elements", []):
-        caption = element.get("caption")
-        if element.get("type") == "Image" and caption in images:
-            element["image"] = images[caption]
+
+    def walk(node) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        caption = node.get("caption")
+        if node.get("type") == "Image" and caption in images:
+            node["image"] = images[caption]
             found.add(caption)
+        for value in node.values():
+            walk(value)
+
+    walk(form.get("elements", []))
     missing = set(images) - found
     if missing:
         raise SystemExit("Vorschau-Bild in form.json nicht gefunden: " + ", ".join(sorted(missing)))

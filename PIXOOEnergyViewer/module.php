@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.9';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 56;
+    private const MODULE_BUILD = 57;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -207,7 +207,6 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterPropertyBoolean('PixooShowWeather', false);
         $this->RegisterPropertyInteger('PixooWeatherVar', 0);
         $this->RegisterPropertyBoolean('PixooShowClock', false);
-        $this->RegisterPropertyBoolean('PixooGraphicModeSwitch', false);
 
         if (!IPS_VariableProfileExists('SMAPX.Watt')) {
             IPS_CreateVariableProfile('SMAPX.Watt', 2);
@@ -279,6 +278,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'PixooDateTimeTextHeight',
             'PixooDateTimeAlign',
             'BatteryPowerVar',
+            'PixooGraphicModeSwitch',
         ];
     }
 
@@ -528,7 +528,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                     0
                 );
             }
-            $restoredFromBackup = $this->restoreSourceVariableIdsFromBackup();
+            $restoredFromBackup = $this->restoreSourceVariableIdsFromSnapshot(
+                $this->loadSourceVariableIdBackup(),
+                $configSnapshot
+            );
             if ($restoredFromBackup > 0 && $invokeParent) {
                 parent::ApplyChanges();
                 $this->SendDebug(
@@ -538,8 +541,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 );
             }
             $captured = $this->captureSourceVariableIdsFromAllSources();
-            if (count($captured) === count($this->getVariableSlotDefinitions())) {
-                $this->writeSourceVariableIdBackup($captured);
+            if ($this->backupHasRequiredSourceVariables($captured)) {
+                $this->writeSourceVariableIdBackup($this->completeSourceVariableBackup($captured));
             }
             $this->ensureTimerDefinitions();
             $this->ensureModuleVersionVariable();
@@ -586,7 +589,13 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             }
 
             $this->SetStatus(self::IS_ACTIVE);
+            $this->SetBuffer('PixooShownValues', '');
+            $this->SetBuffer('PixooShownAt', '0');
+            $this->SetBuffer('PixooFrameKey', '');
+            $this->SetBuffer('PixooFlowKey', '');
+            $this->SetBuffer('PixooHttpTextCleared', '0');
             $this->SetBuffer('PixooInited', '0');
+            $this->logDisplayDiagnostics();
             $this->SetBuffer('PixooGifReady', '0');
             $this->startInstanceRuntime(!$creating);
             if (!function_exists('IPS_GetKernelRunlevel')
@@ -731,7 +740,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     private function needsSmardRefresh(): bool
     {
-        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if (!$this->readConfiguredPropertyBoolean('PixooShowSmardPrice')) {
             return false;
         }
         $lastRaw = $this->GetBuffer('LastSmardFetchAt');
@@ -749,7 +758,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
     private function fetchAndApplySmardIfEnabled(bool $syncPixooAfter = true): void
     {
-        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if (!$this->readConfiguredPropertyBoolean('PixooShowSmardPrice')) {
             return;
         }
         if (!$this->requireCurlExtension('SMARD')) {
@@ -1065,27 +1074,32 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
     }
 
-    /** Setzt den Anzeigewert eines Formularelements, auch in Zeilen und Feldern verschachtelt. */
-    private function setFormElementValue(array &$elements, string $name, bool $value): void
+    /** Beschriftung und Sperre einer Schaltfläche, auch in Zeilen verschachtelt. */
+    private function setFormButtonState(array &$elements, string $name, string $caption, bool $enabled): void
     {
         foreach ($elements as &$element) {
             if (!is_array($element)) {
                 continue;
             }
             if (($element['name'] ?? '') === $name) {
-                $element['value'] = $value;
+                $element['caption'] = $caption;
+                $element['enabled'] = $enabled;
             }
             if (isset($element['items']) && is_array($element['items'])) {
-                $this->setFormElementValue($element['items'], $name, $value);
+                $this->setFormButtonState($element['items'], $name, $caption, $enabled);
             }
         }
         unset($element);
     }
 
-    /** Vom Formular-Schalter „Text / Grafik“ aufgerufen. Setzt den Modus direkt, ohne Umschalten. */
+    /** Vom Formular-Knopf „Text“ oder „Grafik“ aufgerufen. Setzt den Modus direkt. */
     public function SetGraphicModeFromForm(bool $enabled): void
     {
         $this->setGraphicMode($enabled);
+        $this->UpdateFormField('GraphicModeTextButton', 'caption', $enabled ? 'Text' : '✔ Text');
+        $this->UpdateFormField('GraphicModeTextButton', 'enabled', $enabled);
+        $this->UpdateFormField('GraphicModeGraphicButton', 'caption', $enabled ? '✔ Grafik' : 'Grafik');
+        $this->UpdateFormField('GraphicModeGraphicButton', 'enabled', !$enabled);
     }
 
     public function GetConfigurationForm(): string
@@ -1103,12 +1117,25 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!isset($form['elements']) || !is_array($form['elements'])) {
             $form['elements'] = [];
         }
-        array_unshift($form['elements'], [
+        $graphic = $this->isGraphicMode();
+        $this->setFormButtonState($form['elements'], 'GraphicModeTextButton', $graphic ? 'Text' : '✔ Text', $graphic);
+        $this->setFormButtonState($form['elements'], 'GraphicModeGraphicButton', $graphic ? '✔ Grafik' : 'Grafik', !$graphic);
+        $versionAt = count($form['elements']);
+        foreach ($form['elements'] as $index => $element) {
+            if (!is_array($element) || ($element['type'] ?? '') !== 'RowLayout') {
+                continue;
+            }
+            foreach ($element['items'] ?? [] as $item) {
+                if (is_array($item) && ($item['name'] ?? '') === 'GraphicModeTextButton') {
+                    $versionAt = $index + 1;
+                    break 2;
+                }
+            }
+        }
+        array_splice($form['elements'], $versionAt, 0, [[
             'type' => 'Label',
             'caption' => 'Modulversion: ' . $this->formatModuleVersionLabel(),
-        ]);
-        // Schalter Text/Grafik zeigt den Stand der Variable GraphicMode, auch wenn er über die Variable geändert wurde.
-        $this->setFormElementValue($form['elements'], 'PixooGraphicModeSwitch', $this->isGraphicMode());
+        ]]);
         $out = json_encode($form, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($out === false || $out === '') {
             return parent::GetConfigurationForm();
@@ -1415,7 +1442,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         } else {
             $this->setTimerIntervalSafe('HourlyReinit', 0);
         }
-        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if ($this->readConfiguredPropertyBoolean('PixooShowSmardPrice')) {
             $this->setTimerIntervalSafe('SmardFetch', self::SMARD_FETCH_MS);
         } else {
             $this->setTimerIntervalSafe('SmardFetch', 0);
@@ -1633,7 +1660,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return;
         }
         $this->bootstrapRuntimeIfNeeded();
-        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if (!$this->readConfiguredPropertyBoolean('PixooShowSmardPrice')) {
             return;
         }
         $this->fetchAndApplySmardIfEnabled(true);
@@ -1648,7 +1675,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if (!$this->ReadPropertyBoolean('Active')) {
             return 'Modul inaktiv.';
         }
-        if (!$this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if (!$this->readConfiguredPropertyBoolean('PixooShowSmardPrice')) {
             return 'SMARD-Preis auf Pixoo ist deaktiviert (Eigenschaft „SMARD-Preis auf Pixoo anzeigen“).';
         }
         if (!$this->requireCurlExtension('SMARD')) {
@@ -1786,7 +1813,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             (string) $this->getEffectivePixooBrightness(),
             $this->getPixooFrameKey($values),
         ];
-        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if ($this->readConfiguredPropertyBoolean('PixooShowSmardPrice')) {
             $smard = array_key_exists('smard', $values) ? $values['smard'] : $this->getSmardEurPerMwhForDisplay();
             $parts[] = is_float($smard) || is_int($smard) ? (string) round((float) $smard, 2) : '';
         }
@@ -1957,9 +1984,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if ($pixooIp === '') {
             return;
         }
-        if ($this->isGraphicMode()) {
-            $values = $this->graphicShownValues($values);
-        }
+        $values = $this->graphicShownValues($values);
+        $this->logDisplayDiagnostics();
         $frameKey = $this->getPixooFrameKey($values);
         $lastKey = $this->GetBuffer('PixooFrameKey');
         $modeChanged = str_starts_with($lastKey, 'flow|') !== str_starts_with($frameKey, 'flow|');
@@ -1989,23 +2015,13 @@ class PIXOOEnergyViewer extends IPSModuleStrict
                 $this->SetBuffer('PixooLastBrightness', (string) $eff);
             }
 
-            if ($this->isGraphicMode()) {
-                if ($this->graphicGifDue($values, $frameKey)) {
-                    $this->PixooSendBackground($pixooIp, $this->renderBackgroundFrame($values));
-                    // Ein neues Bild kann die Helligkeit zurücksetzen. Deshalb nach jedem Bild erneut senden.
-                    $this->PixooSetBrightness($pixooIp, $eff);
-                    $this->SetBuffer('PixooLastBrightness', (string) $eff);
-                    $this->rememberPixooFrame($values, $frameKey);
-                }
-            } else {
-                $this->PixooSendItemList(
-                    $pixooIp,
-                    $values['consumption'],
-                    $values['generation'],
-                    $values['net'],
-                    $values['batteryPercent'],
-                    $values['batteryPower']
-                );
+            if ($this->graphicGifDue($values, $frameKey)) {
+                $this->PixooSendBackground($pixooIp, $this->renderBackgroundFrame($values));
+                $this->clearPixooHttpText($pixooIp);
+                // Ein neues Bild kann die Helligkeit zurücksetzen. Deshalb nach jedem Bild erneut senden.
+                $this->PixooSetBrightness($pixooIp, $eff);
+                $this->SetBuffer('PixooLastBrightness', (string) $eff);
+                $this->rememberPixooFrame($values, $frameKey);
             }
             $this->recordPixooHttpSuccess($lightSync);
             $this->markPixooSyncCompleted($values);
@@ -2122,17 +2138,17 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     public function PersistSourceVariableIdsFeedback(): string
     {
         $ids = $this->captureSourceVariableIdsFromAllSources();
+        $stored = $this->completeSourceVariableBackup($ids);
         $parts = [];
-        foreach ($this->getVariableSlotDefinitions() as $def) {
-            $key = $def['property'];
-            $parts[] = $key . '=' . ($ids[$key] ?? 0);
+        foreach ($stored as $key => $id) {
+            $parts[] = $key . '=' . $id;
         }
         $summary = implode(', ', $parts);
-        if (count($ids) < count($this->getVariableSlotDefinitions())) {
-            return 'Nur ' . count($ids) . '/6 IDs erkannt (' . $summary
-                . '). Im Formular alle sechs Variablen wählen, dann erneut klicken.';
+        if (!$this->backupHasRequiredSourceVariables($ids)) {
+            return 'Nicht alle sechs Pflichtvariablen erkannt (' . $summary
+                . '). Im Formular Netz, Einspeisung und die vier Wechselrichter wählen, dann erneut klicken.';
         }
-        $this->writeSourceVariableIdBackup($ids);
+        $this->writeSourceVariableIdBackup($stored);
         if (function_exists('IPS_SetProperty')) {
             foreach ($ids as $key => $id) {
                 IPS_SetProperty($this->InstanceID, $key, $id);
@@ -2409,10 +2425,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             if ($values === null || !array_key_exists($key, $values)) {
                 continue;
             }
-            $id = $this->coerceVariableIdFromStoredValue($values[$key]);
-            if ($id > 0) {
-                $snapshot[$key] = $id;
-            }
+            $snapshot[$key] = $this->coerceVariableIdFromStoredValue($values[$key]);
         }
 
         return $snapshot;
@@ -2422,8 +2435,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      * parent::ApplyChanges() setzt SelectVariable-Properties nach IPS-Neustart oft auf 0 — aus Snapshot zurückschreiben.
      *
      * @param array<string, int> $snapshot
+     * @param array<string, int> $explicit Konfiguration vor ApplyChanges. Eine 0 bleibt 0.
      */
-    private function restoreSourceVariableIdsFromSnapshot(array $snapshot): int
+    private function restoreSourceVariableIdsFromSnapshot(array $snapshot, array $explicit = []): int
     {
         if ($snapshot === [] || !function_exists('IPS_SetProperty')) {
             return 0;
@@ -2434,6 +2448,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $keys[] = $def['property'];
         }
         foreach ($keys as $key) {
+            if (array_key_exists($key, $explicit) && $explicit[$key] <= 0) {
+                continue;
+            }
             if (!isset($snapshot[$key]) || $snapshot[$key] <= 0) {
                 continue;
             }
@@ -2550,13 +2567,31 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             if (!array_key_exists($key, $data)) {
                 continue;
             }
-            $id = self::migrateCoerceInt($data[$key]);
-            if ($id > 0) {
-                $normalized[$key] = $id;
-            }
+            $normalized[$key] = max(0, self::migrateCoerceInt($data[$key]));
         }
 
         return $normalized;
+    }
+
+    /**
+     * Sechs Pflichtvariablen plus Batterie und Wetter. Fehlende optionale IDs stehen als 0,
+     * damit eine abgewählte Variable nicht aus einer älteren Datei zurückkommt.
+     *
+     * @param array<string, int> $captured
+     * @return array<string, int>
+     */
+    private function completeSourceVariableBackup(array $captured): array
+    {
+        $ids = [];
+        foreach ($this->getVariableSlotDefinitions() as $def) {
+            $key = $def['property'];
+            $ids[$key] = $captured[$key] ?? 0;
+        }
+        foreach ($this->optionalSourceVariableKeys() as $key) {
+            $ids[$key] = $captured[$key] ?? 0;
+        }
+
+        return $ids;
     }
 
     /**
@@ -2632,6 +2667,35 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return $this->restoreSourceVariableIdsFromSnapshot($backup);
     }
 
+    /**
+     * Anzeigeschalter: zuerst die gespeicherte Instanz-Konfiguration, dann ReadProperty.
+     * ReadProperty liefert nach Update und Neustart oft den Default.
+     */
+    private function readConfiguredPropertyBoolean(string $key): bool
+    {
+        if (function_exists('IPS_GetProperty')) {
+            $raw = @IPS_GetProperty($this->InstanceID, $key);
+            if (is_bool($raw) || is_int($raw) || is_float($raw) || is_string($raw)) {
+                return self::migrateCoerceBool($raw);
+            }
+        }
+
+        return $this->ReadPropertyBoolean($key);
+    }
+
+    /** Zahlenfelder der Anzeige, ohne die Quellvariablen-Sicherung. */
+    private function readConfiguredSettingInteger(string $key): int
+    {
+        if (function_exists('IPS_GetProperty')) {
+            $raw = @IPS_GetProperty($this->InstanceID, $key);
+            if (is_int($raw) || is_float($raw) || (is_string($raw) && is_numeric(trim($raw)))) {
+                return self::migrateCoerceInt($raw);
+            }
+        }
+
+        return $this->ReadPropertyInteger($key);
+    }
+
     /** Property: zuerst Backup-Datei (überlebt parent::ApplyChanges(0)), dann JSON/Puffer/ReadProperty. */
     private function readConfiguredPropertyInteger(string $key): int
     {
@@ -2665,6 +2729,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $parts = [];
         foreach ($this->getVariableSlotDefinitions() as $def) {
             $parts[] = $def['property'] . '=' . $this->readConfiguredPropertyInteger($def['property']);
+        }
+        foreach ($this->optionalSourceVariableKeys() as $key) {
+            $parts[] = $key . '=' . $this->readConfiguredPropertyInteger($key);
         }
         $this->SendDebug('Konfiguration', 'Quellvariablen-IDs: ' . implode(', ', $parts), 0);
     }
@@ -2908,11 +2975,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         ]);
         $eff = $this->getEffectivePixooBrightness();
         $this->PixooSendBackground($ip, $this->renderBackgroundFrame($values));
-        try {
-            $this->pixooPostCommand($ip, ['Command' => 'Draw/ClearHttpText']);
-        } catch (\Throwable $e) {
-            $this->SendDebug('Pixoo', 'Draw/ClearHttpText: ' . $e->getMessage(), 0);
-        }
+        $this->clearPixooHttpText($ip);
         $this->PixooSendItemList(
             $ip,
             $values['consumption'],
@@ -3005,11 +3068,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** Tageshelligkeit oder Nachthelligkeit je nach Uhrzeit (Symcon-Serverzeit). */
     private function getEffectivePixooBrightness(): int
     {
-        $day = max(0, min(100, $this->ReadPropertyInteger('DefaultBrightness')));
-        if (!$this->ReadPropertyBoolean('PixooNightBrightnessUse')) {
+        $day = max(0, min(100, $this->readConfiguredSettingInteger('DefaultBrightness')));
+        if (!$this->readConfiguredPropertyBoolean('PixooNightBrightnessUse')) {
             return $day;
         }
-        $night = max(0, min(100, $this->ReadPropertyInteger('PixooNightBrightness')));
+        $night = max(0, min(100, $this->readConfiguredSettingInteger('PixooNightBrightness')));
         return $this->isPixooNightTime() ? $night : $day;
     }
 
@@ -3020,8 +3083,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private function isPixooNightTime(): bool
     {
-        $from = max(0, min(23, $this->ReadPropertyInteger('PixooNightHourFrom')));
-        $to = max(0, min(23, $this->ReadPropertyInteger('PixooNightHourTo')));
+        $from = max(0, min(23, $this->readConfiguredSettingInteger('PixooNightHourFrom')));
+        $to = max(0, min(23, $this->readConfiguredSettingInteger('PixooNightHourTo')));
         if ($from === $to) {
             return false;
         }
@@ -3032,6 +3095,43 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         return $h >= $from || $h < $to;
     }
 
+    private function clearPixooHttpText(string $ip): void
+    {
+        if ($this->GetBuffer('PixooHttpTextCleared') === '1') {
+            return;
+        }
+        try {
+            $this->pixooPostCommand($ip, ['Command' => 'Draw/ClearHttpText']);
+            $this->SetBuffer('PixooHttpTextCleared', '1');
+        } catch (\Throwable $e) {
+            $this->SendDebug('Pixoo', 'Draw/ClearHttpText: ' . $e->getMessage(), 0);
+        }
+    }
+
+    private function logDisplayDiagnostics(): void
+    {
+        $weatherId = $this->readConfiguredPropertyInteger('PixooWeatherVar');
+        $weatherRaw = '';
+        if ($weatherId > 0 && function_exists('IPS_VariableExists') && IPS_VariableExists($weatherId) && function_exists('GetValue')) {
+            $raw = GetValue($weatherId);
+            if (is_string($raw) || is_numeric($raw)) {
+                $weatherRaw = (string) $raw;
+            }
+        }
+        $line = 'Modus=' . ($this->isGraphicMode() ? 'Grafik' : 'Text')
+            . ', Wetter=' . ($this->readConfiguredPropertyBoolean('PixooShowWeather') ? 'an' : 'aus')
+            . ', WetterVar=' . $weatherId
+            . ', Roh=' . $weatherRaw
+            . ', Code=' . $this->readPixooWeatherCode()
+            . ', Uhr=' . ($this->readConfiguredPropertyBoolean('PixooShowClock') ? 'an' : 'aus')
+            . ', Helligkeit=' . $this->getEffectivePixooBrightness();
+        if ($this->GetBuffer('PixooDisplayDiag') === $line) {
+            return;
+        }
+        $this->SetBuffer('PixooDisplayDiag', $line);
+        $this->SendDebug('Anzeige', $line, 0);
+    }
+
     private function PixooSendItemList(
         string $ip,
         float $consumption,
@@ -3040,6 +3140,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         ?float $batteryPercent,
         ?float $batteryPower
     ): void {
+        // Text steht im Hintergrundbild. Die Pixoo-Schrift (Font 26) kennt weder Komma noch €.
+        return;
         if ($this->isGraphicMode()) {
             return;
         }
@@ -3204,14 +3306,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->makeTextItem(7, sprintf('%.0f W', abs($netW)), self::LEFT_PAD, $yNet + $valueDy, $cNet, self::FONT_VALUE, $valueH),
         ];
 
-        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if ($this->readConfiguredPropertyBoolean('PixooShowSmardPrice')) {
             $tw = self::PIXEL_SIZE - self::DATETIME_X;
             $ax = self::DATETIME_X;
             $al = self::SMARD_CORNER_TEXT_ALIGN;
             $dDir = 1;
             $dSpeed = 0;
 
-            if ($this->ReadPropertyBoolean('PixooSmardShowTime')) {
+            if ($this->readConfiguredPropertyBoolean('PixooSmardShowTime')) {
                 $timeStr = $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
                 $items[] = $this->makeTextItem(
                     self::SMARD_TIME_TEXT_ID,
@@ -3231,7 +3333,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $eurMwh = $this->getSmardEurPerMwhForDisplay();
             if ($eurMwh !== null) {
                 $num = number_format($eurMwh / 1000.0, 2, ',', '');
-                $txt = $this->ReadPropertyBoolean('PixooSmardShowUnit') ? ($num . '€') : $num;
+                $txt = $this->readConfiguredPropertyBoolean('PixooSmardShowUnit') ? ($num . '€') : $num;
                 $col = $this->smardPriceColorHex($eurMwh);
             } else {
                 $txt = '--';
@@ -3404,11 +3506,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'smard' => null,
             'time' => '',
             'weather' => $this->readPixooWeatherCode(),
-            'clock' => $this->ReadPropertyBoolean('PixooShowClock') ? $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT) : '',
+            'clock' => $this->readConfiguredPropertyBoolean('PixooShowClock') ? $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT) : '',
         ];
-        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if ($this->readConfiguredPropertyBoolean('PixooShowSmardPrice')) {
             $shown['smard'] = $this->getSmardEurPerMwhForDisplay();
-            if ($this->ReadPropertyBoolean('PixooSmardShowTime')) {
+            if ($this->readConfiguredPropertyBoolean('PixooSmardShowTime')) {
                 $shown['time'] = $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
             }
         }
@@ -3454,7 +3556,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private function getPixooFrameKey(array $values): string
     {
         if (!$this->isGraphicMode()) {
-            return 'text';
+            return 'text|' . $this->graphicContentKey($values);
         }
 
         return 'flow|' . $this->flowPhaseKey() . '|' . $this->graphicContentKey($values);
@@ -3482,10 +3584,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             (string) ($values['weather'] ?? ''),
             (string) ($values['clock'] ?? ''),
         ];
-        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if ($this->readConfiguredPropertyBoolean('PixooShowSmardPrice')) {
             $smard = array_key_exists('smard', $values) ? $values['smard'] : $this->getSmardEurPerMwhForDisplay();
             $parts[] = is_float($smard) || is_int($smard) ? (string) round((float) $smard, 2) : '';
-            if ($this->ReadPropertyBoolean('PixooSmardShowTime')) {
+            if ($this->readConfiguredPropertyBoolean('PixooSmardShowTime')) {
                 $parts[] = array_key_exists('time', $values)
                     ? (string) $values['time']
                     : $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
@@ -3554,10 +3656,85 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     {
         $frameLen = self::PIXEL_SIZE * self::PIXEL_SIZE * 3;
         if (!$this->isGraphicMode()) {
-            return str_repeat("\x00", $frameLen);
+            return $this->renderTextFrame($values);
         }
 
         return $this->renderFlowFrame($values, $this->currentFlowPhase());
+    }
+
+    /**
+     * Textmodus: dieselben vier Zeilen wie bisher, gezeichnet mit der einpixeligen Grafikschrift.
+     *
+     * @param array{consumption: float, generation: float, net: float, batteryPercent: ?float, batteryPower: ?float} $values
+     */
+    private function renderTextFrame(array $values): string
+    {
+        $px = array_fill(0, self::PIXEL_SIZE * self::PIXEL_SIZE, 0x000000);
+        $label = 0x8c8c8c;
+        $white = 0xffffff;
+        $rows = [
+            [0, 'ERZEUGUNG', $values['generation'], $white],
+            [32, 'VERBRAUCH', $values['consumption'], $white],
+            [48, 'NETZ', $values['net'], $this->hexToRgb($this->NetGridColorHex($values['net']))],
+        ];
+        foreach ($rows as [$y, $title, $watts, $color]) {
+            $this->flowText($px, $title, self::LEFT_PAD, $y, 'l', $label);
+            [$num, $unit] = $this->formatFlowWattParts((float) $watts);
+            $this->flowValueUnit($px, $num, $unit, self::LEFT_PAD, $y + 6, 'l', $color);
+        }
+        $this->flowText($px, 'BATTERIE', self::LEFT_PAD, 16, 'l', $label);
+        if ($values['batteryPercent'] === null) {
+            $this->flowText($px, '--', self::LEFT_PAD, 22, 'l', $label);
+        } else {
+            $this->flowValueUnit($px, sprintf('%.0f', $values['batteryPercent']), '%', self::LEFT_PAD, 22, 'l', $white);
+        }
+        $batteryPower = $values['batteryPower'];
+        if ($batteryPower === null) {
+            $this->flowText($px, '--', 62, 22, 'r', $label);
+        } else {
+            [$batNum, $batUnit] = $this->formatFlowWattParts($batteryPower);
+            $this->flowValueUnit(
+                $px,
+                $batNum,
+                $batUnit,
+                62,
+                22,
+                'r',
+                $this->hexToRgb($this->BatteryPowerColorHex($batteryPower))
+            );
+        }
+        if ($this->readConfiguredPropertyBoolean('PixooShowSmardPrice')) {
+            if ($this->readConfiguredPropertyBoolean('PixooSmardShowTime')) {
+                $time = array_key_exists('time', $values) ? (string) $values['time'] : $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
+                $this->flowText($px, $time, 62, 48, 'r', $label);
+            }
+            $eurMwh = array_key_exists('smard', $values) ? $values['smard'] : $this->getSmardEurPerMwhForDisplay();
+            $this->paintSmardPrice($px, 62, 54, 'r', is_float($eurMwh) || is_int($eurMwh) ? (float) $eurMwh : null);
+        }
+
+        $out = '';
+        foreach ($px as $rgb) {
+            $out .= chr(($rgb >> 16) & 0xff) . chr(($rgb >> 8) & 0xff) . chr($rgb & 0xff);
+        }
+
+        return $out;
+    }
+
+    /** @param list<int> $px */
+    private function paintSmardPrice(array &$px, int $x, int $y, string $align, ?float $eurMwh): void
+    {
+        if ($eurMwh === null) {
+            $this->flowText($px, '--', $x, $y, $align, 0xa0a0a0);
+
+            return;
+        }
+        $num = number_format($eurMwh / 1000.0, 2, ',', '');
+        $col = $this->hexToRgb($this->smardPriceColorHex($eurMwh));
+        if ($this->readConfiguredPropertyBoolean('PixooSmardShowUnit')) {
+            $this->flowValueUnit($px, $num, '€', $x, $y, $align, $col);
+        } else {
+            $this->flowText($px, $num, $x, $y, $align, $col);
+        }
     }
 
     /** Aus: Pfeile. An: ein heller Abschnitt, der alle 2 Sekunden einen Schritt weiterwandert. */
@@ -3706,17 +3883,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         [$netNum, $netUnit] = $this->formatFlowWattParts($values['net']);
         $netY = 34;
         $this->flowValueUnit($px, $netNum, $netUnit, 1, $netY, 'l', $this->hexToRgb($this->NetGridColorHex($values['net'])));
-        if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
+        if ($this->readConfiguredPropertyBoolean('PixooShowSmardPrice')) {
             $eurMwh = array_key_exists('smard', $values) ? $values['smard'] : $this->getSmardEurPerMwhForDisplay();
-            if (is_float($eurMwh) || is_int($eurMwh)) {
-                $num = number_format((float) $eurMwh / 1000.0, 2, ',', '');
-                $txt = $this->ReadPropertyBoolean('PixooSmardShowUnit') ? ($num . '€') : $num;
-                $col = $this->hexToRgb($this->smardPriceColorHex((float) $eurMwh));
-            } else {
-                $txt = '--';
-                $col = 0xa0a0a0;
-            }
-            $this->flowText($px, $txt, 1, $netY + 7, 'l', $col);
+            $this->paintSmardPrice($px, 1, $netY + 7, 'l', is_float($eurMwh) || is_int($eurMwh) ? (float) $eurMwh : null);
         }
         $batteryPower = $values['batteryPower'];
         if ($batteryPower === null) {
@@ -3743,7 +3912,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if ($clockText !== '') {
             // Uhr rechts oben belegt die Ecke. Der SMARD-Zeitstempel entfällt dann.
             $this->flowText($px, $clockText, 62, 1, 'r', $label);
-        } elseif ($this->ReadPropertyBoolean('PixooShowSmardPrice') && $this->ReadPropertyBoolean('PixooSmardShowTime')) {
+        } elseif ($this->readConfiguredPropertyBoolean('PixooShowSmardPrice') && $this->readConfiguredPropertyBoolean('PixooSmardShowTime')) {
             $clock = array_key_exists('time', $values) ? (string) $values['time'] : $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
             $this->flowText($px, $clock, 62, 1, 'r', $label);
         }
@@ -3759,7 +3928,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** OpenWeatherMap-Wetterbedingung-Symbol (z. B. 01d, 10n) oder '' ohne Icon. */
     private function readPixooWeatherCode(): string
     {
-        if (!$this->ReadPropertyBoolean('PixooShowWeather')) {
+        if (!$this->readConfiguredPropertyBoolean('PixooShowWeather')) {
             return '';
         }
         $id = $this->readConfiguredPropertyInteger('PixooWeatherVar');
@@ -3767,8 +3936,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return '';
         }
         $raw = GetValue($id);
+        if (!is_string($raw) && !is_numeric($raw)) {
+            return '';
+        }
+        if (!preg_match('/(01|02|03|04|09|10|11|13|50)([dn])?/i', (string) $raw, $m)) {
+            return '';
+        }
 
-        return is_string($raw) || is_numeric($raw) ? strtolower(trim((string) $raw)) : '';
+        return strtolower($m[1] . ($m[2] ?? ''));
     }
 
     /** @param list<int> $px */
@@ -4054,9 +4229,34 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             '%' => ['##...', '##.#.', '..#..', '.#.##', '...##'],
             '€' => ['.###', '#...', '###.', '#...', '.###'],
             '-' => ['...', '...', '###', '...', '...'],
-            ',' => ['.', '.', '.', '.', '#'],
+            ',' => ['..', '..', '..', '..', '#.'],
             ':' => ['.', '#', '.', '#', '.'],
             ' ' => ['.', '.', '.', '.', '.'],
+            'A' => ['.#.', '#.#', '###', '#.#', '#.#'],
+            'B' => ['##.', '#.#', '##.', '#.#', '##.'],
+            'C' => ['.##', '#..', '#..', '#..', '.##'],
+            'D' => ['##.', '#.#', '#.#', '#.#', '##.'],
+            'E' => ['###', '#..', '##.', '#..', '###'],
+            'F' => ['###', '#..', '##.', '#..', '#..'],
+            'G' => ['.##', '#..', '#.#', '#.#', '.##'],
+            'H' => ['#.#', '#.#', '###', '#.#', '#.#'],
+            'I' => ['###', '.#.', '.#.', '.#.', '###'],
+            'J' => ['..#', '..#', '..#', '#.#', '.#.'],
+            'K' => ['#.#', '##.', '#..', '##.', '#.#'],
+            'L' => ['#..', '#..', '#..', '#..', '###'],
+            'M' => ['#.#', '###', '#.#', '#.#', '#.#'],
+            'N' => ['##.', '#.#', '#.#', '#.#', '#.#'],
+            'O' => ['.#.', '#.#', '#.#', '#.#', '.#.'],
+            'P' => ['##.', '#.#', '##.', '#..', '#..'],
+            'Q' => ['.#.', '#.#', '#.#', '.##', '..#'],
+            'R' => ['##.', '#.#', '##.', '#.#', '#.#'],
+            'S' => ['.##', '#..', '.#.', '..#', '##.'],
+            'T' => ['###', '.#.', '.#.', '.#.', '.#.'],
+            'U' => ['#.#', '#.#', '#.#', '#.#', '.##'],
+            'V' => ['#.#', '#.#', '#.#', '#.#', '.#.'],
+            'X' => ['#.#', '#.#', '.#.', '#.#', '#.#'],
+            'Y' => ['#.#', '#.#', '.#.', '.#.', '.#.'],
+            'Z' => ['###', '..#', '.#.', '#..', '###'],
         ];
     }
 

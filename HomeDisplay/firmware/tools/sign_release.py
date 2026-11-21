@@ -7,6 +7,7 @@ import argparse
 import base64
 import hashlib
 import json
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -36,6 +37,14 @@ def main() -> int:
 
     version = (FIRMWARE / "VERSION").read_text(encoding="utf-8").strip()
     data = image.read_bytes()
+    # Weicht die Version im Programm von firmware.json ab, installiert die Anzeige das Programm bei jeder Prüfung neu.
+    image_version = data[48:80].split(b"\0")[0].decode(errors="replace")
+    header = (FIRMWARE / "main" / "homedisplay.h").read_text(encoding="utf-8")
+    header_version = re.search(r'HOMEDISPLAY_FIRMWARE_VERSION "([^"]+)"', header)
+    if image_version != version or not header_version or header_version.group(1) != version:
+        print(f"Versionen passen nicht: VERSION {version}, Programmkopf {image_version}, "
+              f"homedisplay.h {header_version.group(1) if header_version else '?'}", file=sys.stderr)
+        return 1
     key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
     signature = key.sign(data, padding.PKCS1v15(), hashes.SHA256())
     key.public_key().verify(signature, data, padding.PKCS1v15(), hashes.SHA256())
