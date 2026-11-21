@@ -21,6 +21,8 @@ final class HomeDisplayEnergyFlow
         'batteryDischarge' => 'Batterie entladen',
         'battery' => 'Batterie (+ laden / − entladen)',
         'soc' => 'Batterie-Ladestand (%)',
+        'gridDay' => 'Netzbezug heute',
+        'pvDay' => 'PV-Erzeugung heute',
     ];
 
     public const MAX_SOURCES = 16;
@@ -123,11 +125,11 @@ final class HomeDisplayEnergyFlow
      * Welche Knoten die Kachel zeigt (aus den Typen der Quellentabelle).
      *
      * @param array<string, mixed> $tile
-     * @return array{pv: bool, gridIn: bool, gridOut: bool, batIn: bool, batOut: bool, soc: bool}
+     * @return array{pv: bool, gridIn: bool, gridOut: bool, batIn: bool, batOut: bool, soc: bool, gridDay: bool, pvDay: bool}
      */
     public static function nodes(array $tile): array
     {
-        $has = ['pv' => false, 'gridIn' => false, 'gridOut' => false, 'batIn' => false, 'batOut' => false, 'soc' => false];
+        $has = ['pv' => false, 'gridIn' => false, 'gridOut' => false, 'batIn' => false, 'batOut' => false, 'soc' => false, 'gridDay' => false, 'pvDay' => false];
         foreach (self::sources($tile) as $row) {
             switch ($row['type']) {
                 case 'pv': $has['pv'] = true; break;
@@ -138,6 +140,8 @@ final class HomeDisplayEnergyFlow
                 case 'batteryDischarge': $has['batOut'] = true; break;
                 case 'battery': $has['batIn'] = true; $has['batOut'] = true; break;
                 case 'soc': $has['soc'] = true; break;
+                case 'gridDay': $has['gridDay'] = true; break;
+                case 'pvDay': $has['pvDay'] = true; break;
             }
         }
         return $has;
@@ -158,6 +162,8 @@ final class HomeDisplayEnergyFlow
         $sum = ['gridIn' => 0.0, 'gridOut' => 0.0, 'pv' => 0.0, 'batIn' => 0.0, 'batOut' => 0.0];
         $seen = false;
         $soc = null;
+        $gridDay = null;
+        $pvDay = null;
         foreach (self::sources($tile) as $index => $row) {
             $value = $sourceValues[$index] ?? null;
             if ($value === null) {
@@ -186,10 +192,25 @@ final class HomeDisplayEnergyFlow
                         $soc = $value;
                     }
                     break;
+                case 'gridDay':
+                    if ($gridDay === null) {
+                        $gridDay = $value;
+                    }
+                    break;
+                case 'pvDay':
+                    if ($pvDay === null) {
+                        $pvDay = $value;
+                    }
+                    break;
             }
         }
 
         $home = max(0.0, $sum['gridIn'] + $sum['pv'] + $sum['batOut'] - $sum['gridOut'] - $sum['batIn']);
+        $batNet = $sum['batIn'] - $sum['batOut'];
+        $gridNet = $sum['gridIn'] - $sum['gridOut'];
+        $batDir = abs($batNet) < 1.0 ? 0 : ($batNet > 0 ? 1 : -1);
+        $gridDir = abs($gridNet) < 1.0 ? 0 : ($gridNet > 0 ? 1 : -1);
+        $socPct = $soc === null ? -1 : max(0, min(100, (int) round($soc)));
 
         $pvHome = min($sum['pv'], $home);
         $pvLeft = $sum['pv'] - $pvHome;
@@ -234,6 +255,13 @@ final class HomeDisplayEnergyFlow
                 'batOut' => self::format($sum['batOut']),
                 'home' => self::format($home),
                 'soc' => $soc === null ? '' : number_format($soc, 0, ',', '') . ' %',
+                'bat' => self::format(abs($batNet)),
+                'batDir' => $batDir,
+                'socPct' => $socPct,
+                'grid' => self::format(abs($gridNet)),
+                'gridDir' => $gridDir,
+                'gridDay' => self::formatEnergy($gridDay),
+                'pvDay' => self::formatEnergy($pvDay),
                 'l' => $pct,
                 'mix' => $mix,
                 'c' => $consumers,
@@ -250,5 +278,15 @@ final class HomeDisplayEnergyFlow
         }
 
         return sprintf('%.0f', $abs) . ' W';
+    }
+
+    /** Tageszähler in kWh, eine Nachkommastelle. Leer, wenn keine Variable zugewiesen ist. */
+    private static function formatEnergy(?float $kwh): string
+    {
+        if ($kwh === null) {
+            return '';
+        }
+
+        return str_replace('.', ',', sprintf('%.1f', abs($kwh))) . ' kWh';
     }
 }

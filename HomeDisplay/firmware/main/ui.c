@@ -43,12 +43,19 @@ typedef struct flow_slot {
     int8_t pct[FLOW_LINES];
     uint16_t phase[FLOW_LINES];
     lv_obj_t *pv_val;
-    lv_obj_t *grid_in;
-    lv_obj_t *grid_out;
-    lv_obj_t *bat_in;
-    lv_obj_t *bat_out;
+    lv_obj_t *pv_day;
+    lv_obj_t *grid_val;
+    lv_obj_t *grid_day;
+    lv_obj_t *bat_val;
+    lv_obj_t *soc_in;
+    lv_obj_t *soc_arc;
     lv_obj_t *home_val;
-    lv_obj_t *soc_val;
+    lv_obj_t *pv_circle;
+    lv_obj_t *grid_circle;
+    lv_obj_t *bat_circle;
+    lv_obj_t *home_circle;
+    int radius;
+    bool with_icon;
     lv_obj_t *home_arc[3];
     lv_obj_t *cons_val[FLOW_CONS_MAX];
     int cons_count;
@@ -5327,10 +5334,10 @@ static const uint32_t FLOW_INK[FLOW_LINES] = {0xF0A030, 0xA38BE0, 0xE0709A, 0x5B
 #define FLOW_RING_GRID 0x5B8FC7
 #define FLOW_RING_BAT 0xE0709A
 #define FLOW_RING_HOME 0x46566B
-#define FLOW_INK_EXPORT 0xA38BE0
-#define FLOW_INK_IMPORT 0x8DB8EA
-#define FLOW_INK_CHARGE 0xE88AAE
-#define FLOW_INK_DISCHARGE 0x6CC3B5
+#define FLOW_DIR_RED 0xE5484D
+#define FLOW_DIR_GREEN 0x3DDC84
+#define FLOW_DIR_IDLE 0x000000
+#define FLOW_SOC_YELLOW 0xF2C94C
 #define FLOW_DOT 8
 
 static void flow_push(flow_slot_t *slot, int line, int x, int y)
@@ -5382,7 +5389,12 @@ static void flow_stack(lv_obj_t *circle, int radius, bool has_icon)
         lv_obj_t *child = lv_obj_get_child(circle, index);
         const lv_font_t *font = lv_obj_get_style_text_font(child, LV_PART_MAIN);
         int line = font ? lv_font_get_line_height(font) : 16;
+        if (has_icon && index == 0) line = line * 5 / 4;
         height[index] = line;
+        if (lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN)) {
+            height[index] = 0;
+            continue;
+        }
         total += line;
         lv_obj_set_width(child, inner);
         lv_obj_set_style_text_align(child, LV_TEXT_ALIGN_CENTER, 0);
@@ -5418,6 +5430,11 @@ static void flow_icon(lv_obj_t *parent, const char *icon, bool large)
     lv_obj_t *label = lv_label_create(parent);
     paint_icon_label(label, icon, false, large, text_fg());
     lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+    /* 320 = 125 %. Die Schriftgrößen bleiben, nur die Kreissymbole werden größer. */
+    int box = large ? 48 : 28;
+    lv_obj_set_style_transform_pivot_x(label, box / 2, 0);
+    lv_obj_set_style_transform_pivot_y(label, box / 2, 0);
+    lv_obj_set_style_transform_zoom(label, 320, 0);
 }
 
 static lv_obj_t *flow_caption(lv_obj_t *parent, const char *text, int x, int y, int w, lv_text_align_t align)
@@ -5486,6 +5503,27 @@ static void flow_tick(lv_timer_t *timer)
     }
 }
 
+static lv_obj_t *flow_soc_arc(lv_obj_t *parent, int cx, int cy, int r)
+{
+    lv_obj_t *arc = lv_arc_create(parent);
+    lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
+    int size = 2 * r + 4;
+    lv_obj_set_size(arc, size, size);
+    lv_obj_set_pos(arc, cx - size / 2, cy - size / 2);
+    lv_obj_set_style_pad_all(arc, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, 7, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
+    lv_arc_set_rotation(arc, 270);
+    lv_arc_set_bg_angles(arc, 0, 360);
+    lv_arc_set_range(arc, 0, 100);
+    lv_arc_set_value(arc, 0);
+    lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(arc, LV_OBJ_FLAG_HIDDEN);
+    return arc;
+}
+
 static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int card_h, bool show_title)
 {
     if (flow_slot_count >= FLOW_SLOT_MAX) return;
@@ -5499,7 +5537,11 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
     bool bat_in = cJSON_IsTrue(cJSON_GetObjectItem(nodes, "batIn"));
     bool bat_out = cJSON_IsTrue(cJSON_GetObjectItem(nodes, "batOut"));
     bool has_soc = cJSON_IsTrue(cJSON_GetObjectItem(nodes, "soc"));
-    bool has_grid = grid_in || grid_out;
+    bool has_grid_day = cJSON_IsTrue(cJSON_GetObjectItem(nodes, "gridDay"));
+    bool has_pv_day = cJSON_IsTrue(cJSON_GetObjectItem(nodes, "pvDay"));
+    bool has_grid_power = grid_in || grid_out;
+    bool has_grid = has_grid_power || has_grid_day;
+    bool show_pv = has_pv || has_pv_day;
     bool has_bat = bat_in || bat_out || has_soc;
 
     int head = show_title ? lv_font_get_line_height(font_for(view->title_px, view->title_bold, view->title_italic)) + 4 : 0;
@@ -5549,7 +5591,7 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
         flow_push(slot, 3, cx, ym);
         flow_push(slot, 3, cx, hy - r);
     }
-    if (has_bat && has_grid) {
+    if (has_bat && has_grid_power) {
         flow_push(slot, 4, gx + r, ym);
         flow_push(slot, 4, bx - r, ym);
     }
@@ -5587,36 +5629,50 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
     const lv_font_t *value_font = r >= 50 ? &lv_font_montserrat_20 : &lv_font_montserrat_16;
     bool large_icon = r >= 64;
     bool with_icon = r >= 34;
-    if (has_pv) {
+    slot->radius = r;
+    slot->with_icon = with_icon;
+    if (show_pv) {
         lv_obj_t *circle = flow_circle(view->card, cx, py, r, FLOW_RING_PV, fill);
+        slot->pv_circle = circle;
         if (with_icon) flow_icon(circle, "solar", large_icon);
         slot->pv_val = flow_text(circle, value_font, text_fg(), "-");
+        if (has_pv_day) {
+            slot->pv_day = flow_text(circle, &lv_font_montserrat_16, text_fg(), "");
+            lv_obj_add_flag(slot->pv_day, LV_OBJ_FLAG_HIDDEN);
+        }
         flow_stack(circle, r, with_icon);
-        flow_caption(view->card, "PV", 0, py - 10, cx - r - 8, LV_TEXT_ALIGN_RIGHT);
     }
     if (has_grid) {
         lv_obj_t *circle = flow_circle(view->card, gx, ym, r, FLOW_RING_GRID, fill);
-        if (with_icon) flow_icon(circle, "transmissionTower", large_icon && !(grid_in && grid_out));
-        if (grid_out) slot->grid_out = flow_text(circle, value_font, FLOW_INK_EXPORT, "-");
-        if (grid_in) slot->grid_in = flow_text(circle, value_font, FLOW_INK_IMPORT, "-");
+        slot->grid_circle = circle;
+        if (with_icon) flow_icon(circle, "transmissionTower", large_icon);
+        slot->grid_val = flow_text(circle, value_font, FLOW_DIR_IDLE, "-");
+        if (has_grid_day) {
+            slot->grid_day = flow_text(circle, &lv_font_montserrat_16, text_fg(), "");
+            lv_obj_add_flag(slot->grid_day, LV_OBJ_FLAG_HIDDEN);
+        }
         flow_stack(circle, r, with_icon);
         flow_caption(view->card, "Netz", gx - r - 2, ym - r - label_h, 2 * r + 4, LV_TEXT_ALIGN_CENTER);
     }
     if (has_bat) {
         lv_obj_t *circle = flow_circle(view->card, bx, ym, r, FLOW_RING_BAT, fill);
-        if (with_icon) flow_icon(circle, "batteryIcon", large_icon && !(bat_in && bat_out));
-        if (bat_in) slot->bat_in = flow_text(circle, value_font, FLOW_INK_CHARGE, "-");
-        if (bat_out) slot->bat_out = flow_text(circle, value_font, FLOW_INK_DISCHARGE, "-");
+        slot->bat_circle = circle;
+        if (with_icon) flow_icon(circle, "batteryIcon", large_icon);
+        slot->bat_val = flow_text(circle, value_font, FLOW_DIR_IDLE, "-");
+        if (has_soc) {
+            slot->soc_in = flow_text(circle, &lv_font_montserrat_16, text_fg(), "");
+            lv_obj_add_flag(slot->soc_in, LV_OBJ_FLAG_HIDDEN);
+            slot->soc_arc = flow_soc_arc(view->card, bx, ym, r);
+        }
         flow_stack(circle, r, with_icon);
         flow_caption(view->card, "Batterie", bx - r - 2, ym - r - label_h, 2 * r + 4, LV_TEXT_ALIGN_CENTER);
-        if (has_soc) slot->soc_val = flow_caption(view->card, "", bx - r - 2, ym + r + 2, 2 * r + 4, LV_TEXT_ALIGN_CENTER);
     }
     lv_obj_t *home = flow_circle(view->card, cx, hy, r, FLOW_RING_HOME, fill);
+    slot->home_circle = home;
     if (with_icon) flow_icon(home, "home", large_icon);
     slot->home_val = flow_text(home, value_font, text_fg(), "-");
     flow_stack(home, r, with_icon);
-    flow_caption(view->card, "Zuhause", 0, hy - 10, cx - r - 8, LV_TEXT_ALIGN_RIGHT);
-    static const uint32_t mix_ink[3] = {FLOW_RING_PV, FLOW_INK_DISCHARGE, FLOW_RING_GRID};
+    static const uint32_t mix_ink[3] = {FLOW_RING_PV, 0x6CC3B5, FLOW_RING_GRID};
     for (int part = 0; part < 3; part++) {
         lv_obj_t *arc = lv_arc_create(view->card);
         lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
@@ -5670,18 +5726,81 @@ static void flow_set(lv_obj_t *label, const char *prefix, cJSON *flow, const cha
     lv_label_set_text(label, buffer);
 }
 
+static void flow_optional(lv_obj_t *label, cJSON *flow, const char *key)
+{
+    if (!label) return;
+    const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(flow, key));
+    if (!text || !text[0]) {
+        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_label_set_text(label, text);
+    lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void flow_dir_color(lv_obj_t *label, int direction, bool charging_is_green)
+{
+    if (!label) return;
+    uint32_t ink = FLOW_DIR_IDLE;
+    if (direction > 0) ink = charging_is_green ? FLOW_DIR_GREEN : FLOW_DIR_RED;
+    if (direction < 0) ink = charging_is_green ? FLOW_DIR_RED : FLOW_DIR_GREEN;
+    lv_obj_set_style_text_color(label, lv_color_hex(color_mono ? 0xFFFFFF : ink), 0);
+}
+
+/* Bezug auf den Netzleitungen rot, Einspeisung grün. Die übrigen Leitungen behalten ihre Farbe. */
+static uint32_t flow_line_ink(int line, int pct)
+{
+    if (color_mono) return 0xFFFFFF;
+    if (line == 1 && pct) return FLOW_DIR_GREEN;
+    if (line == 3 && pct) return FLOW_DIR_RED;
+    if (line == 4 && pct > 0) return FLOW_DIR_RED;
+    if (line == 4 && pct < 0) return FLOW_DIR_GREEN;
+    return FLOW_INK[line];
+}
+
 static void paint_energy_flow(tile_view_t *view, cJSON *flow)
 {
     flow_slot_t *slot = view->flow;
     if (!slot || !cJSON_IsObject(flow)) return;
     flow_set(slot->pv_val, NULL, flow, "pv");
-    /* Pfeile aus der Anzeigeschrift. Die LVGL-Symbole fehlen in Montserrat und verdrängen die Zahl. */
-    flow_set(slot->grid_out, "< ", flow, "gridOut");
-    flow_set(slot->grid_in, "> ", flow, "gridIn");
-    flow_set(slot->bat_in, "+ ", flow, "batIn");
-    flow_set(slot->bat_out, "- ", flow, "batOut");
+    flow_optional(slot->pv_day, flow, "pvDay");
+    flow_set(slot->grid_val, NULL, flow, "grid");
+    flow_dir_color(slot->grid_val, cJSON_GetObjectItem(flow, "gridDir") ? cJSON_GetObjectItem(flow, "gridDir")->valueint : 0, false);
+    flow_optional(slot->grid_day, flow, "gridDay");
+    flow_set(slot->bat_val, NULL, flow, "bat");
+    flow_dir_color(slot->bat_val, cJSON_GetObjectItem(flow, "batDir") ? cJSON_GetObjectItem(flow, "batDir")->valueint : 0, true);
     flow_set(slot->home_val, NULL, flow, "home");
-    if (slot->soc_val) flow_set(slot->soc_val, NULL, flow, "soc");
+    if (slot->soc_in) {
+        cJSON *pct_item = cJSON_GetObjectItem(flow, "socPct");
+        int pct = pct_item && cJSON_IsNumber(pct_item) ? pct_item->valueint : -1;
+        if (pct < 0) {
+            lv_obj_add_flag(slot->soc_in, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            char buffer[16];
+            if (pct > 100) pct = 100;
+            snprintf(buffer, sizeof(buffer), "%d %%", pct);
+            lv_label_set_text(slot->soc_in, buffer);
+            lv_obj_clear_flag(slot->soc_in, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (slot->soc_arc) {
+        cJSON *pct_item = cJSON_GetObjectItem(flow, "socPct");
+        int pct = pct_item && cJSON_IsNumber(pct_item) ? pct_item->valueint : -1;
+        if (pct < 0) {
+            lv_obj_add_flag(slot->soc_arc, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            if (pct > 100) pct = 100;
+            uint32_t ink = pct <= 25 ? FLOW_DIR_RED : (pct <= 75 ? FLOW_SOC_YELLOW : FLOW_DIR_GREEN);
+            lv_obj_set_style_arc_color(slot->soc_arc, lv_color_hex(color_mono ? 0xFFFFFF : ink), LV_PART_INDICATOR);
+            lv_arc_set_value(slot->soc_arc, pct);
+            if (pct == 0) lv_obj_add_flag(slot->soc_arc, LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_clear_flag(slot->soc_arc, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (slot->pv_circle) flow_stack(slot->pv_circle, slot->radius, slot->with_icon);
+    if (slot->grid_circle) flow_stack(slot->grid_circle, slot->radius, slot->with_icon);
+    if (slot->bat_circle) flow_stack(slot->bat_circle, slot->radius, slot->with_icon);
+    if (slot->home_circle) flow_stack(slot->home_circle, slot->radius, slot->with_icon);
     cJSON *lines = cJSON_GetObjectItem(flow, "l");
     for (int line = 0; line < FLOW_LINES; line++) {
         cJSON *item = cJSON_GetArrayItem(lines, line);
@@ -5690,8 +5809,13 @@ static void paint_energy_flow(tile_view_t *view, cJSON *flow)
         if (pct < -100) pct = -100;
         if (!slot->line[line]) pct = 0;
         slot->pct[line] = (int8_t) pct;
-        if (slot->line[line]) lv_obj_set_style_line_opa(slot->line[line], pct ? LV_OPA_COVER : LV_OPA_40, 0);
+        uint32_t ink = flow_line_ink(line, pct);
+        if (slot->line[line]) {
+            lv_obj_set_style_line_color(slot->line[line], lv_color_hex(ink), 0);
+            lv_obj_set_style_line_opa(slot->line[line], pct ? LV_OPA_COVER : LV_OPA_40, 0);
+        }
         if (slot->dot[line]) {
+            lv_obj_set_style_bg_color(slot->dot[line], lv_color_hex(ink), 0);
             if (pct) lv_obj_clear_flag(slot->dot[line], LV_OBJ_FLAG_HIDDEN);
             else lv_obj_add_flag(slot->dot[line], LV_OBJ_FLAG_HIDDEN);
         }

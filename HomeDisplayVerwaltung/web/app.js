@@ -122,7 +122,9 @@ const FLOW_TYPE_LABELS = {
   batteryCharge: "Batterie laden",
   batteryDischarge: "Batterie entladen",
   battery: "Batterie (+ laden / − entladen)",
-  soc: "Batterie-Ladestand (%)"
+  soc: "Batterie-Ladestand (%)",
+  gridDay: "Netzbezug heute",
+  pvDay: "PV-Erzeugung heute"
 };
 const FLOW_MAX_SOURCES = 16;
 const FLOW_MAX_CONSUMERS = 8;
@@ -167,7 +169,7 @@ function flowConfigured(tile) {
 
 /* Welche Kreise die Kachel zeigt, wie EnergyFlow::nodes im Modul. */
 function flowNodesOf(tile) {
-  const has = { pv: false, gridIn: false, gridOut: false, batIn: false, batOut: false, soc: false };
+  const has = { pv: false, gridIn: false, gridOut: false, batIn: false, batOut: false, soc: false, gridDay: false, pvDay: false };
   for (const row of flowSourcesOf(tile)) {
     if (row.type === "pv") has.pv = true;
     else if (row.type === "gridImport") has.gridIn = true;
@@ -177,6 +179,8 @@ function flowNodesOf(tile) {
     else if (row.type === "batteryDischarge") has.batOut = true;
     else if (row.type === "battery") { has.batIn = true; has.batOut = true; }
     else if (row.type === "soc") has.soc = true;
+    else if (row.type === "gridDay") has.gridDay = true;
+    else if (row.type === "pvDay") has.pvDay = true;
   }
   return has;
 }
@@ -185,7 +189,8 @@ const FLOW_INK = ["#f0a030", "#a38be0", "#e0709a", "#5b8fc7", "#5b8fc7", "#6cc3b
 
 /* Gleiche Geometrie wie build_energy_flow in der Firmware (Pixel der Kachel ohne Überschrift). */
 function flowGeometry(nodes, w, h, consumerCount) {
-  const hasGrid = nodes.gridIn || nodes.gridOut;
+  const hasGridPower = nodes.gridIn || nodes.gridOut;
+  const hasGrid = hasGridPower || nodes.gridDay;
   const hasBat = nodes.batIn || nodes.batOut || nodes.soc;
   const labelH = 20;
   let wanted = Math.min(Math.max(0, consumerCount || 0), 6);
@@ -210,14 +215,16 @@ function flowGeometry(nodes, w, h, consumerCount) {
   if (nodes.pv && nodes.gridOut) paths[1] = `M ${cx} ${py + r} L ${cx} ${ym} L ${gx + r} ${ym}`;
   if (nodes.pv && hasBat) paths[2] = `M ${cx} ${py + r} L ${cx} ${ym} L ${bx - r} ${ym}`;
   if (nodes.gridIn) paths[3] = `M ${gx + r} ${ym} L ${cx} ${ym} L ${cx} ${hy - r}`;
-  if (hasGrid && hasBat) paths[4] = `M ${gx + r} ${ym} L ${bx - r} ${ym}`;
+  if (hasGridPower && hasBat) paths[4] = `M ${gx + r} ${ym} L ${bx - r} ${ym}`;
   if (hasBat) paths[5] = `M ${bx - r} ${ym} L ${cx} ${ym} L ${cx} ${hy - r}`;
   return { r, cx, ym, py, hy, gx, bx, labelH, hasGrid, hasBat, paths, consTop: hy + r + 6, consCount: wanted };
 }
 
 function flowDemo(nodes) {
   return {
-    pv: "3200 W", gridIn: "150 W", gridOut: "0 W", batIn: "500 W", batOut: "0 W", home: "2850 W", soc: nodes.soc ? "63 %" : "",
+    pv: "3200 W", grid: "150 W", gridDir: 1, gridDay: "12,4 kWh", gridIn: "150 W", gridOut: "0 W",
+    bat: "500 W", batDir: 1, batIn: "500 W", batOut: "0 W", home: "2850 W",
+    soc: nodes.soc ? "63 %" : "", socPct: nodes.soc ? 63 : -1, pvDay: nodes.pvDay ? "18,2 kWh" : "",
     l: [100, 0, 20, 5, 0, 0], mix: [95, 0, 5], c: []
   };
 }
@@ -236,18 +243,32 @@ function buildEnergyFlowHtml(tile, live, mode) {
   const flow = (live && live.flow && typeof live.flow === "object") ? live.flow : flowDemo(nodes);
   const pct = Array.isArray(flow.l) ? flow.l : [];
   const valuePx = g.r >= 50 ? 20 : 16;
-  const iconPx = g.r >= 64 ? 44 : 26;
+  const iconPx = Math.round((g.r >= 64 ? 44 : 26) * 1.25);
   const withIcon = g.r >= 34;
   const text = (key) => escapeHtml(flow[key] || "-");
+  const dirInk = (direction, chargingIsGreen) => {
+    const value = Number(direction) || 0;
+    if (value > 0) return chargingIsGreen ? "#3ddc84" : "#e5484d";
+    if (value < 0) return chargingIsGreen ? "#e5484d" : "#3ddc84";
+    return "#000000";
+  };
+  const lineInk = (index, share) => {
+    if (index === 1 && share) return "#3ddc84";
+    if (index === 3 && share) return "#e5484d";
+    if (index === 4 && share > 0) return "#e5484d";
+    if (index === 4 && share < 0) return "#3ddc84";
+    return FLOW_INK[index];
+  };
   const parts = [];
   g.paths.forEach((d, index) => {
     if (!d) return;
     const share = Number(pct[index]) || 0;
-    parts.push(`<path d="${d}" fill="none" stroke="${FLOW_INK[index]}" stroke-width="2" stroke-linecap="round" opacity="${share ? 1 : 0.4}"/>`);
+    const ink = lineInk(index, share);
+    parts.push(`<path d="${d}" fill="none" stroke="${ink}" stroke-width="2" stroke-linecap="round" opacity="${share ? 1 : 0.4}"/>`);
     if (share) {
       const seconds = (3200 - 22 * Math.min(100, Math.abs(share))) / 1000;
       const reverse = share < 0 ? ' keyPoints="1;0" keyTimes="0;1" calcMode="linear"' : "";
-      parts.push(`<circle r="4" fill="${FLOW_INK[index]}"><animateMotion dur="${seconds}s" repeatCount="indefinite" path="${d}"${reverse}/></circle>`);
+      parts.push(`<circle r="4" fill="${ink}"><animateMotion dur="${seconds}s" repeatCount="indefinite" path="${d}"${reverse}/></circle>`);
     }
   });
   const circle = (x, y, ring, icon, lines) => {
@@ -267,18 +288,33 @@ function buildEnergyFlowHtml(tile, live, mode) {
     return `<circle cx="${x}" cy="${y}" r="${g.r - 1.5}" fill="#152238" stroke="${ring}" stroke-width="3"/>${inner}`;
   };
   const caption = (x, y, label, anchor) => `<text x="${x}" y="${y}" text-anchor="${anchor}" class="flow-caption">${escapeHtml(label)}</text>`;
-  if (nodes.pv) {
-    parts.push(circle(g.cx, g.py, "#f0a030", 0xF0A72, [[text("pv"), "#f4f7fb"]]));
-    parts.push(caption(g.cx - g.r - 8, g.py + 5, "PV", "end"));
+  const socArc = (x, y, percent) => {
+    const value = Number(percent);
+    if (!Number.isFinite(value) || value <= 0) return "";
+    const clamped = Math.max(0, Math.min(100, value));
+    const color = clamped <= 25 ? "#e5484d" : clamped <= 75 ? "#f2c94c" : "#3ddc84";
+    const radius = g.r + 2;
+    const length = 2 * Math.PI * radius * clamped / 100;
+    const rest = 2 * Math.PI * radius - length;
+    return `<circle cx="${x}" cy="${y}" r="${radius}" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round" stroke-dasharray="${length} ${rest}" transform="rotate(-90 ${x} ${y})"/>`;
+  };
+  if (nodes.pv || nodes.pvDay) {
+    const rows = [[text("pv"), "#f4f7fb"]];
+    if (flow.pvDay) rows.push([escapeHtml(flow.pvDay), "#f4f7fb"]);
+    parts.push(circle(g.cx, g.py, "#f0a030", 0xF0A72, rows));
   }
   if (g.hasGrid) {
-    parts.push(circle(g.gx, g.ym, "#5b8fc7", 0xF0D3E, [nodes.gridOut && [`← ${text("gridOut")}`, "#a38be0"], nodes.gridIn && [`→ ${text("gridIn")}`, "#8db8ea"]]));
+    const rows = [[text("grid"), dirInk(flow.gridDir, false)]];
+    if (flow.gridDay) rows.push([escapeHtml(flow.gridDay), "#f4f7fb"]);
+    parts.push(circle(g.gx, g.ym, "#5b8fc7", 0xF0D3E, rows));
     parts.push(caption(g.gx, g.ym - g.r - 6, "Netz", "middle"));
   }
   if (g.hasBat) {
-    parts.push(circle(g.bx, g.ym, "#e0709a", 0xF0079, [nodes.batIn && [`+ ${text("batIn")}`, "#e88aae"], nodes.batOut && [`− ${text("batOut")}`, "#6cc3b5"]]));
+    const rows = [[text("bat"), dirInk(flow.batDir, true)]];
+    if (nodes.soc && Number(flow.socPct) >= 0) rows.push([`${Math.round(Number(flow.socPct))} %`, "#f4f7fb"]);
+    parts.push(circle(g.bx, g.ym, "#e0709a", 0xF0079, rows));
     parts.push(caption(g.bx, g.ym - g.r - 6, "Batterie", "middle"));
-    if (nodes.soc) parts.push(caption(g.bx, g.ym + g.r + 16, flow.soc || "", "middle"));
+    if (nodes.soc) parts.push(socArc(g.bx, g.ym, flow.socPct));
   }
   parts.push(circle(g.cx, g.hy, "#46566b", 0xF02DC, [[text("home"), "#f4f7fb"]]));
   const mix = Array.isArray(flow.mix) ? flow.mix : [];
@@ -292,7 +328,6 @@ function buildEnergyFlowHtml(tile, live, mode) {
     parts.push(`<circle cx="${g.cx}" cy="${g.hy}" r="${g.r - 2}" fill="none" stroke="${mixInk[index]}" stroke-width="4" stroke-dasharray="${length} ${circumference - length}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${g.cx} ${g.hy})"/>`);
     offset += length;
   });
-  parts.push(caption(g.cx - g.r - 8, g.hy + 5, "Zuhause", "end"));
   const consumers = flowConsumersOf(tile);
   if (consumers.length && g.consCount > 0) {
     const fit = Math.min(consumers.length, g.consCount);
