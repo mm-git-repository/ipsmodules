@@ -957,8 +957,19 @@ class HomeDisplay extends IPSModuleStrict
         }
         // Ohne automatische Aktualisierung kennt die Anzeige die neue Version, bekommt aber Prüfsumme und
         // Signatur nur, solange der Befehl „update“ ansteht. Das gilt auch für Anzeigen mit älterem Programm.
-        $updateNow = is_array($command) && (string) ($command['name'] ?? '') === 'update';
         $held = $this->layoutHeld($device['id'], $layout);
+        // Zurückgehaltene Ansicht mit neuerem Programm: „update“ läuft sofort, auch außerhalb des Wartungsfensters.
+        // Höchstens alle zwei Minuten ein neuer Befehl, damit ein fehlgeschlagener Versuch erneut startet.
+        $installedNow = (string) ($runtime[(string) $device['id']]['firmware'] ?? '0.0.0');
+        $updatePending = is_array($command) && (string) ($command['name'] ?? '') === 'update'
+            && (int) ($command['at'] ?? 0) > time() - 120;
+        if ($held && !$updatePending && $firmware['signature'] !== '' && version_compare($firmware['version'], $installedNow, '>')) {
+            $runtime[(string) $device['id']]['command'] = ['id' => bin2hex(random_bytes(6)), 'name' => 'update', 'at' => time()];
+            $runtime[(string) $device['id']]['seq'] = (int) ($runtime[(string) $device['id']]['seq'] ?? 0) + 1;
+            $this->saveRuntime($runtime);
+            $command = $runtime[(string) $device['id']]['command'];
+        }
+        $updateNow = is_array($command) && (string) ($command['name'] ?? '') === 'update';
         // Zurückgehaltene Ansicht: ohne Signatur kann die Anzeige das Programm nicht laden und bleibt leer.
         if (!$this->firmwareAuto($device['id']) && !$updateNow && !$held) {
             $firmware['sha256'] = '';

@@ -21,7 +21,7 @@
         },
         {
             "type": "Label",
-            "caption": "IPS-Variablen und Pixoo-Display nutzen dasselbe Intervall (Feld unten, ein Update-Timer). Quellvariablen-Änderungen werden ebenfalls auf dieses Intervall begrenzt. SMARD-Preis separat alle 15 Min."
+            "caption": "IPS-Variablen und Pixoo-Display nutzen dasselbe Intervall (Feld unten, eine gemeinsame Aktualisierung). Quellvariablen-Änderungen werden ebenfalls auf dieses Intervall begrenzt. SMARD-Preis separat alle 15 Min."
         },
         {
             "type": "RowLayout",
@@ -62,12 +62,12 @@
         {
             "type": "CheckBox",
             "name": "PixooHourlyReinit",
-            "caption": "Display-Refresh aktiv (wie Button „Display neu initialisieren“: Custom-Kanal + Hintergrund-GIF + Texte)"
+            "caption": "Regelmäßiger Neuaufbau der Anzeige (wie Button „Display neu initialisieren“: eigener Kanal, Hintergrundbild und Texte)"
         },
         {
             "type": "NumberSpinner",
             "name": "PixooDisplayRefreshMinutes",
-            "caption": "Display-Refresh-Intervall (Minuten, mindestens 15)",
+            "caption": "Intervall für den Neuaufbau (Minuten, mindestens 15)",
             "digits": 0,
             "minimum": 15
         },
@@ -148,11 +148,11 @@
             "items": [
                 {
                     "type": "Label",
-                    "caption": "Day-Ahead Börsenpreis DE/LU (Filter 4169, Viertelstunden), www.smard.de, Abholung alle 15 Min. Wert EUR/MWh → Anzeige als Zahl in € (÷1000). Rechts in der Netz-Zeile: gleiche Schriftgröße wie die Netz-Watt-Zahl (Font 26, Zeilenhöhe 8). Positiver Wert = grün, sonst rot."
+                    "caption": "Börsenpreis für den nächsten Tag, DE/LU (Filter 4169, Viertelstunden), www.smard.de, Abholung alle 15 Min. Wert EUR/MWh → Anzeige als Zahl in € (÷1000). Rechts in der Netz-Zeile: gleiche Schriftgröße wie die Netz-Watt-Zahl (Schrift 26, Zeilenhöhe 8). Positiver Wert = grün, sonst rot."
                 },
                 {
                     "type": "Label",
-                    "caption": "Optionaler Zeitstempel: festes Format Stunde:Minute (24 h, z. B. 14:30), rechts in derselben Zeile wie das Label „NETZ“; gleiche Ziffern-Schrift wie die Watt-Werte (Font 26), kompakte Zeilenhöhe."
+                    "caption": "Optionaler Zeitstempel: festes Format Stunde:Minute (24 h, z. B. 14:30), rechts in derselben Zeile wie die Beschriftung „NETZ“; gleiche Ziffern-Schrift wie die Watt-Werte (Schrift 26), kompakte Zeilenhöhe."
                 },
                 {
                     "type": "CheckBox",
@@ -171,28 +171,28 @@
                 },
                 {
                     "type": "Label",
-                    "caption": "Hinweis: Es wird der Beginn der Viertelstunde der zuletzt vom Modul geladenen SMARD-Daten angezeigt (Format HH:MM) — nicht die laufende Uhrzeit."
+                    "caption": "Hinweis: Es wird der Beginn der Viertelstunde der zuletzt vom Modul geladenen SMARD-Daten angezeigt (Format Stunde:Minute) — nicht die laufende Uhrzeit."
                 }
             ]
         },
         {
             "type": "ExpansionPanel",
-            "caption": "Home Manager 2 (Real Power ±)",
+            "caption": "Home Manager 2 (Wirkleistung ±)",
             "expanded": false,
             "items": [
                 {
                     "type": "Label",
-                    "caption": "Real Power + = Netzbezug, Real Power − = Netzeinspeisung (W). String- oder Float-/Integer-Variablen. Netz = Bezug − Einspeisung."
+                    "caption": "Wirkleistung + (Real Power +) = Netzbezug, Wirkleistung − (Real Power −) = Netzeinspeisung (W). Text- oder Zahlenvariablen. Netz = Bezug − Einspeisung."
                 },
                 {
                     "type": "SelectVariable",
                     "name": "HmRealPowerPlusVar",
-                    "caption": "Variable: Real Power + (Netzbezug, W)"
+                    "caption": "Variable: Wirkleistung + (Real Power +, Netzbezug, W)"
                 },
                 {
                     "type": "SelectVariable",
                     "name": "HmRealPowerMinusVar",
-                    "caption": "Variable: Real Power − (Netzeinspeisung, W)"
+                    "caption": "Variable: Wirkleistung − (Real Power −, Netzeinspeisung, W)"
                 }
             ]
         },
@@ -203,7 +203,7 @@
             "items": [
                 {
                     "type": "Label",
-                    "caption": "Zwei Variablen pro WR (Integer, Float oder String mit Zahl). Erzeugung = Summe aller vier Werte (je Wert ≥ 0). Bei Fehler 201: Meldungsarchiv der Instanz prüfen (SendDebug „Konfiguration“)."
+                    "caption": "Zwei Variablen pro WR (Text- oder Zahlenvariablen). Erzeugung = Summe aller vier Werte (je Wert ≥ 0). Bei Fehler 201: Meldungsarchiv, Eintrag „Konfiguration“."
                 },
                 {
                     "type": "SelectVariable",
@@ -279,7 +279,7 @@
         {
             "type": "Button",
             "caption": "Jetzt aktualisieren (Werte + Pixoo)",
-            "onClick": "SMAPX_Refresh($id); echo 'OK';"
+            "onClick": "SMAPX_Refresh($id); echo 'Aktualisiert.';"
         },
         {
             "type": "Button",

@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.9';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 55;
+    private const MODULE_BUILD = 56;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -990,7 +990,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return 'SMARD-Preis veraltet oder noch nicht geladen';
         }
         if ($this->GetTimerInterval('Update') <= 0) {
-            return 'Update-Timer aus';
+            return 'Aktualisierung aus';
         }
         $lastRaw = $this->GetBuffer('LastValuesAt');
         $last = is_numeric($lastRaw) ? (int) $lastRaw : 0;
@@ -1405,7 +1405,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->SendDebug(
             'Timer',
             'Aktualisierung alle ' . $sec . ' s (Werte'
-            . ($pixooIp !== '' ? ' + Pixoo im Update-Timer' : ', Pixoo aus')
+            . ($pixooIp !== '' ? ' + Pixoo in der Aktualisierung' : ', Pixoo aus')
             . ', UpdateIntervalSeconds=' . $this->ReadPropertyInteger('UpdateIntervalSeconds') . ')',
             0
         );
@@ -1474,7 +1474,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
 
         $reasons = [];
         if ($timerOff) {
-            $reasons[] = 'Update-Timer aus (Intervall 0)';
+            $reasons[] = 'Aktualisierung aus (Intervall 0)';
         }
         if ($valuesStale) {
             $reasons[] = 'keine Werte seit ' . ($last > 0 ? (string) ($now - $last) : '?')
@@ -1667,7 +1667,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $timeStr = date('H:i', $sec);
         $eurKwh = $row['eurMwh'] / 1000.0;
         $priceStr = number_format($eurKwh, 3, ',', '') . ' €';
-        return "SMARD Day-Ahead (Viertelstunde)\nPreis: {$priceStr}\nDatum: {$dateStr}\nUhrzeit: {$timeStr}\n(Ortszeit PHP-Server)";
+        return "SMARD-Börsenpreis für den nächsten Tag (Viertelstunde)\nPreis: {$priceStr}\nDatum: {$dateStr}\nUhrzeit: {$timeStr}\n(Ortszeit des Servers)";
     }
 
     /** @param array{eurMwh: float, tsMs: int} $row */
@@ -2167,7 +2167,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return 'Konfiguration unvollständig (sechs Quellvariablen im Formular zuweisen).';
         }
         if ($this->runHeavyReinitCore()) {
-            return 'Display initialisiert (Kanal Custom, Seite ' . self::PIXOO_CUSTOM_PAGE . ').';
+            return 'Display initialisiert (eigener Kanal, Seite ' . self::PIXOO_CUSTOM_PAGE . ').';
         }
         return 'Display-Init fehlgeschlagen — Meldungsarchiv Kategorie „Pixoo“ prüfen.';
     }
@@ -2281,8 +2281,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     private function getVariableSlotDefinitions(): array
     {
         return [
-            ['property' => 'HmRealPowerPlusVar', 'label' => 'HM Real Power + (Netzbezug)'],
-            ['property' => 'HmRealPowerMinusVar', 'label' => 'HM Real Power − (Einspeisung)'],
+            ['property' => 'HmRealPowerPlusVar', 'label' => 'Wirkleistung + (Real Power +, Netzbezug)'],
+            ['property' => 'HmRealPowerMinusVar', 'label' => 'Wirkleistung − (Real Power −, Netzeinspeisung)'],
             ['property' => 'Wr1String1Var', 'label' => 'Wechselrichter 1, Variable 1'],
             ['property' => 'Wr1String2Var', 'label' => 'Wechselrichter 1, Variable 2'],
             ['property' => 'Wr2String1Var', 'label' => 'Wechselrichter 2, Variable 1'],
@@ -3788,12 +3788,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             default => 'fog',
         };
         foreach ($this->weatherIconParts($kind) as [$x, $y, $rows, $palette]) {
-            $this->flowSprite($px, $x, $y, $rows, $palette);
+            // Ursprung der Pixeldaten ist x=1, y=0. Verschoben: mittig vor der PV (x=8), eine Reihe unter dem Rand.
+            $this->flowSprite($px, $x + 7, $y + 1, $rows, $palette);
         }
     }
 
     /**
-     * Pixelbilder für 9 × 9 Pixel links oben. Jeder Teil: [x, y, Zeilen, Farben].
+     * Pixelbilder für 9 × 9 Pixel. paintWeatherIcon schiebt sie mittig vor die PV und eine Reihe nach unten.
+     * Jeder Teil: [x, y, Zeilen, Farben], Ursprung x=1, y=0.
      *
      * @return list<array{0: int, 1: int, 2: list<string>, 3: array<string, int>}>
      */
