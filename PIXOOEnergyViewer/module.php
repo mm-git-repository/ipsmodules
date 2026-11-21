@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.9';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 54;
+    private const MODULE_BUILD = 55;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -204,6 +204,10 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterPropertyBoolean('PixooShowSmardPrice', true);
         $this->RegisterPropertyBoolean('PixooSmardShowUnit', true);
         $this->RegisterPropertyBoolean('PixooSmardShowTime', false);
+        $this->RegisterPropertyBoolean('PixooShowWeather', false);
+        $this->RegisterPropertyInteger('PixooWeatherVar', 0);
+        $this->RegisterPropertyBoolean('PixooShowClock', false);
+        $this->RegisterPropertyBoolean('PixooGraphicModeSwitch', false);
 
         if (!IPS_VariableProfileExists('SMAPX.Watt')) {
             IPS_CreateVariableProfile('SMAPX.Watt', 2);
@@ -310,6 +314,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'PixooShowSmardPrice' => true,
             'PixooSmardShowUnit' => true,
             'PixooSmardShowTime' => false,
+            'PixooShowWeather' => false,
+            'PixooWeatherVar' => 0,
+            'PixooShowClock' => false,
         ];
     }
 
@@ -1058,6 +1065,29 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->setTimerIntervalSafe('StartupGuard', self::STARTUP_GUARD_MS);
     }
 
+    /** Setzt den Anzeigewert eines Formularelements, auch in Zeilen und Feldern verschachtelt. */
+    private function setFormElementValue(array &$elements, string $name, bool $value): void
+    {
+        foreach ($elements as &$element) {
+            if (!is_array($element)) {
+                continue;
+            }
+            if (($element['name'] ?? '') === $name) {
+                $element['value'] = $value;
+            }
+            if (isset($element['items']) && is_array($element['items'])) {
+                $this->setFormElementValue($element['items'], $name, $value);
+            }
+        }
+        unset($element);
+    }
+
+    /** Vom Formular-Schalter „Text / Grafik“ aufgerufen. Setzt den Modus direkt, ohne Umschalten. */
+    public function SetGraphicModeFromForm(bool $enabled): void
+    {
+        $this->setGraphicMode($enabled);
+    }
+
     public function GetConfigurationForm(): string
     {
         $this->ensureInstanceOperational();
@@ -1077,6 +1107,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'type' => 'Label',
             'caption' => 'Modulversion: ' . $this->formatModuleVersionLabel(),
         ]);
+        // Schalter Text/Grafik zeigt den Stand der Variable GraphicMode, auch wenn er über die Variable geändert wurde.
+        $this->setFormElementValue($form['elements'], 'PixooGraphicModeSwitch', $this->isGraphicMode());
         $out = json_encode($form, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($out === false || $out === '') {
             return parent::GetConfigurationForm();
@@ -1960,6 +1992,9 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             if ($this->isGraphicMode()) {
                 if ($this->graphicGifDue($values, $frameKey)) {
                     $this->PixooSendBackground($pixooIp, $this->renderBackgroundFrame($values));
+                    // Ein neues Bild kann die Helligkeit zurücksetzen. Deshalb nach jedem Bild erneut senden.
+                    $this->PixooSetBrightness($pixooIp, $eff);
+                    $this->SetBuffer('PixooLastBrightness', (string) $eff);
                     $this->rememberPixooFrame($values, $frameKey);
                 }
             } else {
@@ -2431,7 +2466,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** @return list<string> */
     private function optionalSourceVariableKeys(): array
     {
-        return ['BatterySocVar', 'BatteryChargeVar', 'BatteryDischargeVar'];
+        return ['BatterySocVar', 'BatteryChargeVar', 'BatteryDischargeVar', 'PixooWeatherVar'];
     }
 
     /** @param array<string, int> $ids */
@@ -2871,13 +2906,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'Command' => 'Channel/SetCustomPageIndex',
             'CustomPageIndex' => self::PIXOO_CUSTOM_PAGE,
         ]);
-        $this->PixooSendBackground($ip, $this->renderBackgroundFrame($values));
         $eff = $this->getEffectivePixooBrightness();
-        $this->pixooPostCommand($ip, [
-            'Command' => 'Channel/SetBrightness',
-            'Brightness' => max(0, min(100, $eff)),
-        ]);
-        $this->SetBuffer('PixooLastBrightness', (string) $eff);
+        $this->PixooSendBackground($ip, $this->renderBackgroundFrame($values));
         try {
             $this->pixooPostCommand($ip, ['Command' => 'Draw/ClearHttpText']);
         } catch (\Throwable $e) {
@@ -2899,6 +2929,12 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         } catch (\Throwable $e) {
             $this->SendDebug('Pixoo', 'Channel/OnOffScreen: ' . $e->getMessage(), 0);
         }
+        // Ganz am Ende: Bild und Anzeige können die Helligkeit verändern.
+        $this->pixooPostCommand($ip, [
+            'Command' => 'Channel/SetBrightness',
+            'Brightness' => max(0, min(100, $eff)),
+        ]);
+        $this->SetBuffer('PixooLastBrightness', (string) $eff);
         $this->SetBuffer('PixooGifReady', '1');
         $this->SetBuffer('PixooInited', '1');
         $this->SetBuffer('PixooLastHeavyGifAt', (string) time());
@@ -3367,6 +3403,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'batteryPower' => $live['batteryPower'],
             'smard' => null,
             'time' => '',
+            'weather' => $this->readPixooWeatherCode(),
+            'clock' => $this->ReadPropertyBoolean('PixooShowClock') ? $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT) : '',
         ];
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
             $shown['smard'] = $this->getSmardEurPerMwhForDisplay();
@@ -3402,6 +3440,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'batteryPower' => is_float($power) || is_int($power) ? (float) $power : null,
             'smard' => is_float($smard) || is_int($smard) ? (float) $smard : null,
             'time' => isset($decoded['time']) ? (string) $decoded['time'] : '',
+            'weather' => isset($decoded['weather']) ? (string) $decoded['weather'] : '',
+            'clock' => isset($decoded['clock']) ? (string) $decoded['clock'] : '',
         ];
     }
 
@@ -3439,6 +3479,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $s['battery'] === null ? 'n' : (string) $s['battery'],
             $s['house'] ? '1' : '0',
             $s['fill'] === null ? 'n' : (string) $s['fill'],
+            (string) ($values['weather'] ?? ''),
+            (string) ($values['clock'] ?? ''),
         ];
         if ($this->ReadPropertyBoolean('PixooShowSmardPrice')) {
             $smard = array_key_exists('smard', $values) ? $values['smard'] : $this->getSmardEurPerMwhForDisplay();
@@ -3656,6 +3698,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             '..WWWWWDDWW..',
         ], ['R' => 0xc83c28, 'W' => 0xc8c8c8, 'C' => 0x50a0e6, 'D' => 0x785028]);
 
+        $this->paintWeatherIcon($px, (string) ($values['weather'] ?? ''));
+
         $label = 0x8c8c8c;
         [$genNum, $genUnit] = $this->formatFlowWattParts($values['generation']);
         $this->flowValueUnit($px, $genNum, $genUnit, $hubX, 10, 'c', $s['pv'] ? $pvColor : $label);
@@ -3695,7 +3739,11 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         [$useNum, $useUnit] = $this->formatFlowWattParts($values['consumption']);
         $this->flowValueUnit($px, $useNum, $useUnit, $hubX, 58, 'c', 0xffffff);
 
-        if ($this->ReadPropertyBoolean('PixooShowSmardPrice') && $this->ReadPropertyBoolean('PixooSmardShowTime')) {
+        $clockText = (string) ($values['clock'] ?? '');
+        if ($clockText !== '') {
+            // Uhr rechts oben belegt die Ecke. Der SMARD-Zeitstempel entfällt dann.
+            $this->flowText($px, $clockText, 62, 1, 'r', $label);
+        } elseif ($this->ReadPropertyBoolean('PixooShowSmardPrice') && $this->ReadPropertyBoolean('PixooSmardShowTime')) {
             $clock = array_key_exists('time', $values) ? (string) $values['time'] : $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT);
             $this->flowText($px, $clock, 62, 1, 'r', $label);
         }
@@ -3706,6 +3754,123 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
 
         return $out;
+    }
+
+    /** OpenWeatherMap-Wetterbedingung-Symbol (z. B. 01d, 10n) oder '' ohne Icon. */
+    private function readPixooWeatherCode(): string
+    {
+        if (!$this->ReadPropertyBoolean('PixooShowWeather')) {
+            return '';
+        }
+        $id = $this->readConfiguredPropertyInteger('PixooWeatherVar');
+        if ($id <= 0 || !IPS_VariableExists($id)) {
+            return '';
+        }
+        $raw = GetValue($id);
+
+        return is_string($raw) || is_numeric($raw) ? strtolower(trim((string) $raw)) : '';
+    }
+
+    /** @param list<int> $px */
+    private function paintWeatherIcon(array &$px, string $code): void
+    {
+        if (!preg_match('/^(01|02|03|04|09|10|11|13|50)([dn]?)$/', $code, $m)) {
+            return;
+        }
+        $night = $m[2] === 'n';
+        $kind = match ($m[1]) {
+            '01' => $night ? 'moon' : 'sun',
+            '02' => $night ? 'moonCloud' : 'sunCloud',
+            '03', '04' => 'cloud',
+            '09', '10' => 'rain',
+            '11' => 'thunder',
+            '13' => 'snow',
+            default => 'fog',
+        };
+        foreach ($this->weatherIconParts($kind) as [$x, $y, $rows, $palette]) {
+            $this->flowSprite($px, $x, $y, $rows, $palette);
+        }
+    }
+
+    /**
+     * Pixelbilder für 9 × 9 Pixel links oben. Jeder Teil: [x, y, Zeilen, Farben].
+     *
+     * @return list<array{0: int, 1: int, 2: list<string>, 3: array<string, int>}>
+     */
+    private function weatherIconParts(string $kind): array
+    {
+        $sun = [[1, 0, [
+            '....Y....',
+            '.Y..Y..Y.',
+            '..YYYYY..',
+            'YYYYYYYYY',
+            '..YYYYY..',
+            '.Y..Y..Y.',
+            '....Y....',
+        ], ['Y' => 0xffdc00]]];
+        $moon = [[1, 0, [
+            '..WWW....',
+            '.WW......',
+            '.W.......',
+            '.W.......',
+            '.WW......',
+            '..WWW....',
+        ], ['W' => 0xc8c8c8]]];
+        $cloud = [[1, 3, [
+            '..CCC....',
+            '.CCCCC...',
+            'CCCCCCCC.',
+            'CCCCCCCCC',
+        ], ['C' => 0xaaaaaa]]];
+
+        return match ($kind) {
+            'sun' => $sun,
+            'moon' => $moon,
+            'sunCloud' => array_merge($sun, $cloud),
+            'moonCloud' => array_merge($moon, $cloud),
+            'cloud' => [[1, 0, [
+                '..CCC....',
+                '.CCCCC...',
+                'CCCCCCCC.',
+                'CCCCCCCCC',
+            ], ['C' => 0xaaaaaa]]],
+            'rain' => [
+                [1, 0, [
+                    '..CCC....',
+                    '.CCCCC...',
+                    'CCCCCCCC.',
+                    'CCCCCCCCC',
+                ], ['C' => 0xaaaaaa]],
+                [1, 5, ['.B..B..B.', 'B..B..B..'], ['B' => 0x5a96ff]],
+            ],
+            'thunder' => [
+                [1, 0, [
+                    '..CCC....',
+                    '.CCCCC...',
+                    'CCCCCCCC.',
+                    'CCCCCCCCC',
+                ], ['C' => 0xaaaaaa]],
+                [4, 4, ['..YY.', '.YY..', 'YYYY.', '..Y..', '.Y...'], ['Y' => 0xffdc00]],
+            ],
+            'snow' => [
+                [1, 0, [
+                    '..CCC....',
+                    '.CCCCC...',
+                    'CCCCCCCC.',
+                    'CCCCCCCCC',
+                ], ['C' => 0xaaaaaa]],
+                [1, 5, ['.W.W.W.W.', 'W.W.W.W.W'], ['W' => 0xc8c8c8]],
+            ],
+            default => [[1, 0, [
+                '.FFFFFFF.',
+                '.........',
+                'FFFFFFFFF',
+                '.........',
+                '.FFFFFFF.',
+                '.........',
+                'FFFFFFFFF',
+            ], ['F' => 0x8c8c8c]]],
+        };
     }
 
     /** @param list<int> $px */

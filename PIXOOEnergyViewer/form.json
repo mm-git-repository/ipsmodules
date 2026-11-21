@@ -1,13 +1,31 @@
 {
     "elements": [
         {
+            "type": "RowLayout",
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Text"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "PixooGraphicModeSwitch",
+                    "caption": "",
+                    "onChange": "SMAPX_SetGraphicModeFromForm($id, $PixooGraphicModeSwitch);"
+                },
+                {
+                    "type": "Label",
+                    "caption": "Grafik"
+                }
+            ]
+        },
+        {
             "type": "Label",
             "caption": "IPS-Variablen und Pixoo-Display nutzen dasselbe Intervall (Feld unten, ein Update-Timer). Quellvariablen-Änderungen werden ebenfalls auf dieses Intervall begrenzt. SMARD-Preis separat alle 15 Min."
         },
         {
-            "type": "Label",
-            "caption": "Vorschau der Pixoo-Darstellung (schematisch, 192×192 px ≈ 3× 64er Raster). Beispielwerte im Bild, von oben: 1000 W Erzeugung, 80 % Batterie und 400 W Laden (grün), 500 W Verbrauch, 500 W Netzbezug (rot), 0,12 € SMARD (grün). Auf dem Pixoo gelten Ihre Messdaten."
-        },
+            "type": "RowLayout",
+            "items": [
         {
             "type": "Image",
             "caption": "Vorschau",
@@ -21,6 +39,8 @@
             "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAAEFElEQVR42u3doXYaQRQG4KGnj1BdhYjGFNGHqIpARUcjeISI6OioiKg+RAU1qyNQ1X0HKmj39HTLMLPMktnN9ykOGZIW7rk/d3cWZuHN2DzuLv9H727m035W3wVQQLyW9+2txW5xbFEzb07+ovbh3cVZv/nMf0aKp6efx360Wn0ou0YHAgXEBSKsmxSRNElJnKyciiQgOhAKCBIjLEtK3qXEXGRx8VBLGZFKrdGBQAFRSYSdOSulPOoCU5gDiToQCoipRtiZQ1PWSbF2Tco05xijDoQCgr/Mgh2JwY5EHQgFhAiboPv7+8ON9Xrt2dCBUEAAAAAQHEiclv32z/9wefRH/3k6lhlrsv5o1prgOBDBgUQIQ18XVm1yJeX3skyo6UCggBBhBabKyhJnYjOXDoQCQgGhgEAB4VzYQOe5+p0LiwxfUx3HdCAUEACAHYlOZnkTjQJCAYECQgGhgFBAoIBQQCggFBCEEKZ3XRi5np+fT665vr7WgRBhhJFv52jbXaSnhTezOX+qgZWiLQAdCBFGDVNYVnM78637GD/lY2I7Evu9Ot3XXQdChFHVgcRuc4sEVtZidCBQQAwRYSlvy9s1WaFGhRa7RZ+HNToQIoxxbOfo5lTkHsmlA4ECop4I685ckXsuab/4PUHMmsZLqAOhgBBhKfsP+2VZmzjDZdlwvoeHw43F4na8L3MzWNbrQCggKr8uLJJcKYrPSpecwlbNp6FTQAdCAUGpCMsKrFc5tOj4oQ6EAoLcA4lZWxPRgUABceFLm7PGqMh1YfYo1mzTbHQgRBjB94VN0ephf+xHT7eeNB0IBYQIG1OWSS4dCAVEqP5cWGS/X2QTe7u41Jp+GxFdMhZC2O+Ov2WZn35U1hodCBFGDRGWco1Vv1Czt/DVZuz56VDTgRBhTCDCUkakrEuJu4tTEjAr1Mxcl5nmInOZDoQIY3RfeRmJjOKHH9GBUECQeyAx66RYvzDKWtz9E5F7yD1+2D3qGLlHB0KEAQAEm+qHsf18dbix/Pbi2fAmGgWECBtRcnXVn2X7/dHrsmezWY81kXt0IEQYIqz+5BpRlqVET8o9Kb9ZB0KEIcJGlFz1Z1mpCSuSXDoQIgwRNurkqjbLSk1hKXOZDoQIQ4SNOrlqyzLnwhBhiLDpZ9l2Wzi5lksdCBQQoe5P55iYu5eP/9yzufpRZLEOBAoIBYQCQgGBKawrZYz6endzuNGeSPuyefTU6UAoIBQQCggFBAAAAAAAAAAAAAAAQHhLn5GY8kUhpT7zNrIm6x+WtSa4rIfgujAIU/p0jkisRPKlXxhlrdGBQAEhwhLTJCXL+q1JScCsUBv1zKUDoYAQYbXlXfHDjzoQKCBEWO7QFPmWxjMHtH6Lz/xOZB0IEQYAMDm/AM9P1zkJk8jPAAAAAElFTkSuQmCC",
             "width": "192px",
             "center": true
+        }
+            ]
         },
         {
             "type": "CheckBox",
@@ -92,6 +112,32 @@
                     "name": "PixooNightHourTo",
                     "caption": "Nacht bis Stunde (0–23, exkl.)",
                     "digits": 0
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Pixoo Grafikmodus: Wetter und Uhrzeit",
+            "expanded": false,
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Nur im Grafikmodus. Wetter: die OpenWeatherMap-Variable „Wetterbedingung-Symbol“ (Kürzel wie 01d oder 10n) zeigt ein kleines Icon links neben der PV. Uhrzeit: Serverzeit rechts oben. Sie ersetzt dort den SMARD-Zeitstempel."
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "PixooShowWeather",
+                    "caption": "Wetter-Icon links neben der PV anzeigen"
+                },
+                {
+                    "type": "SelectVariable",
+                    "name": "PixooWeatherVar",
+                    "caption": "Variable: Wetterbedingung-Symbol (OpenWeatherMap)"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "PixooShowClock",
+                    "caption": "Uhrzeit rechts oben anzeigen (Stunde:Minute)"
                 }
             ]
         },
@@ -242,12 +288,7 @@
         },
         {
             "type": "Label",
-            "caption": "Grafikmodus: Energiefluss mit PV oben, Netz links, Batterie rechts und Haus unten. Die Batterie füllt sich mit dem Ladestand: unter 25 % rot, bis 75 % gelb, darüber grün. Die Variable „Flussanimation“ schaltet die laufende Richtung an oder zeigt ein Standbild mit Pfeilen. Umschalten hier oder über die Variable „Grafikmodus (Energiefluss)“."
-        },
-        {
-            "type": "Button",
-            "caption": "Text / Grafik umschalten",
-            "onClick": "echo SMAPX_ToggleGraphicMode($id);"
+            "caption": "Grafikmodus: Energiefluss mit PV oben, Netz links, Batterie rechts und Haus unten. Die Batterie füllt sich mit dem Ladestand: unter 25 % rot, bis 75 % gelb, darüber grün. Die Variable „Flussanimation“ schaltet die laufende Richtung an oder zeigt ein Standbild mit Pfeilen. Umschalten über den Schalter oben oder die Variable „Grafikmodus (Energiefluss)“."
         }
     ],
     "status": [

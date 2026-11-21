@@ -1,8 +1,8 @@
 {
-  "version": "0.6.81",
+  "version": "0.6.82",
   "requires": "0.6.78",
-  "sha256": "13a02f8ed68bb730101b972976a2f37f11a98de2cbc9c1f663f910a8e9247615",
-  "signature": "KdE3rLLBhzXXxe3Ulqd27FuHm/qx1UJJOYyrFxNTW+Ckm8MhDED+EgGhoO2jtfDP68Uh+/+2thHc/kyXESWACyuNiUzGGR1UUqyntqyXJmfGayHpCWEOE02/rUS8MgTHTXXq1AMm0KMpva3YUuHDvLh72hVTXdtkkluh/t/PycdV75CYyOtVomfohCbvxtt6OUpKMkOTpDdiMFKkKmpi9P5C6MJgRfvMJV/cuuuK4ewx6jPrbiXJrj7NZeDtgxymhOpq8V/aTtVGtJk51owFEBoNHSZPcjHMawhpd6x7kSXiloZ5uxc0DiXsy0ftXtR2B0VZAzk6+w5Zmrv7Xwycrw==",
-  "size": 2572032,
-  "built": "2026-11-13T16:26:36Z"
+  "sha256": "98b4b31a411f7f3d1d47c23a711fc7c5cc861be08e534e73c46eb34aecb0485a",
+  "signature": "Bx2wnaQJElo+1gevndRoKiw4gg/fbnXG6sPNNWu5cf0CJ//FR4NXp5yDXCvKb+9456mP5/HtdrStQD4ZwCTEbzKus/Rk6iKnPlUKIDuAfLqTrPtd/BKqWnoN7WeY+HyEU2JwRppzgcux24BZ1z7em0cT/lNMOzWqDv9/qM2MEvcdAbHfU1nfFVWvjkDnyEFDICzjO1Rf1MltLEGltBaC5iMJEo/OvtIpKkRZuf/z+MVrgIUt7aYeaV9CJ0IuViY9XpkA2z+dQbbvoXk1UgA/2a23bR86RScBNbjVwxr2SpHU4xitodPfyxp3RhWHCj8psdhS2hGAPXtGHH73+s/rCQ==",
+  "size": 2572208,
+  "built": "2026-11-21T05:56:43Z"
 }

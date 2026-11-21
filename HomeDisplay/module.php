@@ -958,7 +958,9 @@ class HomeDisplay extends IPSModuleStrict
         // Ohne automatische Aktualisierung kennt die Anzeige die neue Version, bekommt aber Prüfsumme und
         // Signatur nur, solange der Befehl „update“ ansteht. Das gilt auch für Anzeigen mit älterem Programm.
         $updateNow = is_array($command) && (string) ($command['name'] ?? '') === 'update';
-        if (!$this->firmwareAuto($device['id']) && !$updateNow) {
+        $held = $this->layoutHeld($device['id'], $layout);
+        // Zurückgehaltene Ansicht: ohne Signatur kann die Anzeige das Programm nicht laden und bleibt leer.
+        if (!$this->firmwareAuto($device['id']) && !$updateNow && !$held) {
             $firmware['sha256'] = '';
             $firmware['signature'] = '';
         }
@@ -1030,6 +1032,13 @@ class HomeDisplay extends IPSModuleStrict
         } catch (Throwable $e) {
             $document['targetWidth'] = 1024;
             $document['targetHeight'] = 600;
+        }
+        $assigned = $this->assigned($instanceId, 'layouts', 'LayoutId');
+        if ($this->layoutHeld($instanceId, $assigned)) {
+            // Gleiche Stunde heißt für die Anzeige: Fenster immer offen. So startet das Update sofort,
+            // auch auf Fassungen, die eine zurückgehaltene Ansicht noch nicht selbst erkennen.
+            $document['maintenanceFrom'] = 0;
+            $document['maintenanceTo'] = 0;
         }
         $firebeetle = str_starts_with($profileId, 'firebeetle-epd-');
         $document['epdPartialRefresh'] = $firebeetle;

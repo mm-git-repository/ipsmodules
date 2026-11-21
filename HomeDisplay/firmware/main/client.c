@@ -1394,17 +1394,23 @@ static void send_health(char *response, size_t length)
 }
 
 /* Auf neue Programme wird nur alle firmware_check_minutes geprüft. Ist eine neuere Version gefunden, wartet die
-   Anzeige auf das Wartungsfenster, ohne erneut zu warten. „update“ aus der Verwaltung gilt sofort. */
+   Anzeige auf das Wartungsfenster, ohne erneut zu warten. „update“ und eine zurückgehaltene Ansicht gelten sofort:
+   sonst bleibt das Display leer, bis das Fenster aufgeht. */
 static void maybe_update(void)
 {
     int64_t now = esp_timer_get_time();
-    if (!update_requested && !firmware_newer && now < next_firmware_check) return;
-    if (!update_requested && !firmware_newer) {
+    bool forced = update_requested || layout_held;
+    if (!update_requested && !firmware_newer && now < next_firmware_check) {
+        /* Bei Sperre entfällt die Stundenwartezeit. Die zwei Minuten nach einem Fehlversuch bleiben. */
+        if (!layout_held || (next_firmware_check - now) <= 2 * 60 * 1000000LL) return;
+    }
+    if (!forced && !firmware_newer) {
         next_firmware_check = now + (int64_t) firmware_check_minutes * 60 * 1000000LL;
     }
     if (firmware_sha[0] == '\0' || firmware_signature[0] == '\0') {
         update_requested = false;
         firmware_newer = false;
+        if (layout_held) next_firmware_check = now + 2 * 60 * 1000000LL;
         return;
     }
     if (version_of(firmware_version) <= version_of(HOMEDISPLAY_FIRMWARE_VERSION)) {
@@ -1414,12 +1420,13 @@ static void maybe_update(void)
         return;
     }
     firmware_newer = true;
-    if (!update_requested && !maintenance_open()) {
+    if (!forced && !maintenance_open()) {
         snprintf(update_error, sizeof(update_error), "Wartet auf das Wartungsfenster");
         return;
     }
     if (homedisplay_ui_busy() || !link_ok()) {
         snprintf(update_error, sizeof(update_error), "Aktualisierung zurückgestellt");
+        if (layout_held) next_firmware_check = now + 2 * 60 * 1000000LL;
         return;
     }
     homedisplay_ui_lock(true);
@@ -1431,8 +1438,9 @@ static void maybe_update(void)
     esp_err_t error = homedisplay_ota_run(url, token, firmware_sha, firmware_signature, &progress);
     homedisplay_ui_lock(false);
     if (error != ESP_OK) {
-        /* Nächster Versuch bei der nächsten Prüfung, nicht im Minutentakt. */
         firmware_newer = false;
+        /* Zurückgehaltene Ansicht: nicht erst in einer Stunde, sonst bleibt das Display leer. */
+        if (layout_held) next_firmware_check = esp_timer_get_time() + 2 * 60 * 1000000LL;
         snprintf(update_error, sizeof(update_error), "Aktualisierung fehlgeschlagen");
     }
 }
