@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.9';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 60;
+    private const MODULE_BUILD = 61;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -75,7 +75,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
      */
     private const FLOW_GIF_MIN_SEC = 10;
     private const FLOW_VALUE_SEC = 3;
-    /** Freie Pixel im Batteriesymbol: 9 Zeilen mal 6 Spalten, ab der untersten Innenzeile. Unten rot, Mitte gelb, oben grün. */
+    /** Freie Pixel im Batteriesymbol: 9 Zeilen mal 6 Spalten. Die Anzahl folgt dem Ladestand, die Farbe gilt für alle gesetzten Pixel. */
     private const BATTERY_FILL_PIXELS = 54;
     private const BATTERY_FILL_RED = 18;
     private const BATTERY_FILL_YELLOW = 36;
@@ -266,6 +266,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $this->RegisterTimer('SmardFetch', 0, 'SMAPX_UpdateSmardPrice($_IPS[\'TARGET\']);');
         $this->RegisterTimer('HealthWatchdog', 0, 'SMAPX_HealthWatchdog($_IPS[\'TARGET\']);');
         $this->RegisterTimer('StartupGuard', self::STARTUP_GUARD_FAST_MS, 'SMAPX_StartupGuardRecovery($_IPS[\'TARGET\']);');
+        $this->ensureDisplayOptionVariables();
         $this->ensureKernelLifecycleMessages();
     }
 
@@ -556,6 +557,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             $this->ensureModuleVersionVariable();
             $this->ensureBatteryVariables();
             $this->ensureGraphicModeVariable();
+            $this->ensureDisplayOptionVariables();
             $this->applyModuleVersionInfo();
             $this->ensureKernelLifecycleMessages();
 
@@ -1128,6 +1130,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $graphic = $this->isGraphicMode();
         $this->setFormButtonState($form['elements'], 'GraphicModeTextButton', $graphic ? 'Text' : '✔ Text', $graphic);
         $this->setFormButtonState($form['elements'], 'GraphicModeGraphicButton', $graphic ? '✔ Grafik' : 'Grafik', !$graphic);
+        $this->applyDisplayOptionFormState($form['elements']);
         $versionAt = count($form['elements']);
         foreach ($form['elements'] as $index => $element) {
             if (!is_array($element) || ($element['type'] ?? '') !== 'RowLayout') {
@@ -1263,6 +1266,231 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
     }
 
+    /**
+     * Uhr, Datum, Temperatur, Wetter und Datumsformat als Modulvariablen.
+     * Die Instanz-Eigenschaften behalten den letzten Stand, die Anzeige liest sie nicht mehr.
+     * Eine neue Variable übernimmt den alten Wert einmalig. Bei den Schaltern gewinnt „an“.
+     */
+    private function ensureDisplayOptionVariables(): void
+    {
+        $usePresArray = false;
+        if (function_exists('IPS_GetKernelVersion')) {
+            $kv = IPS_GetKernelVersion();
+            $usePresArray = is_string($kv) && $kv !== '' && version_compare($kv, '8.0', '>=');
+        }
+        $switchPres = $usePresArray ? ['PROFILE' => '~Switch'] : '~Switch';
+        $options = [
+            'ShowWeather' => ['Wetter-Icon', 'PixooShowWeather', 10],
+            'ShowTemperature' => ['Temperatur', 'PixooShowTemperature', 11],
+            'ShowClock' => ['Uhrzeit', 'PixooShowClock', 12],
+            'ShowDate' => ['Datum', 'PixooShowDate', 13],
+        ];
+        foreach ($options as $ident => [$name, $legacy, $position]) {
+            $fresh = $this->moduleVariableMissing($ident);
+            $this->RegisterVariableBoolean($ident, $name, $switchPres, $position);
+            $this->EnableAction($ident);
+            if ($fresh) {
+                $enabled = $this->legacyDisplayBool($legacy);
+                $this->SetValue($ident, $enabled);
+                $this->SendDebug('Anzeige', $ident . ' übernommen: ' . ($enabled ? 'an' : 'aus'), 0);
+            }
+        }
+        $this->ensureDateFormatProfile();
+        $datePres = $usePresArray ? ['PROFILE' => 'SMAPX.DateFormat'] : 'SMAPX.DateFormat';
+        $freshFormat = $this->moduleVariableMissing('DateFormat');
+        $this->RegisterVariableInteger('DateFormat', 'Datumsformat', $datePres, 14);
+        $this->EnableAction('DateFormat');
+        if ($freshFormat) {
+            $format = $this->legacyDateFormat();
+            $this->SetValue('DateFormat', $format);
+            $this->SendDebug('Anzeige', 'DateFormat übernommen: ' . $format, 0);
+        }
+    }
+
+    private function moduleVariableMissing(string $ident): bool
+    {
+        $id = @IPS_GetObjectIDByIdent($ident, $this->InstanceID);
+
+        return !is_int($id) || $id <= 0;
+    }
+
+    private function ensureDateFormatProfile(): void
+    {
+        if (!IPS_VariableProfileExists('SMAPX.DateFormat')) {
+            IPS_CreateVariableProfile('SMAPX.DateFormat', 1);
+        }
+        $labels = [
+            0 => '01.01.2025',
+            1 => '01.01.25',
+            2 => 'DO 01.01.25',
+            3 => '01.01',
+            4 => 'DO 01.01',
+        ];
+        foreach ($labels as $value => $label) {
+            IPS_SetVariableProfileAssociation('SMAPX.DateFormat', $value, $label, '', -1);
+        }
+    }
+
+    /** Alter Schalter: Datei, gespeicherte Konfiguration und Property. Ein „an“ genügt. */
+    private function legacyDisplayBool(string $key): bool
+    {
+        $file = $this->loadConfigurationFromInstanceStorageFile();
+        if (is_array($file) && array_key_exists($key, $file) && self::migrateCoerceBool($file[$key])) {
+            return true;
+        }
+        $values = $this->getPersistedConfigurationValues();
+        if (is_array($values) && array_key_exists($key, $values) && self::migrateCoerceBool($values[$key])) {
+            return true;
+        }
+        try {
+            if ($this->ReadPropertyBoolean($key)) {
+                return true;
+            }
+        } catch (\Throwable) {
+        }
+        if (function_exists('IPS_GetProperty')) {
+            $raw = @IPS_GetProperty($this->InstanceID, $key);
+            if ((is_bool($raw) || is_int($raw) || is_float($raw) || is_string($raw)) && self::migrateCoerceBool($raw)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Altes Datumsformat. Die Instanzdatei hat Vorrang, weil sie das Neuladen übersteht. */
+    private function legacyDateFormat(): int
+    {
+        $file = $this->loadConfigurationFromInstanceStorageFile();
+        if (is_array($file) && array_key_exists('PixooDateFormat', $file)) {
+            return max(0, min(4, self::migrateCoerceInt($file['PixooDateFormat'])));
+        }
+        $values = $this->getPersistedConfigurationValues();
+        if (is_array($values) && array_key_exists('PixooDateFormat', $values)) {
+            return max(0, min(4, self::migrateCoerceInt($values['PixooDateFormat'])));
+        }
+        try {
+            return max(0, min(4, $this->ReadPropertyInteger('PixooDateFormat')));
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    /** Anzeigeschalter aus der Modulvariable. */
+    private function displayOption(string $ident): bool
+    {
+        try {
+            return (bool) $this->GetValue($ident);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function displayDateFormat(): int
+    {
+        try {
+            return max(0, min(4, (int) $this->GetValue('DateFormat')));
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    /** @param array<int, mixed> $elements */
+    private function applyDisplayOptionFormState(array &$elements): void
+    {
+        foreach ($this->displayOptionButtons() as $button => [$ident, $caption]) {
+            $on = $this->displayOption($ident);
+            $this->setFormButtonState($elements, $button, ($on ? '✔ ' : '') . $caption, true);
+        }
+        $format = $this->displayDateFormat();
+        foreach ($this->dateFormatLabels() as $index => $label) {
+            $selected = $format === $index;
+            $this->setFormButtonState($elements, 'DateFormat' . $index . 'Button', ($selected ? '✔ ' : '') . $label, !$selected);
+        }
+    }
+
+    private function refreshDisplayOptionForm(): void
+    {
+        foreach ($this->displayOptionButtons() as $button => [$ident, $caption]) {
+            $on = $this->displayOption($ident);
+            $this->UpdateFormField($button, 'caption', ($on ? '✔ ' : '') . $caption);
+            $this->UpdateFormField($button, 'enabled', true);
+        }
+        $format = $this->displayDateFormat();
+        foreach ($this->dateFormatLabels() as $index => $label) {
+            $selected = $format === $index;
+            $this->UpdateFormField('DateFormat' . $index . 'Button', 'caption', ($selected ? '✔ ' : '') . $label);
+            $this->UpdateFormField('DateFormat' . $index . 'Button', 'enabled', !$selected);
+        }
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    private function displayOptionButtons(): array
+    {
+        return [
+            'ShowWeatherButton' => ['ShowWeather', 'Wetter-Icon'],
+            'ShowTemperatureButton' => ['ShowTemperature', 'Temperatur'],
+            'ShowClockButton' => ['ShowClock', 'Uhrzeit'],
+            'ShowDateButton' => ['ShowDate', 'Datum'],
+        ];
+    }
+
+    /** @return array<int, string> */
+    private function dateFormatLabels(): array
+    {
+        return [
+            0 => '01.01.2025',
+            1 => '01.01.25',
+            2 => 'DO 01.01.25',
+            3 => '01.01',
+            4 => 'DO 01.01',
+        ];
+    }
+
+    /** Formular-Knopf schaltet den Schalter um und schickt das Bild sofort neu. */
+    public function ToggleDisplayOptionFromForm(string $ident): void
+    {
+        if (!in_array($ident, ['ShowWeather', 'ShowTemperature', 'ShowClock', 'ShowDate'], true)) {
+            return;
+        }
+        $this->setDisplayOption($ident, !$this->displayOption($ident));
+        $this->refreshDisplayOptionForm();
+    }
+
+    /** Formular-Knopf wählt das Datumsformat und schickt das Bild sofort neu. */
+    public function SetDateFormatFromForm(int $format): void
+    {
+        $this->setDateFormat($format);
+        $this->refreshDisplayOptionForm();
+    }
+
+    private function setDisplayOption(string $ident, bool $enabled): void
+    {
+        $this->SetValue($ident, $enabled);
+        $this->repaintAfterDisplayOptionChange();
+    }
+
+    private function setDateFormat(int $format): void
+    {
+        $this->SetValue('DateFormat', max(0, min(4, $format)));
+        $this->repaintAfterDisplayOptionChange();
+    }
+
+    private function repaintAfterDisplayOptionChange(): void
+    {
+        $this->SetBuffer('PixooFrameKey', '');
+        $this->SetBuffer('PixooShownValues', '');
+        $this->SetBuffer('PixooShownAt', '0');
+        if (!$this->ReadPropertyBoolean('Active')) {
+            return;
+        }
+        try {
+            $this->syncPixooDisplay($this->getCachedEnergyValuesForPixoo(), false, true, true);
+        } catch (\Throwable $e) {
+            $this->SendDebug('Anzeige', 'Umschalten: ' . $e->getMessage(), 0);
+        }
+    }
+
     public function RequestAction(string $Ident, mixed $Value): void
     {
         if ($Ident === 'GraphicMode') {
@@ -1271,6 +1499,14 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         }
         if ($Ident === 'FlowAnimation') {
             $this->setFlowAnimation((bool) $Value);
+            return;
+        }
+        if (in_array($Ident, ['ShowWeather', 'ShowTemperature', 'ShowClock', 'ShowDate'], true)) {
+            $this->setDisplayOption($Ident, (bool) $Value);
+            return;
+        }
+        if ($Ident === 'DateFormat') {
+            $this->setDateFormat((int) $Value);
             return;
         }
         throw new \Exception('Ungültige Aktion: ' . $Ident);
@@ -3151,15 +3387,15 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             }
         }
         $line = 'Modus=' . ($this->isGraphicMode() ? 'Grafik' : 'Text')
-            . ', Wetter=' . ($this->readConfiguredPropertyBoolean('PixooShowWeather') ? 'an' : 'aus')
+            . ', Wetter=' . ($this->displayOption('ShowWeather') ? 'an' : 'aus')
             . ', WetterVar=' . $weatherId
             . ', Roh=' . $weatherRaw
             . ', Code=' . $this->readPixooWeatherCode()
-            . ', Temperatur=' . ($this->readConfiguredPropertyBoolean('PixooShowTemperature') ? 'an' : 'aus')
+            . ', Temperatur=' . ($this->displayOption('ShowTemperature') ? 'an' : 'aus')
             . ', TempVar=' . $tempId
             . ', TempRoh=' . $tempRaw
-            . ', Uhr=' . ($this->readConfiguredPropertyBoolean('PixooShowClock') ? 'an' : 'aus')
-            . ', Datum=' . ($this->readConfiguredPropertyBoolean('PixooShowDate') ? 'an' : 'aus')
+            . ', Uhr=' . ($this->displayOption('ShowClock') ? 'an' : 'aus')
+            . ', Datum=' . ($this->displayOption('ShowDate') ? 'an' : 'aus')
             . ', DatumText=' . $this->readPixooDateText()
             . ', Helligkeit=' . $this->getEffectivePixooBrightness();
         if ($this->GetBuffer('PixooDisplayDiag') === $line) {
@@ -3485,7 +3721,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         $fill = null;
         if ($values['batteryPercent'] !== null) {
             $percent = (int) round(max(0.0, min(100.0, $values['batteryPercent'])));
-            $fill = max(1, (int) round($percent * self::BATTERY_FILL_PIXELS / 100));
+            $fill = $percent <= 0 ? 0 : max(1, (int) round($percent * self::BATTERY_FILL_PIXELS / 100));
         }
 
         return [
@@ -3543,7 +3779,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'smard' => null,
             'time' => '',
             'weather' => $this->readPixooWeatherCode(),
-            'clock' => $this->readConfiguredPropertyBoolean('PixooShowClock') ? $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT) : '',
+            'clock' => $this->displayOption('ShowClock') ? $this->safePhpDateFormat(self::SMARD_TIME_PHP_FORMAT) : '',
             'temp' => $this->readPixooTemperatureText(),
             'date' => $this->readPixooDateText(),
         ];
@@ -3983,7 +4219,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** OpenWeatherMap-Wetterbedingung-Symbol (z. B. 01d, 10n) oder '' ohne Icon. */
     private function readPixooWeatherCode(): string
     {
-        if (!$this->readConfiguredPropertyBoolean('PixooShowWeather')) {
+        if (!$this->displayOption('ShowWeather')) {
             return '';
         }
         $id = $this->readConfiguredPropertyInteger('PixooWeatherVar');
@@ -4004,7 +4240,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** Ganze Gradzahl mit Gradzeichen, oder '' wenn der Schalter aus ist oder der Wert fehlt. */
     private function readPixooTemperatureText(): string
     {
-        if (!$this->readConfiguredPropertyBoolean('PixooShowTemperature')) {
+        if (!$this->displayOption('ShowTemperature')) {
             return '';
         }
         $id = $this->readConfiguredPropertyInteger('PixooTemperatureVar');
@@ -4027,7 +4263,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** Serverdatum rechts oben, oder '' wenn der Schalter aus ist. */
     private function readPixooDateText(): string
     {
-        if (!$this->readConfiguredPropertyBoolean('PixooShowDate')) {
+        if (!$this->displayOption('ShowDate')) {
             return '';
         }
         $day = $this->safePhpDateFormat('d');
@@ -4035,7 +4271,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
         if ($day === '--' || $month === '--') {
             return '';
         }
-        $format = $this->readConfiguredSettingInteger('PixooDateFormat');
+        $format = $this->displayDateFormat();
         // 0: 01.01.2025, 1: 01.01.25, 2: DO 01.01.25, 3: 01.01, 4: DO 01.01
         $withWeekday = $format === 2 || $format === 4;
         $withYear = $format === 0 || $format === 1 || $format === 2;
@@ -4170,16 +4406,16 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return;
         }
         $count = min(self::BATTERY_FILL_PIXELS, $count);
+        if ($count <= self::BATTERY_FILL_RED) {
+            $color = 0xff3232;
+        } elseif ($count <= self::BATTERY_FILL_YELLOW) {
+            $color = 0xffdc00;
+        } else {
+            $color = 0x32dc32;
+        }
         for ($i = 0; $i < $count; $i++) {
             $y = 30 - intdiv($i, 6);
             $x = 56 + ($i % 6);
-            if ($i < self::BATTERY_FILL_RED) {
-                $color = 0xff3232;
-            } elseif ($i < self::BATTERY_FILL_YELLOW) {
-                $color = 0xffdc00;
-            } else {
-                $color = 0x32dc32;
-            }
             $this->flowSet($px, $x, $y, $color);
         }
     }

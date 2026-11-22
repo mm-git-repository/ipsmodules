@@ -257,13 +257,12 @@ def flow_preview() -> str:
             for dx, ch in enumerate(row):
                 if ch in palette:
                     put(x0 + dx, y0 + dy, palette[ch])
-    # 80 % von 54 Innenpixeln, ab y=30 aufwärts, 6 Pixel je Zeile: rot, gelb, grün
+    # 80 % von 54 Innenpixeln sind 43 Pixel, ab y=30 aufwärts. Ab 37 Pixel ist die ganze Füllung grün.
     yellow = (255, 220, 0)
     for i in range(43):
         y = 30 - (i // 6)
         x = 56 + (i % 6)
-        color = RED if i < 18 else yellow if i < 36 else GREEN
-        put(x, y, color)
+        put(x, y, GREEN)
     sun = [
         "....Y....",
         ".Y..Y..Y.",

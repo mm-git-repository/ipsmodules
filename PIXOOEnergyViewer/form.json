@@ -13,7 +13,7 @@
                 {
                     "type": "Image",
                     "caption": "Vorschau Grafikmodus",
-                    "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAAFYElEQVR42u3doXYbRxSA4VFPH8G4SCBYpALGxUEGRsEBQQbKE9TAJQXBQQYOMS42cEGEA4SK/Q4qULxAY41nZler3fX3I53V1VoZ3XP/vTOz2Vl4M6y+bvr/o9cf5tMe1V8CIIFwKn5t+fmbm5tDb11dXR0Kjt8qikmwfdbULFLH2dP93pG//znfO3J5ebYXnIi5vX3avfj0x0PFiOX8Azsf3qIz58SoQKAwjFdhiUKaUy0T5TdRkBOeyqGxUqOe5khsrjim6MxFg5AzznXDW/fDJYJVIFAYpt2F1V3V57QSjbm2m9fbsYa/7vfbqPBUdSQUfKpoEDq3W8sfLhGsCwOFYQIKy7lQ7+o8247Wsv48nz9L7SaaEgyvHnlpIvHgp4ZPYsBzOjUVCBSGCSgscaGemPsqEl88bVgntcZc8dzg09n7Zwfd588fNiQWxXIGITEsiaap8zMXtXUqECgMp2M2xi+dWAvLeevzw8aORBUIEggUNiK7tewuu5op7fxrFPVcdiSCwhBMJA5WyfP+lor6NFfnBqzbkWgtDBQGCsMxdhvW7YpvaUkVCBQGCuuc7eNzX7Y8+NYLTdyyICbnbxXF9HBrXhzccre/CgQKA4V1bq4cioRVdOZwtInEurW5omnDok5NBQKFIdjOcYouLNZT0ZGWJ1SBAAkECQQJBAkEXdi0JxK7mjYsWvCaavOlAkECAQAA6ML6X1ODi2hIIEggSCBIIEACQQJBAkECARIIEgjBrc0YMHd3d6/GXFxcqECgMISRb+doyl2ipoU3szl/qsLKoUkAFQgUhiF0YUXFreWl+wjUPvUbu+p+nfh3V4FAYRjURGJc3BLCKgrGcFhsFrsX6/laBQKFYewKy7ksb2KKpIZRuCyLtQoECsM4tnPEnkocYa5x8T3UNF/fVCBQGEaisLjnShzpk+3iZ+MwW6/9hCoQJBAoLGf/YZ3LGuMcz2XH49/wZfdisfg43p95fTTXq0CQQBj4fWEJc+XQea/UZxd2uf792BY4DRdV9l+pQKAwDFphRcI6ydSi+UMVCBIIKJ1ILNqaCBUIkEDo+dbmojYqcV+YPYpD5ttqpQKBwhA8L2yKXH7ZHnrr9qNBU4EggUBhY3IZc6lAkEAIg18LS+z3S2xib4K7iinaf+hOsZeHZXP42mV+MDh+KxGjAoHCMASF5dxjVSc1ewtP32zPX5eaCgQKw3gVltMiFd1KHAfnGDBHanqunpu4RF+mAoHCMLpHXibc0fn0I1QgSCCgdCKxaFGsTkZFs5fx99GOtV8US0w2Jo6oQKAwBDsSgx2JKhAkECCBIIEggRDe5kRi4tGHOQ/2TTwFuO7MLb/P5NluD958PZvN8mMSJ4xjVCBQGAa+naMRRM7zfHNiiqSWUCHaCysRk6PLWGoqECgMo9uRWOS7skfbH/4UqZW2Y3UqzDGXCgQKwwQUVue7zoOPx/B3cbTssHJ6rsQcowoECsMQdiTmrD3Fs3xFnxrjWtjj+bvdi+XDj2mvhRX9LQoDhcGm+sHSmCtmaC5TgSCBQGFIm4vLVCBIIFDY2M3FZSoQJBAobOzm4jIVCBIIFDZ2c71ll6lAkECgsNO47PGxY3MtlyoQIIEQpnhf2GC5/vHb3pHVu/86CVaBAAkECQQJBAkE6MJictqo++sPuxfNQtr71VdDpwJBAkECQQJBAgEAAAAAgGBTfejp/7zNeZJj50/aqntMSU5MMA+EYCIRCJPczpHzeJE6qRWdUAUCJBAo7KiPyqqLyTFgjtSm0XOpQJBAoLCh+a7z6UcVCJBAoLDSpinnicN1DVqomr1MfJ9ptGMqECQQAABAIf8DFxSseO6NyXkAAAAASUVORK5CYII=",
+                    "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAAFUklEQVR42u3doXYbRxSA4VFPHsG4SCBYpALGxUEGRsEBRQbqE9TAJQXBQQZGxsEGLhEOEAr2O6hA9QKPNZ6ZHUm76+9HOqurtTK65/57Z2azs/BuWH3bHP+PXn+eT3tUfwmABMKp+NDz8zc3N/veurq62hccv1UUk2D7rKlZpI6zp/sXR/75fv7iyOXl2YvgRMzt7dPuxR+/P1SMWM4/sPnwFp05J0YFAoVhvApLFNKcapkov4mCnPBUDp2VOvV0R2JzxTFFZy4ahJxxrhveuh8uEawCgcIw7S6s7qo+p5XozLXdvN2Odfx9/7KNCk9VR0LBp4oGobndev5wiWBdGCgME1BYzoV6q/NsG61l/XU+f5baTTQlGN488tpE4t5PDZ/EgOd0aioQKAwTUFjiQj0x91UkvnjasE5qnbniucGns0/PDrrPnz/sSCyK5QxCYlgSTVPzMxe1dSoQKAynYzbGL51YC8t568+HjR2JKhAkEChsRHbr2V22milt/jWKei47EkFhCCYSB6vk+fGWio5pruYGrNuRaC0MFAYKwyF2G9btiu9pSRUIFAYKa8728bkvW+5965UmblkQk/O3imKOcGteHNxzt78KBAoDhTU3Vw5Fwio6czjYRGLd2lzRtGFRp6YCgcIQbOc4RRcW66noSM8TqkCABIIEggSCBIIubNoTia2mDYsWvKbafKlAkEAAAAC6sOOvqcFFNCQQJBAkECQQIIEggSCBIIEACQQJhODWZgyYu7u7N2MuLi5UIFAYwsi3c3TlLlHTwrvZnD9VYeXQJYAKBArDELqwouLW89J9BGqf+o1ddb9O/LurQKAwDGoiMS5uCWEVBWM4LDaL3Yv1fK0CgcIwdoXlXJZ3MUVSwyhclsVaBQKFYRzbOWJPJY4wlwoESCAMR2Fxz5U4cky2i/8bh9l67SdUgSCBQGE5+w/rXNYZ53AuOxz/hq+7F4vFl/H+zOuDuV4FggTCwO8LS5grh+a90jG7sMv1b4e2gAoECQS0UliRsE4ytWj+UAWCBAJKJxKLtiZCBQIkEI58a3NRG5W4L8wexSGzWq9UIFAYgueFTZHLr9t9b91+MWgqECQQKGxMLmMuFQgSCGHwa2GJ/X6JTexdcKuYov2H7hR7fVg2+69d5nuD47cSMSoQKAxDUFjOPVZ1UrO38PTN9vxtqalAoDCMV2E5LVLRrcRxcI4Bc6Sm5zpyE5foy1QgUBhG98jLhDuaTz9CBYIEAkonEosWxepkVDR7GX8f7Vj/RbHEZGPiiAoECkOwIzHYkagCQQIBEggSCBII4X1OJCYefZjzYN/EU4Drztzz+0ye7Xbvzdez2Sw/JnHCOEYFAoVh4Ns5OkHkPM83J6ZIagkVor+wEjE5uoylpgKBwjC6HYlFvit7tP3+T5FaaTtWp8Icc6lAoDBMQGF1vmsefDiGv4ujZ4eV03Ml5hhVIFAYhrAjMWftKZ7lK/rUGNfCHs8/7l4sH35Mey2s6G9RGCgMNtUPls5cMUNzmQoECQQKQ9pcXKYCQQKBwsZuLi5TgSCBQGFjNxeXqUCQQKCwsZvrPbtMBYIEAoWdxmWPj43NtVyqQIAEQpjifWGD5frHry+OrD7+bBKsAgESCBIIEggSCNCFxeS0UffXn3cvuoW0T6tvhk4FggSCBIIEggQCAAAAAADBpvpwpP/zNudJjs2ftFX3mJKcmGAeCMFEIhAmuZ0j5/EidVIrOqEKBEggUNhBH5VVF5NjwBypTaPnUoEggUBhQ/Nd8+lHFQiQQKCw0qYp54nDdQ1aqJq9THyfabRjKhAkEAAAQCH/Aef7qVXV40gIAAAAAElFTkSuQmCC",
                     "width": "192px",
                     "center": true
                 }
@@ -116,12 +116,13 @@
             "items": [
                 {
                     "type": "Label",
-                    "caption": "Nur im Grafikmodus. Wetter: die OpenWeatherMap-Variable „Wetterbedingung-Symbol“ (Kürzel wie 01d oder 10n) zeigt ein kleines Icon auf der PV. Temperatur: ganze Grad links neben dem Icon. Datum und Uhrzeit: Serverzeit rechts oben. Sind beide an, steht das Datum in der ersten Zeile und die Uhrzeit darunter. Ohne Datum steht die Uhrzeit in der ersten Zeile. Die Uhrzeit ersetzt dort den SMARD-Zeitstempel."
+                    "caption": "Nur im Grafikmodus. Die Schalter sind Variablen am Modul und bleiben nach dem Neuladen erhalten. Ein Klick schaltet sofort um. Wetter: die OpenWeatherMap-Variable „Wetterbedingung-Symbol“ (Kürzel wie 01d oder 10n) zeigt ein kleines Icon auf der PV. Temperatur: ganze Grad links neben dem Icon. Datum und Uhrzeit: Serverzeit rechts oben. Sind beide an, steht das Datum in der ersten Zeile und die Uhrzeit darunter. Ohne Datum steht die Uhrzeit in der ersten Zeile. Die Uhrzeit ersetzt dort den SMARD-Zeitstempel."
                 },
                 {
-                    "type": "CheckBox",
-                    "name": "PixooShowWeather",
-                    "caption": "Wetter-Icon links neben der PV anzeigen"
+                    "type": "Button",
+                    "name": "ShowWeatherButton",
+                    "caption": "Wetter-Icon",
+                    "onClick": "SMAPX_ToggleDisplayOptionFromForm($id, 'ShowWeather');"
                 },
                 {
                     "type": "SelectVariable",
@@ -129,9 +130,10 @@
                     "caption": "Variable: Wetterbedingung-Symbol (OpenWeatherMap)"
                 },
                 {
-                    "type": "CheckBox",
-                    "name": "PixooShowTemperature",
-                    "caption": "Temperatur links neben dem Wetter-Icon anzeigen"
+                    "type": "Button",
+                    "name": "ShowTemperatureButton",
+                    "caption": "Temperatur",
+                    "onClick": "SMAPX_ToggleDisplayOptionFromForm($id, 'ShowTemperature');"
                 },
                 {
                     "type": "SelectVariable",
@@ -139,39 +141,49 @@
                     "caption": "Variable: Temperatur"
                 },
                 {
-                    "type": "CheckBox",
-                    "name": "PixooShowClock",
-                    "caption": "Uhrzeit rechts oben anzeigen (Stunde:Minute)"
+                    "type": "Button",
+                    "name": "ShowClockButton",
+                    "caption": "Uhrzeit",
+                    "onClick": "SMAPX_ToggleDisplayOptionFromForm($id, 'ShowClock');"
                 },
                 {
-                    "type": "CheckBox",
-                    "name": "PixooShowDate",
-                    "caption": "Datum rechts oben anzeigen"
+                    "type": "Button",
+                    "name": "ShowDateButton",
+                    "caption": "Datum",
+                    "onClick": "SMAPX_ToggleDisplayOptionFromForm($id, 'ShowDate');"
                 },
                 {
-                    "type": "Select",
-                    "name": "PixooDateFormat",
-                    "caption": "Datumsformat",
-                    "options": [
+                    "type": "RowLayout",
+                    "items": [
                         {
+                            "type": "Button",
+                            "name": "DateFormat0Button",
                             "caption": "01.01.2025",
-                            "value": 0
+                            "onClick": "SMAPX_SetDateFormatFromForm($id, 0);"
                         },
                         {
+                            "type": "Button",
+                            "name": "DateFormat1Button",
                             "caption": "01.01.25",
-                            "value": 1
+                            "onClick": "SMAPX_SetDateFormatFromForm($id, 1);"
                         },
                         {
+                            "type": "Button",
+                            "name": "DateFormat2Button",
                             "caption": "DO 01.01.25",
-                            "value": 2
+                            "onClick": "SMAPX_SetDateFormatFromForm($id, 2);"
                         },
                         {
+                            "type": "Button",
+                            "name": "DateFormat3Button",
                             "caption": "01.01",
-                            "value": 3
+                            "onClick": "SMAPX_SetDateFormatFromForm($id, 3);"
                         },
                         {
+                            "type": "Button",
+                            "name": "DateFormat4Button",
                             "caption": "DO 01.01",
-                            "value": 4
+                            "onClick": "SMAPX_SetDateFormatFromForm($id, 4);"
                         }
                     ]
                 }
@@ -324,7 +336,7 @@
         },
         {
             "type": "Label",
-            "caption": "Grafikmodus: Energiefluss mit PV oben, Netz links, Batterie rechts und Haus unten. Die Batterie füllt sich mit dem Ladestand: unter 25 % rot, bis 75 % gelb, darüber grün. Die Variable „Flussanimation“ schaltet die laufende Richtung an oder zeigt ein Standbild mit Pfeilen. Umschalten über den Schalter oben oder die Variable „Grafikmodus (Energiefluss)“."
+            "caption": "Grafikmodus: Energiefluss mit PV oben, Netz links, Batterie rechts und Haus unten. Die Batterie füllt sich mit dem Ladestand. Bei 0 % bleibt sie leer. Bis etwa 33 % sind alle Pixel rot, bis etwa 67 % gelb, darüber grün. Die Variable „Flussanimation“ schaltet die laufende Richtung an oder zeigt ein Standbild mit Pfeilen. Umschalten über den Schalter oben oder die Variable „Grafikmodus (Energiefluss)“."
         }
     ],
     "status": [
