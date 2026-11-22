@@ -28,6 +28,9 @@ final class HomeDisplayEnergyFlow
     public const MAX_SOURCES = 16;
     public const MAX_CONSUMERS = 8;
 
+    /** Pro PV-Quelle: Leistung strikt darüber ist ein Messfehler (Wechselrichter aus) und zählt als 0 W. */
+    private const PV_INVALID_ABOVE_W = 12000.0;
+
     /**
      * Quellentabelle. Ältere Kacheln mit festen Variablenfeldern werden hier umgesetzt.
      *
@@ -180,7 +183,11 @@ final class HomeDisplayEnergyFlow
                     $sum['gridIn'] += max(0.0, $value);
                     $sum['gridOut'] += max(0.0, -$value);
                     break;
-                case 'pv': $sum['pv'] += max(0.0, $value); break;
+                case 'pv':
+                    if ($value <= self::PV_INVALID_ABOVE_W) {
+                        $sum['pv'] += max(0.0, $value);
+                    }
+                    break;
                 case 'batteryCharge': $sum['batIn'] += max(0.0, $value); break;
                 case 'batteryDischarge': $sum['batOut'] += max(0.0, $value); break;
                 case 'battery':
