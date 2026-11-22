@@ -56,6 +56,8 @@ typedef struct flow_slot {
     lv_obj_t *home_circle;
     int radius;
     bool with_icon;
+    uint8_t *icon_px[4];
+    int icon_count;
     lv_obj_t *home_arc[3];
     lv_obj_t *cons_val[FLOW_CONS_MAX];
     int cons_count;
@@ -3022,6 +3024,13 @@ static void show_page(int index)
     tile_count = 0;
     value_rule_used = 0;
     chart_slot_count = 0;
+    for (int slot = 0; slot < FLOW_SLOT_MAX; slot++) {
+        for (int icon = 0; icon < flow_pool[slot].icon_count; icon++) {
+            heap_caps_free(flow_pool[slot].icon_px[icon]);
+            flow_pool[slot].icon_px[icon] = NULL;
+        }
+        flow_pool[slot].icon_count = 0;
+    }
     flow_slot_count = 0;
     system_label = NULL;
     ui_wdt_kick();
@@ -5387,18 +5396,23 @@ static void flow_stack(lv_obj_t *circle, int radius, bool has_icon)
     int used = count > 6 ? 6 : count;
     for (int index = 0; index < used; index++) {
         lv_obj_t *child = lv_obj_get_child(circle, index);
-        const lv_font_t *font = lv_obj_get_style_text_font(child, LV_PART_MAIN);
-        int line = font ? lv_font_get_line_height(font) : 16;
-        if (has_icon && index == 0) line = line * 5 / 4;
+        bool icon = has_icon && index == 0;
+        int line = icon ? lv_obj_get_height(child) : 16;
+        if (!icon) {
+            const lv_font_t *font = lv_obj_get_style_text_font(child, LV_PART_MAIN);
+            if (font) line = lv_font_get_line_height(font);
+        }
+        if (line < 1) line = 1;
         height[index] = line;
         if (lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN)) {
             height[index] = 0;
             continue;
         }
         total += line;
+        if (icon) continue;
         lv_obj_set_width(child, inner);
         lv_obj_set_style_text_align(child, LV_TEXT_ALIGN_CENTER, 0);
-        lv_label_set_long_mode(child, LV_LABEL_LONG_CLIP);
+        if (lv_obj_check_type(child, &lv_label_class)) lv_label_set_long_mode(child, LV_LABEL_LONG_CLIP);
     }
     int first = 0;
     if (has_icon && used > 1 && total > inner) {
@@ -5410,7 +5424,10 @@ static void flow_stack(lv_obj_t *circle, int radius, bool has_icon)
     if (y < 1) y = 1;
     int x = (2 * radius - inner) / 2;
     for (int index = first; index < used; index++) {
-        lv_obj_set_pos(lv_obj_get_child(circle, index), x, y);
+        lv_obj_t *child = lv_obj_get_child(circle, index);
+        int child_x = x;
+        if (has_icon && index == 0) child_x = (2 * radius - lv_obj_get_width(child)) / 2;
+        lv_obj_set_pos(child, child_x, y);
         y += height[index];
     }
 }
@@ -5425,16 +5442,55 @@ static lv_obj_t *flow_text(lv_obj_t *parent, const lv_font_t *font, uint32_t ink
     return label;
 }
 
-static void flow_icon(lv_obj_t *parent, const char *icon, bool large)
+/* Schrift-Zoom braucht eine Transparenzebene, die das Display nicht hat: das Symbol bliebe unsichtbar.
+ * Deshalb wird die Glyphe 25 % größer in ein Bild gezeichnet. */
+static void flow_icon(flow_slot_t *slot, lv_obj_t *parent, const char *icon, bool large)
 {
+    const lv_font_t *font = large ? &mdi_48 : &mdi_28;
+    lv_font_glyph_dsc_t glyph;
+    uint32_t letter = icon_code(icon, false);
+    const uint8_t *bitmap = NULL;
+    if (lv_font_get_glyph_dsc(font, &glyph, letter, 0) && glyph.box_w > 0 && glyph.box_h > 0) {
+        bitmap = lv_font_get_glyph_bitmap(font, letter);
+    }
+    int out_w = bitmap ? glyph.box_w * 5 / 4 : 0;
+    int out_h = bitmap ? glyph.box_h * 5 / 4 : 0;
+    if (out_w < 1) out_w = 0;
+    if (out_h < 1) out_h = 0;
+    size_t bytes = bitmap ? (size_t) out_w * (size_t) out_h * 3u : 0;
+    uint8_t *px = bytes ? heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : NULL;
+    if (!px && bytes) px = heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+    if (px && slot->icon_count < 4) {
+        lv_color_t color = lv_color_hex(color_mono ? 0xFFFFFF : text_fg());
+        for (int y = 0; y < out_h; y++) {
+            int sy = (int) ((long) y * glyph.box_h / out_h);
+            if (sy >= glyph.box_h) sy = glyph.box_h - 1;
+            for (int x = 0; x < out_w; x++) {
+                int sx = (int) ((long) x * glyph.box_w / out_w);
+                if (sx >= glyph.box_w) sx = glyph.box_w - 1;
+                uint8_t *dst = px + ((size_t) y * (size_t) out_w + (size_t) x) * 3u;
+                put_alpha_px(dst, color, glyph_alpha_at(&glyph, bitmap, sx, sy));
+            }
+        }
+        static lv_img_dsc_t dsc[FLOW_SLOT_MAX][4];
+        int slot_index = (int) (slot - flow_pool);
+        lv_img_dsc_t *image = &dsc[slot_index][slot->icon_count];
+        memset(image, 0, sizeof(*image));
+        image->header.cf = LV_IMG_CF_TRUE_COLOR_ALPHA;
+        image->header.w = out_w;
+        image->header.h = out_h;
+        image->data_size = bytes;
+        image->data = px;
+        slot->icon_px[slot->icon_count++] = px;
+        lv_obj_t *img = lv_img_create(parent);
+        lv_img_set_src(img, image);
+        lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
+        return;
+    }
+    if (px) heap_caps_free(px);
     lv_obj_t *label = lv_label_create(parent);
     paint_icon_label(label, icon, false, large, text_fg());
     lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
-    /* 320 = 125 %. Die Schriftgrößen bleiben, nur die Kreissymbole werden größer. */
-    int box = large ? 48 : 28;
-    lv_obj_set_style_transform_pivot_x(label, box / 2, 0);
-    lv_obj_set_style_transform_pivot_y(label, box / 2, 0);
-    lv_obj_set_style_transform_zoom(label, 320, 0);
 }
 
 static lv_obj_t *flow_caption(lv_obj_t *parent, const char *text, int x, int y, int w, lv_text_align_t align)
@@ -5634,7 +5690,7 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
     if (show_pv) {
         lv_obj_t *circle = flow_circle(view->card, cx, py, r, FLOW_RING_PV, fill);
         slot->pv_circle = circle;
-        if (with_icon) flow_icon(circle, "solar", large_icon);
+        if (with_icon) flow_icon(slot, circle, "solar", large_icon);
         slot->pv_val = flow_text(circle, value_font, text_fg(), "-");
         if (has_pv_day) {
             slot->pv_day = flow_text(circle, &lv_font_montserrat_16, text_fg(), "");
@@ -5645,7 +5701,7 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
     if (has_grid) {
         lv_obj_t *circle = flow_circle(view->card, gx, ym, r, FLOW_RING_GRID, fill);
         slot->grid_circle = circle;
-        if (with_icon) flow_icon(circle, "transmissionTower", large_icon);
+        if (with_icon) flow_icon(slot, circle, "transmissionTower", large_icon);
         slot->grid_val = flow_text(circle, value_font, FLOW_DIR_IDLE, "-");
         if (has_grid_day) {
             slot->grid_day = flow_text(circle, &lv_font_montserrat_16, text_fg(), "");
@@ -5657,7 +5713,7 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
     if (has_bat) {
         lv_obj_t *circle = flow_circle(view->card, bx, ym, r, FLOW_RING_BAT, fill);
         slot->bat_circle = circle;
-        if (with_icon) flow_icon(circle, "batteryIcon", large_icon);
+        if (with_icon) flow_icon(slot, circle, "batteryIcon", large_icon);
         slot->bat_val = flow_text(circle, value_font, FLOW_DIR_IDLE, "-");
         if (has_soc) {
             slot->soc_in = flow_text(circle, &lv_font_montserrat_16, text_fg(), "");
@@ -5669,7 +5725,7 @@ static void build_energy_flow(tile_view_t *view, cJSON *tile, int card_w, int ca
     }
     lv_obj_t *home = flow_circle(view->card, cx, hy, r, FLOW_RING_HOME, fill);
     slot->home_circle = home;
-    if (with_icon) flow_icon(home, "home", large_icon);
+    if (with_icon) flow_icon(slot, home, "home", large_icon);
     slot->home_val = flow_text(home, value_font, text_fg(), "-");
     flow_stack(home, r, with_icon);
     static const uint32_t mix_ink[3] = {FLOW_RING_PV, 0x6CC3B5, FLOW_RING_GRID};
@@ -6092,10 +6148,19 @@ void homedisplay_ui_set_online(bool value, int rssi)
 {
     wifi_rssi = rssi;
     if (online && !value) offline_since = esp_timer_get_time();
+    bool changed = online != value;
     online = value;
     if (!grid) return;
     if (!ui_client_lock()) return;
-    lv_obj_set_style_opa(grid, value ? LV_OPA_COVER : LV_OPA_70, 0);
+    /* Keine Deckkraft unter 100 % auf der Seite: das Panel kann keine Transparenzebene zeichnen.
+     * LVGL lässt die Kacheln dann aus, die Symbole bleiben stehen und Tippen wirkt tot. */
+    if (changed) {
+        lv_obj_remove_local_style_prop(grid, LV_STYLE_OPA, 0);
+        lv_obj_invalidate(grid);
+    }
+    if (info_label) {
+        lv_obj_set_style_text_color(info_label, lv_color_hex(value ? 0xF4F7FB : 0x6E849C), 0);
+    }
     lvgl_port_unlock();
 }
 

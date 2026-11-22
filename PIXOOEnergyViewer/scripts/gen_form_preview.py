@@ -100,7 +100,9 @@ GLYPHS = {
     "%": ["##...", "##.#.", "..#..", ".#.##", "...##"],
     "€": [".###", "#...", "###.", "#...", ".###"],
     "-": ["...", "...", "###", "...", "..."],
-    ",": ["..", "..", "..", "..", "#."],
+    ",": [".", ".", ".", ".", "#"],
+    ".": [".", ".", ".", ".", "#"],
+    "°": [".#.", "#.#", ".#.", "...", "..."],
     ":": [".", "#", ".", "#", "."],
     " ": [".", ".", ".", ".", "."],
     "A": [".#.", "#.#", "###", "#.#", "#.#"],
@@ -274,7 +276,7 @@ def flow_preview() -> str:
     for dy, row in enumerate(sun):
         for dx, ch in enumerate(row):
             if ch == "Y":
-                put(8 + dx, 1 + dy, yellow)
+                put(19 + dx, 1 + dy, yellow)
 
     def width(t: str) -> int:
         chars = [c for c in t if c in GLYPHS]
@@ -310,7 +312,9 @@ def flow_preview() -> str:
     text_unit("0", "W", 62, 34, "r", (255, 220, 0))
     text_unit("80", "%", 62, 41, "r", C_WHITE)
     text_unit("1356", "W", 32, 58, "c", C_WHITE)
-    text("14:30", 62, 1, "r", C_LABEL)
+    text("21°", 17, 1, "r", C_LABEL)
+    text("DO 01.01.25", 62, 1, "r", C_LABEL)
+    text("14:30", 62, 7, "r", C_LABEL)
     text_unit("0,12", "€", 1, 41, "l", C_SMARD_POS)
 
     small = Image.new("RGB", (64, 64), BG)

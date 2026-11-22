@@ -2362,6 +2362,7 @@ PHP;
             }
         }
         $this->saveRuntime($runtime);
+        $this->offerUpdateOnBoot($device, $body);
         $status = implode(', ', $parts);
         if ((int) $device['id'] === $this->InstanceID) {
             $this->SetValue('PanelStatus', $status);
@@ -2409,6 +2410,49 @@ PHP;
     public function Resynchronize(): string
     {
         return $this->queueCommand('resync');
+    }
+
+    /**
+     * Frischer Neustart und neuere signierte Firmware: Befehl „update“, damit auch ältere Programme
+     * sofort laden und nicht auf das Wartungsfenster warten. Höchstens alle zwei Minuten.
+     *
+     * @param array{id: int, token: string} $device
+     * @param array<string, mixed> $body
+     */
+    private function offerUpdateOnBoot(array $device, array $body): void
+    {
+        $uptime = isset($body['uptime']) ? (int) $body['uptime'] : -1;
+        if ($uptime < 0 || $uptime >= 180) {
+            return;
+        }
+        $progress = isset($body['progress']) ? (int) $body['progress'] : 0;
+        if ($progress > 0 && $progress < 100) {
+            return;
+        }
+        if (!$this->firmwareAuto((int) $device['id'])) {
+            return;
+        }
+        $firmware = $this->firmwareDescriptor((int) $device['id']);
+        $installed = (string) ($body['firmware'] ?? '');
+        if ($firmware['signature'] === '' || $installed === '' || version_compare($firmware['version'], $installed, '<=')) {
+            return;
+        }
+        $runtime = $this->runtime();
+        $key = (string) $device['id'];
+        $command = $runtime[$key]['command'] ?? null;
+        if (is_array($command)) {
+            $name = (string) ($command['name'] ?? '');
+            $at = (int) ($command['at'] ?? 0);
+            if ($name === 'update' && $at > time() - 120) {
+                return;
+            }
+            if ($name !== 'update' && $name !== '' && $at > time() - 600) {
+                return;
+            }
+        }
+        $runtime[$key]['command'] = ['id' => bin2hex(random_bytes(6)), 'name' => 'update', 'at' => time()];
+        $runtime[$key]['seq'] = (int) ($runtime[$key]['seq'] ?? 0) + 1;
+        $this->saveRuntime($runtime);
     }
 
     /** Die Anzeige lädt das bereitgestellte Programm sofort statt im Wartungsfenster. */

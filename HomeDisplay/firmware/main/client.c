@@ -64,6 +64,8 @@ static esp_err_t last_transport_error;
 static char last_command[24];
 static bool update_requested;
 static bool firmware_newer;
+static bool update_after_boot = true;
+static int boot_update_attempts;
 static int64_t next_firmware_check;
 static int firmware_check_minutes = 60;
 static int progress;
@@ -1393,16 +1395,26 @@ static void send_health(char *response, size_t length)
     request("/v1/health", "POST", body, response, length);
 }
 
+/* Nach dem Einschalten sofort aktualisieren, auch außerhalb des Wartungsfensters.
+   Zurückgestellte Versuche bleiben in den ersten 30 Minuten sofort, höchstens drei Downloads. */
+static bool boot_update_pending(int64_t now)
+{
+    return update_after_boot && boot_update_attempts < 3 && started_at > 0
+        && (now - started_at) < 30 * 60 * 1000000LL;
+}
+
 /* Auf neue Programme wird nur alle firmware_check_minutes geprüft. Ist eine neuere Version gefunden, wartet die
-   Anzeige auf das Wartungsfenster, ohne erneut zu warten. „update“ und eine zurückgehaltene Ansicht gelten sofort:
-   sonst bleibt das Display leer, bis das Fenster aufgeht. */
+   Anzeige auf das Wartungsfenster, ohne erneut zu warten. „update“, ein Neustart und eine zurückgehaltene Ansicht
+   gelten sofort: sonst bleibt das Display leer, bis das Fenster aufgeht. */
 static void maybe_update(void)
 {
     int64_t now = esp_timer_get_time();
-    bool forced = update_requested || layout_held;
+    bool boot = boot_update_pending(now);
+    bool forced = update_requested || layout_held || boot;
     if (!update_requested && !firmware_newer && now < next_firmware_check) {
-        /* Bei Sperre entfällt die Stundenwartezeit. Die zwei Minuten nach einem Fehlversuch bleiben. */
-        if (!layout_held || (next_firmware_check - now) <= 2 * 60 * 1000000LL) return;
+        /* Bei Sperre und kurz nach dem Neustart entfällt die Stundenwartezeit. Die zwei Minuten nach einem Fehlversuch bleiben. */
+        bool urgent = layout_held || boot;
+        if (!urgent || (next_firmware_check - now) <= 2 * 60 * 1000000LL) return;
     }
     if (!forced && !firmware_newer) {
         next_firmware_check = now + (int64_t) firmware_check_minutes * 60 * 1000000LL;
@@ -1410,13 +1422,14 @@ static void maybe_update(void)
     if (firmware_sha[0] == '\0' || firmware_signature[0] == '\0') {
         update_requested = false;
         firmware_newer = false;
-        if (layout_held) next_firmware_check = now + 2 * 60 * 1000000LL;
+        if (layout_held || boot) next_firmware_check = now + 2 * 60 * 1000000LL;
         return;
     }
     if (version_of(firmware_version) <= version_of(HOMEDISPLAY_FIRMWARE_VERSION)) {
         update_requested = false;
         firmware_newer = false;
         update_error[0] = '\0';
+        update_after_boot = false;
         return;
     }
     firmware_newer = true;
@@ -1426,7 +1439,7 @@ static void maybe_update(void)
     }
     if (homedisplay_ui_busy() || !link_ok()) {
         snprintf(update_error, sizeof(update_error), "Aktualisierung zurückgestellt");
-        if (layout_held) next_firmware_check = now + 2 * 60 * 1000000LL;
+        if (layout_held || boot) next_firmware_check = now + 2 * 60 * 1000000LL;
         return;
     }
     homedisplay_ui_lock(true);
@@ -1435,12 +1448,15 @@ static void maybe_update(void)
     char url[220];
     snprintf(url, sizeof(url), "%s/v1/firmware", base_url);
     update_requested = false;
+    if (boot) boot_update_attempts++;
     esp_err_t error = homedisplay_ota_run(url, token, firmware_sha, firmware_signature, &progress);
     homedisplay_ui_lock(false);
     if (error != ESP_OK) {
         firmware_newer = false;
-        /* Zurückgehaltene Ansicht: nicht erst in einer Stunde, sonst bleibt das Display leer. */
-        if (layout_held) next_firmware_check = esp_timer_get_time() + 2 * 60 * 1000000LL;
+        /* Zurückgehaltene Ansicht oder frischer Neustart: nicht erst in einer Stunde, sonst bleibt das Display leer. */
+        if (layout_held || boot_update_pending(esp_timer_get_time())) {
+            next_firmware_check = esp_timer_get_time() + 2 * 60 * 1000000LL;
+        }
         snprintf(update_error, sizeof(update_error), "Aktualisierung fehlgeschlagen");
     }
 }
@@ -1587,11 +1603,12 @@ static void client_task(void *argument)
             cJSON_Delete(root);
             sync_cameras_from_state(response);
             sync_media_from_state(response);
+            /* Vor dem Zeichnen online setzen, sonst fällt ein Update in die ausgeblendete Seite. */
+            set_online(true);
             homedisplay_ui_apply_state(response);
             if (!unchanged && (state_cache_at == 0 || esp_timer_get_time() - state_cache_at > 300000000LL)) {
                 if (write_cache(STATE_CACHE, response)) state_cache_at = esp_timer_get_time();
             }
-            set_online(true);
             confirm_boot();
             homedisplay_ui_status(layout_held ? "Ansicht wartet auf ein neueres Programm" : "Hausanzeige verbunden");
         } else if (error != ESP_ERR_WIFI_NOT_CONNECT) {

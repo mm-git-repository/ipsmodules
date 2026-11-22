@@ -6,14 +6,14 @@
                 {
                     "type": "Image",
                     "caption": "Vorschau",
-                    "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAADj0lEQVR42u3d23HbMBAF0FUmpbgC1aYyXJsqcC/ORx7jDCIEjyVIUed8ZSRIdBzMXgFUsJcovL+/xwO32+3RmD9PTb5PZUzlkcpFu96n5e/Vcq3X8S3ABGIv3yvPtRTkShyMhdqYSqiNGQtQFQhMIA4SYS21euWYfUPtINdSgTCBYMEqrKuwW9GoQJhAsMUqbDJoxm6clRuS6TfXImmPUQUCEwgAoNml8tzn5+evQZfLo6f+8Y6/B2eNafl5usbgQzQmEHHSjcRKrCwIrK6rowJhAiHCnjRNrLlUIEwgTCAwgTCBOOVG4thNsfQx5fKw8ggqECYQAAAAAAAAAAAQu57OMdYza0G/sDhG/zLCF8owgYinOam+q1lk5XjeMgW6jrXP6l+WdS1UIEwgztEvbIGVfcf0tVSBMIE46ypsl84jk6uw9GuhAmEC8dSrsJUm+5eVL++6kSfUVCBMIACA2OYbidv1+aqM4avrx/XnH+5v9/8+UuoaU7loyw/mQzRWYcQhNxIX9PlyPO+8rFBTgRBhnCnCsvqFjfVfZovEmVwMqkCIMM60Cptcc9lj7N3lU4EQYZC1CutKN/G010qtZUzLfbcyW1UgRBgAAAAAAAAAABAR9X5hLa1VIruH1+RxhS3HHrYcBVy5aNf7hC+UgQlE7PCl+lh4evzkmKxY0WNFBcIE4nUiLKuHV/qY2OPkfBUITCCswhLHxPb9y145y1QgTCAOFWFde3FZfbUW7OCl38hDBcIEAgCII/ULG+spVjlH0fn2PkRjAkF0nlQfu/YUQwXCBIL5k+pXLn+suVQgTCDojbDKLh+oQJhAHDnCugIrq6dYudlYeQQVCBMIAAAAAAAAAACI5+kXFj09vLKOInQmYWzZBy39X9AXygjfSCSO+F+bu06Gz3q5DiZb/DbKf4KsjyUqECKMc/cLC70mY0U/l7El7WRKqkCIMM7dL0xyrYm5Sipt12FNBUKEcYJVWFa/MPfChsNoMubG1ncqECIMACDm+4Vdrw9H3++5Y8qLlk91jXlG14+Hv6j7233gfcpXjV2i5VU+RGMVRhyzX1hDUmSFGl9zoZIdXUFTyanKqypRqAIhwniafmFF4qxc/px1zbVL8HVlYuVVZaipQIgwjtUv7PEuH6fJu6zBKhAijGP1C+sJrJbBLWPKzcbKI2c1trlXvqprcDmmZVnnXhgiDAAAAAAAAAAA+NsPH8yo9vnzLLwAAAAASUVORK5CYII=",
+                    "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAADkElEQVR42u3d23HbMBAF0FUmpbgC1aYyXJsqcC/ORx6TDCwEjyVIUed8ZSRIdBzMXgFUsJcovL+/xwO32+3RmD9PTb5PZUzlkcpFu96n5e/Vcq3X8S3ABGIv3yvPtRTkShyMhdqYSqiNGQtQFQhMIA4SYS21euWYfUPtINdSgTCBYMEqrKuwW9GoQJhAsMUqbDJoxm6clRuS6TfXImmPUQUCEwgAoNml8tzn5+evQZfLo6e+eMffg7PGtPw8XWPwIRoTiDjpRmIlVhYEVtfVUYEwgRBhT5om1lwqECYQJhCYQJhAnHIjceymWPqYcnlYeQQVCBMIAAAAAAAAAACIXU/nGOuZtaBfWByjfxnhC2WYQMTTnFTf1SyycjxvmQJdx9pn9S/LuhYqECYQ5+gXtsDKvmP6WqpAmECcdRW2S+eRyVVY+rVQgTCBeOpV2EqT/cvKl3fdyBNqKhAmEABAbPONxO36fFXG8Lfrx/XnH+5v9/8+UuoaU7loyw/mQzRWYcQhNxIX9PlyPO+8rFBTgRBhnCnCsvqFjfVfZovEmVwMqkCIMM60Cptcc9lj7N3lU4EQYZC1CutKN/G010qtZUzLfbcyW1UgRBgAAAAAAAAAABAR9X5hLa1VIruH1+RxhS3HHrYcBVy5aNf7hC+UgQlE7PCl+lh4evzkmKxY0WNFBcIE4nUiLKuHV/qY2OPkfBUITCCswhLHxPb9y145y1QgTCAOFWFde3FZfbUW7OCl38hDBcIEAgCII/ULG+spVjlH0fn2PkRjAkF0nlQfu/YUQwXCBIL5k+pXLn+suVQgTCDojbDKLh+oQJhAHDnCugIrq6dYudlYeQQVCBMIAAAAAAAAAACI5+kXFj09vLKOInQmYWzZBy39X9AXygjfSCSO+F+bu06Gz3q5DiZb/DbKf4KsjyUqECKMc/cLC70mY0U/l7El7WRKqkCIMM7dL0xyrYm5Sipt12FNBUKEcYJVWFa/MPfChsNoMubG1ncqECIMACDm+4Vdrw9H3++5Y8qLlk91jXlq14+Hv7H727395eXgsXdueZUP0ViFEcfsF9aQFFmhxpcBUQmRlqCp5FTlVZUoVIEQYTxNv7AicVYuf06/5lqZdy0x1/KqMtRUIEQYx+oX9niXj9PkXdZgFQgRxrH6hfUEVsvgljHlZmPlkdPr2uUrB3fdFCvHtCzr3AtDhAEAAAAAAAAAAP/6AcN9qParamBuAAAAAElFTkSuQmCC",
                     "width": "192px",
                     "center": true
                 },
                 {
                     "type": "Image",
                     "caption": "Vorschau Grafikmodus",
-                    "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAAEuklEQVR42u3doXpbNxiHcXlPL2F4KKDYZAa7iKGAoOLiAF9CQHBxUUBKdhEDGZhxgdHw7sEFXg/YqRVJlo8l5fciP7YcJ/b3/F9/kk60Cm+G7ef98i/68OFm7Hf1pwAoIFyLd0u+2OG7Q1ZXzfWnp39PPXR393PdMbV4fHw83ri/v3/1ocjg+bPmzH9OZIwEAoVhJIWVeaoRu7VGRCJnGjCiwiypSSBQGEZS2OSgw/51Yc2ftQApLVKtMWeS0hBlOai6JSUQKAwDKOywr/z0y0mtx4nEFM1FrBSZWsyypAQChWFIhc2NkyU184eJLVLKOleZ5sr6OwkECsP1WIUF18LKHgp2JEogKCBgEYUNtmejrOuRQIACAgAAAAAgmEjsgcPL979wc/KhH7wdm4wxKa+VNSaYB0IwkQiENv87x5LmSvL3po7UJBCggEBhFbrKNowzas8lgaCAoICggAAFBGthF1rnyloLizRfw7djEggKCAAAwI5Eq1q+REMBQQEBCggKCAoICghQQFBAUEBQQEAIYbzrwpDL8/Pzq2Nub28lECgMofPtHFPcRTItvJnN+aMKK4WpACQQKAwtdGFZ4XbmV/ce/8vHYDsSyz6d+ecugUBhaGoicR5uEWFlDUY7rPfr443dzU4CgcLQu8JSvpZPY7Kkhi5clsROAoHC0Md2jrmnIvcwV1/8HUqary8SCBSGThQ277ki9yzJYf1f47Da7XyEEggKCBSWsv+wzGWTcS7nssvxV/h0vLFef+z3Y95dzPUSCAoIjV8XFjFXCtV7pSW7sLvdr5e2wHW4LbL/VgKBwtC0wrKEdZWpRfOHEggKCMidSMzamggJBCggLHxpc1YbFbkuzB7Flvmy3UogUBiC88JG5O7T4dRDTx+9aRIICggU1pPLmEsCQQEhNL8WFtnvF9nEPg2uNSZr/6ErxX78tuxPf3e5OTl4/lBkjAQChaEFhaVcY1UmNXsLr99s37wuNQkECkO/CktpkbIuJZ4PTjFgitT0XAs3cZG+TAKBwtDdkZcRd1SffoQEggICcicSsxbFymSUNXs5/320Y+cvikUmGyP3SCBQGIIdicGORAkEBQQoICggKCCEtzmRGDn6MOtg38hxwGUvUesXG4zD4eTF16vVKn1M5AfOx0ggUBga384xeSHrPN+UwVlSi6gQxcKKjEnR5VxqEggUhu52JJaJL++M+9PPIrXEdqxMhSnmkkCgMIyksDLfVR9cnfZ3cZzZYaX0XJE5RgkECkMLOxJTlpzOXOfqcS3s5bf3xxubP7+OvRaW9VoUBgqDTfXNMplrTmsuk0BQQKAwxM3FZRIICggU1ru5uEwCQQGBwno3F5dJICggUFjv5nrLLpNAUECgsOu47OWlsrk2GwkEKCCEoa8La42Hr7/8757t+3+qDJZAgAKCAoICggICdGFzUtqoPx4+HG9MC2m/bz976yQQFBAUEBQQFBAAAAAAAAg21YeF/udtykmO1U/aKjumJGVMMA+EYCIRCENu50g5XqRMalk/UAIBCggUdtGjssrGpBgwRWpj9FwSCAoIFNaa76pPP0ogQAGBwnKbppQTh8satFA0exn5fcZoxyQQFBAAAEAm3wB5bRP3IXLZ+gAAAABJRU5ErkJggg==",
+                    "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAAFYElEQVR42u3doXYbRxSA4VFPH8G4SCBYpALGxUEGRsEBQQbKE9TAJQXBQQYOMS42cEGEA4SK/Q4qULxAY41nZler3fX3I53V1VoZ3XP/vTOz2Vl4M6y+bvr/o9cf5tMe1V8CIIFwKn5t+fmbm5tDb11dXR0Kjt8qikmwfdbULFLH2dP93pG//znfO3J5ebYXnIi5vX3avfj0x0PFiOX8Azsf3qIz58SoQKAwjFdhiUKaUy0T5TdRkBOeyqGxUqOe5khsrjim6MxFg5AzznXDW/fDJYJVIFAYpt2F1V3V57QSjbm2m9fbsYa/7vfbqPBUdSQUfKpoEDq3W8sfLhGsCwOFYQIKy7lQ7+o8247Wsv48nz9L7SaaEgyvHnlpIvHgp4ZPYsBzOjUVCBSGCSgscaGemPsqEl88bVgntcZc8dzg09n7Zwfd588fNiQWxXIGITEsiaap8zMXtXUqECgMp2M2xi+dWAvLeevzw8aORBUIEggUNiK7tewuu5op7fxrFPVcdiSCwhBMJA5WyfP+lor6NFfnBqzbkWgtDBQGCsMxdhvW7YpvaUkVCBQGCuuc7eNzX7Y8+NYLTdyyICbnbxXF9HBrXhzccre/CgQKA4V1bq4cioRVdOZwtInEurW5omnDok5NBQKFIdjOcYouLNZT0ZGWJ1SBAAkECQQJBAkEXdi0JxK7mjYsWvCaavOlAkECAQAA6ML6X1ODi2hIIEggSCBIIEACQQJBAkECARIIEgjBrc0YMHd3d6/GXFxcqECgMISRb+doyl2ipoU3szl/qsLKoUkAFQgUhiF0YUXFreWl+wjUPvUbu+p+nfh3V4FAYRjURGJc3BLCKgrGcFhsFrsX6/laBQKFYewKy7ksb2KKpIZRuCyLtQoECsM4tnPEnkocYa5x8T3UNF/fVCBQGEaisLjnShzpk+3iZ+MwW6/9hCoQJBAoLGf/YZ3LGuMcz2XH49/wZfdisfg43p95fTTXq0CQQBj4fWEJc+XQea/UZxd2uf792BY4DRdV9l+pQKAwDFphRcI6ydSi+UMVCBIIKJ1ILNqaCBUIkEDo+dbmojYqcV+YPYpD5ttqpQKBwhA8L2yKXH7ZHnrr9qNBU4EggUBhY3IZc6lAkEAIg18LS+z3S2xib4K7iinaf+hOsZeHZXP42mV+MDh+KxGjAoHCMASF5dxjVSc1ewtP32zPX5eaCgQKw3gVltMiFd1KHAfnGDBHanqunpu4RF+mAoHCMLpHXibc0fn0I1QgSCCgdCKxaFGsTkZFs5fx99GOtV8US0w2Jo6oQKAwBDsSgx2JKhAkECCBIIEggRDe5kRi4tGHOQ/2TTwFuO7MLb/P5NluD958PZvN8mMSJ4xjVCBQGAa+naMRRM7zfHNiiqSWUCHaCysRk6PLWGoqECgMo9uRWOS7skfbH/4UqZW2Y3UqzDGXCgQKwwQUVue7zoOPx/B3cbTssHJ6rsQcowoECsMQdiTmrD3Fs3xFnxrjWtjj+bvdi+XDj2mvhRX9LQoDhcGm+sHSmCtmaC5TgSCBQGFIm4vLVCBIIFDY2M3FZSoQJBAobOzm4jIVCBIIFDZ2c71ll6lAkECgsNO47PGxY3MtlyoQIIEQpnhf2GC5/vHb3pHVu/86CVaBAAkECQQJBAkE6MJictqo++sPuxfNQtr71VdDpwJBAkECQQJBAgEAAAAAgGBTfejp/7zNeZJj50/aqntMSU5MMA+EYCIRCJPczpHzeJE6qRWdUAUCJBAo7KiPyqqLyTFgjtSm0XOpQJBAoLCh+a7z6UcVCJBAoLDSpinnicN1DVqomr1MfJ9ptGMqECQQAABAIf8DFxSseO6NyXkAAAAASUVORK5CYII=",
                     "width": "192px",
                     "center": true
                 }
@@ -111,12 +111,12 @@
         },
         {
             "type": "ExpansionPanel",
-            "caption": "Pixoo Grafikmodus: Wetter und Uhrzeit",
+            "caption": "Wetter und Uhrzeit",
             "expanded": false,
             "items": [
                 {
                     "type": "Label",
-                    "caption": "Nur im Grafikmodus. Wetter: die OpenWeatherMap-Variable „Wetterbedingung-Symbol“ (Kürzel wie 01d oder 10n) zeigt ein kleines Icon links neben der PV. Uhrzeit: Serverzeit rechts oben. Sie ersetzt dort den SMARD-Zeitstempel."
+                    "caption": "Nur im Grafikmodus. Wetter: die OpenWeatherMap-Variable „Wetterbedingung-Symbol“ (Kürzel wie 01d oder 10n) zeigt ein kleines Icon auf der PV. Temperatur: ganze Grad links neben dem Icon. Datum und Uhrzeit: Serverzeit rechts oben. Sind beide an, steht das Datum in der ersten Zeile und die Uhrzeit darunter. Ohne Datum steht die Uhrzeit in der ersten Zeile. Die Uhrzeit ersetzt dort den SMARD-Zeitstempel."
                 },
                 {
                     "type": "CheckBox",
@@ -130,8 +130,42 @@
                 },
                 {
                     "type": "CheckBox",
+                    "name": "PixooShowTemperature",
+                    "caption": "Temperatur links neben dem Wetter-Icon anzeigen"
+                },
+                {
+                    "type": "SelectVariable",
+                    "name": "PixooTemperatureVar",
+                    "caption": "Variable: Temperatur"
+                },
+                {
+                    "type": "CheckBox",
                     "name": "PixooShowClock",
                     "caption": "Uhrzeit rechts oben anzeigen (Stunde:Minute)"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "PixooShowDate",
+                    "caption": "Datum rechts oben anzeigen"
+                },
+                {
+                    "type": "Select",
+                    "name": "PixooDateFormat",
+                    "caption": "Datumsformat",
+                    "options": [
+                        {
+                            "caption": "01.01.2025",
+                            "value": 0
+                        },
+                        {
+                            "caption": "01.01.25",
+                            "value": 1
+                        },
+                        {
+                            "caption": "DO 01.01.25",
+                            "value": 2
+                        }
+                    ]
                 }
             ]
         },
@@ -258,7 +292,7 @@
     "actions": [
         {
             "type": "Label",
-            "caption": "Wichtig nach Modul-Update: alle zehn Quellvariablen setzen → Übernehmen → Button „Quellvariablen dauerhaft speichern“ (meldet zehn IDs > 0). Erst dann IPS-Neustart testen."
+            "caption": "Wichtig nach Modul-Update: alle elf Quellvariablen setzen → Übernehmen → Button „Quellvariablen dauerhaft speichern“ (meldet elf IDs > 0). Erst dann IPS-Neustart testen."
         },
         {
             "type": "Button",
