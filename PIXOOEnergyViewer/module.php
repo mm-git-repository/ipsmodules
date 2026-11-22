@@ -8,7 +8,7 @@ class PIXOOEnergyViewer extends IPSModuleStrict
     /** SemVer — bei funktionalen Änderungen anheben; parallel library.json pflegen */
     private const MODULE_VERSION = '1.9';
     /** Build-Zähler — bei jedem Deploy +1; parallel library.json pflegen */
-    private const MODULE_BUILD = 59;
+    private const MODULE_BUILD = 60;
 
     /** Persistiert die sechs Quellvariablen-IDs (überlebt IPS-Neustart). */
     private const SOURCE_VAR_ID_BACKUP_BUFFER = 'SourceVariableIdBackup';
@@ -3583,6 +3583,8 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             'time' => isset($decoded['time']) ? (string) $decoded['time'] : '',
             'weather' => isset($decoded['weather']) ? (string) $decoded['weather'] : '',
             'clock' => isset($decoded['clock']) ? (string) $decoded['clock'] : '',
+            'temp' => isset($decoded['temp']) ? (string) $decoded['temp'] : '',
+            'date' => isset($decoded['date']) ? (string) $decoded['date'] : '',
         ];
     }
 
@@ -4034,23 +4036,27 @@ class PIXOOEnergyViewer extends IPSModuleStrict
             return '';
         }
         $format = $this->readConfiguredSettingInteger('PixooDateFormat');
-        if ($format === 2) {
-            $weekdays = [1 => 'MO', 2 => 'DI', 3 => 'MI', 4 => 'DO', 5 => 'FR', 6 => 'SA', 7 => 'SO'];
-            $n = (int) $this->safePhpDateFormat('N');
-            $year = $this->safePhpDateFormat('y');
-            $weekday = $weekdays[$n] ?? '';
-            if ($weekday === '' || $year === '--') {
+        // 0: 01.01.2025, 1: 01.01.25, 2: DO 01.01.25, 3: 01.01, 4: DO 01.01
+        $withWeekday = $format === 2 || $format === 4;
+        $withYear = $format === 0 || $format === 1 || $format === 2;
+        $core = $day . '.' . $month;
+        if ($withYear) {
+            $year = $format === 0 ? $this->safePhpDateFormat('Y') : $this->safePhpDateFormat('y');
+            if ($year === '--') {
                 return '';
             }
-
-            return $weekday . ' ' . $day . '.' . $month . '.' . $year;
+            $core .= '.' . $year;
         }
-        $year = $format === 0 ? $this->safePhpDateFormat('Y') : $this->safePhpDateFormat('y');
-        if ($year === '--') {
+        if (!$withWeekday) {
+            return $core;
+        }
+        $weekdays = [1 => 'MO', 2 => 'DI', 3 => 'MI', 4 => 'DO', 5 => 'FR', 6 => 'SA', 7 => 'SO'];
+        $weekday = $weekdays[(int) $this->safePhpDateFormat('N')] ?? '';
+        if ($weekday === '') {
             return '';
         }
 
-        return $day . '.' . $month . '.' . $year;
+        return $weekday . ' ' . $core;
     }
 
     /** @param list<int> $px */
