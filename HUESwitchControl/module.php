@@ -687,12 +687,16 @@ class HUESwitchControl extends IPSModuleStrict
             'type' => 'List',
             'name' => $name,
             'caption' => 'Aktionen',
+            'rowCount' => 5,
+            'add' => true,
+            'delete' => true,
             'columns' => [
                 [
                     'caption' => 'Ereignis',
                     'name' => 'event',
                     'width' => '150px',
                     'add' => 'short',
+                    'save' => true,
                     'edit' => ['type' => 'Select', 'options' => HueSwitchTypes::eventOptions()],
                 ],
                 [
@@ -700,6 +704,7 @@ class HUESwitchControl extends IPSModuleStrict
                     'name' => 'action',
                     'width' => '170px',
                     'add' => 'set',
+                    'save' => true,
                     'edit' => ['type' => 'Select', 'options' => HueSwitchTypes::actionOptions()],
                 ],
                 [
@@ -707,6 +712,7 @@ class HUESwitchControl extends IPSModuleStrict
                     'name' => 'target',
                     'width' => '260px',
                     'add' => 0,
+                    'save' => true,
                     'edit' => ['type' => 'SelectVariable'],
                 ],
                 [
@@ -714,6 +720,7 @@ class HUESwitchControl extends IPSModuleStrict
                     'name' => 'value',
                     'width' => '90px',
                     'add' => 25,
+                    'save' => true,
                     'edit' => ['type' => 'NumberSpinner', 'digits' => 0, 'minimum' => 0, 'maximum' => 100],
                 ],
                 [
@@ -721,6 +728,7 @@ class HUESwitchControl extends IPSModuleStrict
                     'name' => 'switch',
                     'width' => '260px',
                     'add' => 0,
+                    'save' => true,
                     'edit' => ['type' => 'SelectVariable'],
                 ],
             ],
@@ -734,12 +742,16 @@ class HUESwitchControl extends IPSModuleStrict
             'type' => 'List',
             'name' => $name,
             'caption' => 'Ziele',
+            'rowCount' => 5,
+            'add' => true,
+            'delete' => true,
             'columns' => [
                 [
                     'caption' => 'Helligkeit',
                     'name' => 'brightness',
                     'width' => '260px',
                     'add' => 0,
+                    'save' => true,
                     'edit' => ['type' => 'SelectVariable'],
                 ],
                 [
@@ -747,6 +759,7 @@ class HUESwitchControl extends IPSModuleStrict
                     'name' => 'switch',
                     'width' => '260px',
                     'add' => 0,
+                    'save' => true,
                     'edit' => ['type' => 'SelectVariable'],
                 ],
                 [
@@ -754,6 +767,7 @@ class HUESwitchControl extends IPSModuleStrict
                     'name' => 'percent',
                     'width' => '110px',
                     'add' => 1,
+                    'save' => true,
                     'edit' => ['type' => 'NumberSpinner', 'digits' => 1, 'minimum' => 0.1, 'maximum' => 100],
                 ],
                 [
@@ -761,6 +775,7 @@ class HUESwitchControl extends IPSModuleStrict
                     'name' => 'minimum',
                     'width' => '90px',
                     'add' => 1,
+                    'save' => true,
                     'edit' => ['type' => 'NumberSpinner', 'digits' => 0, 'minimum' => 0, 'maximum' => 100],
                 ],
                 [
@@ -768,6 +783,7 @@ class HUESwitchControl extends IPSModuleStrict
                     'name' => 'maximum',
                     'width' => '90px',
                     'add' => 100,
+                    'save' => true,
                     'edit' => ['type' => 'NumberSpinner', 'digits' => 0, 'minimum' => 0, 'maximum' => 100],
                 ],
             ],
