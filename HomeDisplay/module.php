@@ -13,7 +13,7 @@ class HomeDisplay extends IPSModuleStrict
     private const MODULE_ID = '{4E8A1C67-9D32-4B5F-A6E1-0C7B2F94D813}';
     private const LIBRARY_ID = '{078F2CCC-248B-E9F8-37A2-89E15868706B}';
     private const MODULE_VERSION = '1.0';
-    private const MODULE_BUILD = 34;
+    private const MODULE_BUILD = 35;
 
     private string $lastFetchHint = '';
     private const ADMIN_MODULE = '{A91D4C52-6E70-4B3A-8F15-3D9C7B2E64A0}';
@@ -2206,6 +2206,18 @@ try {
         return;
     }
     $actionId = (int) ($_IPS['actionId'] ?? 0);
+    $current = @GetValue($variableId);
+    if (is_numeric($value) && (float) $value > 0 && is_numeric($current) && (float) $current == 0.0) {
+        $zero = is_int($value) ? 0 : 0.0;
+        $zeroStarted = $actionId > 0 && IPS_ScriptExists($actionId) && IPS_RunScriptEx($actionId, [
+            'VARIABLE' => $variableId,
+            'VALUE' => $zero,
+            'SENDER' => 'RequestAction',
+        ]);
+        if (!$zeroStarted) {
+            RequestAction($variableId, $zero);
+        }
+    }
     $started = $actionId > 0 && IPS_ScriptExists($actionId) && IPS_RunScriptEx($actionId, [
         'VARIABLE' => $variableId,
         'VALUE' => $value,
@@ -2255,6 +2267,24 @@ PHP;
         return $actionId;
     }
 
+    /**
+     * Dimmer, der aus ist (Wert 0), bekommt zuerst 0 und danach den Zielwert.
+     * So geht die Lampe von dunkel auf den Zielwert, nicht kurz auf 100 %.
+     */
+    private function writePanelValue(int $variableId, mixed $value, bool $brightness): void
+    {
+        if ($variableId <= 0 || !IPS_VariableExists($variableId)) {
+            return;
+        }
+        if ($brightness && is_numeric($value) && (float) $value > 0) {
+            $current = GetValue($variableId);
+            if (is_numeric($current) && (float) $current == 0.0) {
+                RequestAction($variableId, is_int($value) ? 0 : 0.0);
+            }
+        }
+        RequestAction($variableId, $value);
+    }
+
     /** @param array{id: int, token: string} $device @param array<string, mixed> $body @param array<string, mixed>|null $tileOverride Nur für SimulateAction (Editor/Prüfung). */
     private function performAction(array $device, array $body, ?array $tileOverride = null): array
     {
@@ -2298,7 +2328,8 @@ PHP;
                 }
             }
         } else {
-            RequestAction($decision['variableId'], $decision['value']);
+            $kind = is_array($tile) ? (string) ($tile['actionKind'] ?? 'switch') : 'switch';
+            $this->writePanelValue((int) $decision['variableId'], $decision['value'], $kind === 'dim');
         }
         $runtime[$key] = HomeDisplayPanelActionGuard::remember($entry, trim((string) $body['requestId']), $tileId, time());
         $this->saveRuntime($runtime);

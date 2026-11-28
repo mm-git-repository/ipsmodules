@@ -1,0 +1,14 @@
+{
+    "id": "{E3B71C4A-8F25-4D60-A19E-6C0B5F2D8471}",
+    "name": "HUESwitchControl",
+    "type": 3,
+    "vendor": "MM-Modules",
+    "aliases": [
+        "Hue Schalter Steuerung"
+    ],
+    "url": "https://github.com/mm-git-repository/ipsmodule.git",
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "HUESW"
+}

@@ -1147,8 +1147,14 @@ static bool value_is_on(const tile_view_t *tile, int value)
     return value > tile->value_min;
 }
 
+/* Dimmer: Aus geht auf den Aus-Wert. Ein geht auf die letzte Helligkeit, nicht auf 100 %. */
 static int toggle_target(const tile_view_t *tile)
 {
+    if (tile && control_is_dimmer(tile->control)) {
+        if (value_is_on(tile, tile->value)) return tile->value_off;
+        if (value_is_on(tile, tile->level)) return tile->level;
+        return tile->value_on;
+    }
     return tile->value == tile->value_on ? tile->value_off : tile->value_on;
 }
 

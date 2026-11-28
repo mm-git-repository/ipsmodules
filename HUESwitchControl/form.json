@@ -1,0 +1,53 @@
+{
+    "elements": [
+        {
+            "type": "Label",
+            "name": "ModuleVersionInfo",
+            "caption": "Installierte Modulversion"
+        },
+        {
+            "type": "CheckBox",
+            "name": "Active",
+            "caption": "Aktiv"
+        },
+        {
+            "type": "Select",
+            "name": "SwitchType",
+            "caption": "Schaltertyp",
+            "options": [
+                {
+                    "caption": "Hue Tap Dial",
+                    "value": "tapdial"
+                }
+            ],
+            "onChange": "HUESW_ApplySwitchType($id, $SwitchType);"
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Diagnose",
+            "items": [
+                {
+                    "type": "Label",
+                    "caption": "Letzte Taste und letztes Ereignis stehen in den Variablen der Instanz. Unbekannte Hue-Texte erscheinen im Debug."
+                },
+                {
+                    "type": "Select",
+                    "name": "SimulateButton",
+                    "caption": "Taste simulieren",
+                    "options": []
+                },
+                {
+                    "type": "Select",
+                    "name": "SimulateEvent",
+                    "caption": "Ereignis simulieren",
+                    "options": []
+                },
+                {
+                    "type": "Button",
+                    "caption": "Ereignis jetzt ausführen",
+                    "onClick": "HUESW_Simulate($id, $SimulateButton, $SimulateEvent);"
+                }
+            ]
+        }
+    ]
+}
